@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible SharedMemoryStore package behavior problem.
+title: "Bug: "
+labels:
+  - bug
+body:
+  - type: input
+    id: package-version
+    attributes:
+      label: Package version
+      description: Include the SharedMemoryStore package version.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      description: Include Windows version and architecture, or note another platform.
+    validations:
+      required: true
+  - type: input
+    id: dotnet
+    attributes:
+      label: .NET SDK and runtime
+      description: Include `dotnet --info` summary.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Store options
+      description: Include Name pattern, OpenMode, TotalBytes, SlotCount, MaxValueBytes, MaxDescriptorBytes, MaxKeyBytes, LeaseRecordCount, and EnableLeaseRecovery.
+    validations:
+      required: true
+  - type: textarea
+    id: operation
+    attributes:
+      label: Operation
+      description: Describe create/open, publish, acquire, release, remove, recovery, diagnostics, or dispose steps.
+    validations:
+      required: true
+  - type: input
+    id: observed-status
+    attributes:
+      label: Observed status
+      description: Include StoreOpenStatus or StoreStatus.
+    validations:
+      required: true
+  - type: input
+    id: expected-status
+    attributes:
+      label: Expected status
+      description: Include the status you expected and why.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest code or command sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and diagnostics
+      description: Include diagnostic snapshot fields and logs without secrets or private payloads.
+    validations:
+      required: false

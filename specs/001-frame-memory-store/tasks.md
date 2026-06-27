@@ -12,16 +12,16 @@
 
 **Purpose**: Create the solution, package, test, benchmark, sample, and documentation structure from the implementation plan.
 
-- [ ] T001 Create solution file `SharedMemoryStore.sln` with `src/`, `tests/`, `benchmarks/`, and `samples/` project entries
-- [ ] T002 Create library project `src/SharedMemoryStore/SharedMemoryStore.csproj` targeting `net10.0` with BCL-only runtime dependencies
-- [ ] T003 [P] Create unit test project `tests/SharedMemoryStore.UnitTests/SharedMemoryStore.UnitTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
-- [ ] T004 [P] Create contract test project `tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
-- [ ] T005 [P] Create integration test project `tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
-- [ ] T006 [P] Create benchmark project `benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj` with BenchmarkDotNet outside runtime dependencies
-- [ ] T007 [P] Create basic usage sample project `samples/BasicUsage/BasicUsage.csproj` targeting `net10.0`
-- [ ] T008 [P] Create frame value sample project `samples/FrameValue/FrameValue.csproj` targeting `net10.0`
-- [ ] T009 Configure package metadata, nullable annotations, XML documentation, deterministic builds, and release properties in `src/SharedMemoryStore/SharedMemoryStore.csproj`
-- [ ] T010 Create initial documentation files `docs/lifecycle.md`, `docs/packaging.md`, and `docs/portability.md`
+- [X] T001 Create solution file `SharedMemoryStore.slnx` with `src/`, `tests/`, `benchmarks/`, and `samples/` project entries
+- [X] T002 Create library project `src/SharedMemoryStore/SharedMemoryStore.csproj` targeting `net10.0` with BCL-only runtime dependencies
+- [X] T003 [P] Create unit test project `tests/SharedMemoryStore.UnitTests/SharedMemoryStore.UnitTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
+- [X] T004 [P] Create contract test project `tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
+- [X] T005 [P] Create integration test project `tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj` with xUnit and Microsoft.NET.Test.Sdk
+- [X] T006 [P] Create benchmark project `benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj` with BenchmarkDotNet outside runtime dependencies
+- [X] T007 [P] Create basic usage sample project `samples/BasicUsage/BasicUsage.csproj` targeting `net10.0`
+- [X] T008 [P] Create frame value sample project `samples/FrameValue/FrameValue.csproj` targeting `net10.0`
+- [X] T009 Configure package metadata, nullable annotations, XML documentation, deterministic builds, and release properties in `src/SharedMemoryStore/SharedMemoryStore.csproj`
+- [X] T010 Create initial documentation files `docs/lifecycle.md`, `docs/packaging.md`, and `docs/portability.md`
 
 ---
 
@@ -31,20 +31,20 @@
 
 **Critical**: No user story work can begin until this phase is complete.
 
-- [ ] T011 [P] Add shared test store naming and cleanup fixtures in `tests/SharedMemoryStore.UnitTests/TestSupport/StoreTestNames.cs`
-- [ ] T012 [P] Add allocation measurement helpers in `tests/SharedMemoryStore.UnitTests/TestSupport/AllocationAssert.cs`
-- [ ] T013 [P] Add public API and status enum contract test skeletons in `tests/SharedMemoryStore.ContractTests/PublicApiContractTests.cs`
-- [ ] T014 Define `StoreOpenStatus` and `StoreStatus` public enums from the error taxonomy in `src/SharedMemoryStore/StoreStatus.cs`
-- [ ] T015 Define `SharedMemoryStoreOptions` and `OpenMode` public configuration contracts in `src/SharedMemoryStore/SharedMemoryStoreOptions.cs`
-- [ ] T016 Implement option validation for names, capacity, slot count, key size, descriptor size, value size, and lease record count in `src/SharedMemoryStore/Options/SharedMemoryStoreOptionsValidator.cs`
-- [ ] T017 Define the disposable `SharedMemoryStore` public shell, create/open entry point, operation stubs, and disposal guard in `src/SharedMemoryStore/SharedMemoryStore.cs`
-- [ ] T018 [P] Implement layout version, magic, alignment, section, and state constants in `src/SharedMemoryStore/Layout/LayoutConstants.cs`
-- [ ] T019 Implement mapped-region size calculation and section offset validation in `src/SharedMemoryStore/Layout/StoreLayout.cs`
-- [ ] T020 [P] Implement unmanaged store header, index entry, slot metadata, and lease record structs in `src/SharedMemoryStore/Layout/SharedRecords.cs`
-- [ ] T021 Implement the named memory-mapped file adapter and unsupported-platform detection in `src/SharedMemoryStore/Interop/MemoryMappedStoreRegion.cs`
-- [ ] T022 Implement deterministic diagnostic counters and `DiagnosticsSnapshot` in `src/SharedMemoryStore/Diagnostics/DiagnosticsSnapshot.cs`
-- [ ] T023 Expose internals to test projects for layout verification in `src/SharedMemoryStore/Properties/AssemblyInfo.cs`
-- [ ] T024 Document semantic versioning, layout compatibility, platform support, and future C++/Python rules in `docs/portability.md`
+- [X] T011 [P] Add shared test store naming and cleanup fixtures in `tests/SharedMemoryStore.UnitTests/TestSupport/StoreTestNames.cs`
+- [X] T012 [P] Add allocation measurement helpers in `tests/SharedMemoryStore.UnitTests/TestSupport/AllocationAssert.cs`
+- [X] T013 [P] Add public API and status enum contract test skeletons in `tests/SharedMemoryStore.ContractTests/PublicApiContractTests.cs`
+- [X] T014 Define `StoreOpenStatus` and `StoreStatus` public enums from the error taxonomy in `src/SharedMemoryStore/StoreStatus.cs`
+- [X] T015 Define `SharedMemoryStoreOptions` and `OpenMode` public configuration contracts in `src/SharedMemoryStore/SharedMemoryStoreOptions.cs`
+- [X] T016 Implement option validation for names, capacity, slot count, key size, descriptor size, value size, and lease record count in `src/SharedMemoryStore/Options/SharedMemoryStoreOptionsValidator.cs`
+- [X] T017 Define the disposable `SharedMemoryStore` public shell, create/open entry point, operation stubs, and disposal guard in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T018 [P] Implement layout version, magic, alignment, section, and state constants in `src/SharedMemoryStore/Layout/LayoutConstants.cs`
+- [X] T019 Implement mapped-region size calculation and section offset validation in `src/SharedMemoryStore/Layout/StoreLayout.cs`
+- [X] T020 [P] Implement unmanaged store header, index entry, slot metadata, and lease record structs in `src/SharedMemoryStore/Layout/SharedRecords.cs`
+- [X] T021 Implement the named memory-mapped file adapter and unsupported-platform detection in `src/SharedMemoryStore/Interop/MemoryMappedStoreRegion.cs`
+- [X] T022 Implement deterministic diagnostic counters and `DiagnosticsSnapshot` in `src/SharedMemoryStore/Diagnostics/DiagnosticsSnapshot.cs`
+- [X] T023 Expose internals to test projects for layout verification in `src/SharedMemoryStore/Properties/AssemblyInfo.cs`
+- [X] T024 Document semantic versioning, layout compatibility, platform support, and future C++/Python rules in `docs/portability.md`
 
 **Checkpoint**: Foundation ready. User story implementation can now begin.
 
@@ -58,22 +58,22 @@
 
 ### Tests for User Story 1
 
-- [ ] T025 [P] [US1] Add unit tests for key, descriptor, value size boundaries and publish validation in `tests/SharedMemoryStore.UnitTests/PublishValidationTests.cs`
-- [ ] T026 [P] [US1] Add unit tests for slot reservation, publish commit, abort, and generation behavior in `tests/SharedMemoryStore.UnitTests/SlotPublishStateTests.cs`
-- [ ] T027 [P] [US1] Add contract tests for `TryPublish` success, `DuplicateKey`, `KeyTooLarge`, `ValueTooLarge`, `DescriptorTooLarge`, and `StoreFull` statuses in `tests/SharedMemoryStore.ContractTests/PublishContractTests.cs`
-- [ ] T028 [P] [US1] Add integration test for publishing 1.3 MB values and descriptor bytes into a named store in `tests/SharedMemoryStore.IntegrationTests/PublishIntegrationTests.cs`
-- [ ] T029 [P] [US1] Add shared-memory layout inspection helper for publish assertions in `tests/SharedMemoryStore.IntegrationTests/TestSupport/SharedMemoryLayoutReader.cs`
-- [ ] T030 [P] [US1] Add publish allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/PublishAllocationBenchmarks.cs`
+- [X] T025 [P] [US1] Add unit tests for key, descriptor, value size boundaries and publish validation in `tests/SharedMemoryStore.UnitTests/PublishValidationTests.cs`
+- [X] T026 [P] [US1] Add unit tests for slot reservation, publish commit, abort, and generation behavior in `tests/SharedMemoryStore.UnitTests/SlotPublishStateTests.cs`
+- [X] T027 [P] [US1] Add contract tests for `TryPublish` success, `DuplicateKey`, `KeyTooLarge`, `ValueTooLarge`, `DescriptorTooLarge`, and `StoreFull` statuses in `tests/SharedMemoryStore.ContractTests/PublishContractTests.cs`
+- [X] T028 [P] [US1] Add integration test for publishing 1.3 MB values and descriptor bytes into a named store in `tests/SharedMemoryStore.IntegrationTests/PublishIntegrationTests.cs`
+- [X] T029 [P] [US1] Add shared-memory layout inspection helper for publish assertions in `tests/SharedMemoryStore.IntegrationTests/TestSupport/SharedMemoryLayoutReader.cs`
+- [X] T030 [P] [US1] Add publish allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/PublishAllocationBenchmarks.cs`
 
 ### Implementation for User Story 1
 
-- [ ] T031 [P] [US1] Implement byte-key validation and stable 64-bit hashing in `src/SharedMemoryStore/Layout/StoreKey.cs`
-- [ ] T032 [P] [US1] Implement open-addressed shared key index lookup and insert paths in `src/SharedMemoryStore/Layout/SharedKeyIndex.cs`
-- [ ] T033 [P] [US1] Implement reusable slot reservation, commit, abort, and generation transitions in `src/SharedMemoryStore/Slots/ReusableSlotTable.cs`
-- [ ] T034 [US1] Implement descriptor and payload copy into fixed shared-memory slot sections in `src/SharedMemoryStore/Slots/SlotWriter.cs`
-- [ ] T035 [US1] Wire `TryPublish` validation, duplicate detection, slot reservation, index insertion, commit, and rollback in `src/SharedMemoryStore/SharedMemoryStore.cs`
-- [ ] T036 [US1] Increment publish failure and capacity pressure counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
-- [ ] T037 [US1] Add XML documentation for create/open and publish APIs in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T031 [P] [US1] Implement byte-key validation and stable 64-bit hashing in `src/SharedMemoryStore/Layout/StoreKey.cs`
+- [X] T032 [P] [US1] Implement open-addressed shared key index lookup and insert paths in `src/SharedMemoryStore/Layout/SharedKeyIndex.cs`
+- [X] T033 [P] [US1] Implement reusable slot reservation, commit, abort, and generation transitions in `src/SharedMemoryStore/Slots/ReusableSlotTable.cs`
+- [X] T034 [US1] Implement descriptor and payload copy into fixed shared-memory slot sections in `src/SharedMemoryStore/Slots/SlotWriter.cs`
+- [X] T035 [US1] Wire `TryPublish` validation, duplicate detection, slot reservation, index insertion, commit, and rollback in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T036 [US1] Increment publish failure and capacity pressure counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
+- [X] T037 [US1] Add XML documentation for create/open and publish APIs in `src/SharedMemoryStore/SharedMemoryStore.cs`
 
 **Checkpoint**: User Story 1 is independently testable through publish tests, layout inspection, and allocation benchmark.
 
@@ -87,21 +87,21 @@
 
 ### Tests for User Story 2
 
-- [ ] T038 [P] [US2] Add unit tests for lease record reservation, generation validation, and lease table full behavior in `tests/SharedMemoryStore.UnitTests/LeaseRegistryTests.cs`
-- [ ] T039 [P] [US2] Add contract tests for `ValueLease.IsValid`, span lengths, `Release()`, `Dispose()`, `InvalidLease`, and `LeaseAlreadyReleased` in `tests/SharedMemoryStore.ContractTests/ValueLeaseContractTests.cs`
-- [ ] T040 [P] [US2] Add integration test for multiple readers acquiring the same published value in `tests/SharedMemoryStore.IntegrationTests/MultiReaderAcquireIntegrationTests.cs`
-- [ ] T041 [P] [US2] Add concurrency tests for acquire, release, duplicate-key publish, publish/remove, and adjacent-slot races in `tests/SharedMemoryStore.IntegrationTests/AcquireReleaseConcurrencyTests.cs`
-- [ ] T042 [P] [US2] Add acquire and release allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/LeaseAllocationBenchmarks.cs`
+- [X] T038 [P] [US2] Add unit tests for lease record reservation, generation validation, and lease table full behavior in `tests/SharedMemoryStore.UnitTests/LeaseRegistryTests.cs`
+- [X] T039 [P] [US2] Add contract tests for `ValueLease.IsValid`, span lengths, `Release()`, `Dispose()`, `InvalidLease`, and `LeaseAlreadyReleased` in `tests/SharedMemoryStore.ContractTests/ValueLeaseContractTests.cs`
+- [X] T040 [P] [US2] Add integration test for multiple readers acquiring the same published value in `tests/SharedMemoryStore.IntegrationTests/MultiReaderAcquireIntegrationTests.cs`
+- [X] T041 [P] [US2] Add concurrency tests for acquire, release, duplicate-key publish, publish/remove, and adjacent-slot races in `tests/SharedMemoryStore.IntegrationTests/AcquireReleaseConcurrencyTests.cs`
+- [X] T042 [P] [US2] Add acquire and release allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/LeaseAllocationBenchmarks.cs`
 
 ### Implementation for User Story 2
 
-- [ ] T043 [P] [US2] Implement the `ValueLease` readonly struct API and release ownership fields in `src/SharedMemoryStore/ValueLease.cs`
-- [ ] T044 [P] [US2] Implement lease registry reservation, activation, release, and abandoned state transitions in `src/SharedMemoryStore/Leasing/LeaseRegistry.cs`
-- [ ] T045 [US2] Implement `TryAcquire` key lookup, slot generation check, usage increment, and lease record activation in `src/SharedMemoryStore/SharedMemoryStore.cs`
-- [ ] T046 [US2] Implement generation-checked lease release and double-release protection in `src/SharedMemoryStore/Leasing/LeaseRelease.cs`
-- [ ] T047 [US2] Implement read-only value and descriptor span projection from mapped slot offsets in `src/SharedMemoryStore/Slots/SlotReader.cs`
-- [ ] T048 [US2] Increment acquire, release, and lease failure counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
-- [ ] T049 [US2] Document lease lifetime, span validity, release ownership, and reader responsibilities in `docs/lifecycle.md`
+- [X] T043 [P] [US2] Implement the `ValueLease` readonly struct API and release ownership fields in `src/SharedMemoryStore/ValueLease.cs`
+- [X] T044 [P] [US2] Implement lease registry reservation, activation, release, and abandoned state transitions in `src/SharedMemoryStore/Leasing/LeaseRegistry.cs`
+- [X] T045 [US2] Implement `TryAcquire` key lookup, slot generation check, usage increment, and lease record activation in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T046 [US2] Implement generation-checked lease release and double-release protection in `src/SharedMemoryStore/Leasing/LeaseRelease.cs`
+- [X] T047 [US2] Implement read-only value and descriptor span projection from mapped slot offsets in `src/SharedMemoryStore/Slots/SlotReader.cs`
+- [X] T048 [US2] Increment acquire, release, and lease failure counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
+- [X] T049 [US2] Document lease lifetime, span validity, release ownership, and reader responsibilities in `docs/lifecycle.md`
 
 **Checkpoint**: User Stories 1 and 2 work together and remain independently verifiable through publish and acquire/release tests.
 
@@ -115,22 +115,22 @@
 
 ### Tests for User Story 3
 
-- [ ] T050 [P] [US3] Add unit tests for remove with no active leases, remove while leased, final release reclaim, and generation increment in `tests/SharedMemoryStore.UnitTests/RemoveReuseStateTests.cs`
-- [ ] T051 [P] [US3] Add contract tests for `TryRemove` success, `NotFound`, `RemovePending`, `InvalidLease`, and `CorruptStore` outcomes in `tests/SharedMemoryStore.ContractTests/RemoveReuseContractTests.cs`
-- [ ] T052 [P] [US3] Add integration test for publish, acquire, remove, release, and slot reuse in `tests/SharedMemoryStore.IntegrationTests/RemoveReuseIntegrationTests.cs`
-- [ ] T053 [P] [US3] Add stale lease recovery integration tests for supported and unsupported platform outcomes in `tests/SharedMemoryStore.IntegrationTests/LeaseRecoveryIntegrationTests.cs`
-- [ ] T054 [P] [US3] Add reuse memory benchmark for one million publish/remove/reuse cycles in `benchmarks/SharedMemoryStore.Benchmarks/ReuseBenchmarks.cs`
+- [X] T050 [P] [US3] Add unit tests for remove with no active leases, remove while leased, final release reclaim, and generation increment in `tests/SharedMemoryStore.UnitTests/RemoveReuseStateTests.cs`
+- [X] T051 [P] [US3] Add contract tests for `TryRemove` success, `NotFound`, `RemovePending`, `InvalidLease`, and `CorruptStore` outcomes in `tests/SharedMemoryStore.ContractTests/RemoveReuseContractTests.cs`
+- [X] T052 [P] [US3] Add integration test for publish, acquire, remove, release, and slot reuse in `tests/SharedMemoryStore.IntegrationTests/RemoveReuseIntegrationTests.cs`
+- [X] T053 [P] [US3] Add stale lease recovery integration tests for supported and unsupported platform outcomes in `tests/SharedMemoryStore.IntegrationTests/LeaseRecoveryIntegrationTests.cs`
+- [X] T054 [P] [US3] Add reuse memory benchmark for one million publish/remove/reuse cycles in `benchmarks/SharedMemoryStore.Benchmarks/ReuseBenchmarks.cs`
 
 ### Implementation for User Story 3
 
-- [ ] T055 [P] [US3] Implement remove state transitions for `Published`, `RemoveRequested`, `Reclaiming`, and `Free` slots in `src/SharedMemoryStore/Slots/SlotReclaimer.cs`
-- [ ] T056 [P] [US3] Implement index tombstone and key removal behavior in `src/SharedMemoryStore/Layout/SharedKeyIndex.cs`
-- [ ] T057 [US3] Wire `TryRemove` key lookup, pending removal, immediate reclaim, and deterministic status returns in `src/SharedMemoryStore/SharedMemoryStore.cs`
-- [ ] T058 [US3] Integrate final lease release with pending-removal reclaim in `src/SharedMemoryStore/Leasing/LeaseRelease.cs`
-- [ ] T059 [US3] Implement reusable free-slot selection without managed allocation in `src/SharedMemoryStore/Slots/ReusableSlotTable.cs`
-- [ ] T060 [US3] Implement explicit stale lease recovery API and report struct in `src/SharedMemoryStore/Leasing/LeaseRecovery.cs`
-- [ ] T061 [US3] Increment remove, reuse, stale lease, and corruption counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
-- [ ] T062 [US3] Document removal, pending removal, stale lease recovery, and owner cleanup responsibilities in `docs/lifecycle.md`
+- [X] T055 [P] [US3] Implement remove state transitions for `Published`, `RemoveRequested`, `Reclaiming`, and `Free` slots in `src/SharedMemoryStore/Slots/SlotReclaimer.cs`
+- [X] T056 [P] [US3] Implement index tombstone and key removal behavior in `src/SharedMemoryStore/Layout/SharedKeyIndex.cs`
+- [X] T057 [US3] Wire `TryRemove` key lookup, pending removal, immediate reclaim, and deterministic status returns in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T058 [US3] Integrate final lease release with pending-removal reclaim in `src/SharedMemoryStore/Leasing/LeaseRelease.cs`
+- [X] T059 [US3] Implement reusable free-slot selection without managed allocation in `src/SharedMemoryStore/Slots/ReusableSlotTable.cs`
+- [X] T060 [US3] Implement explicit stale lease recovery API and report struct in `src/SharedMemoryStore/Leasing/LeaseRecovery.cs`
+- [X] T061 [US3] Increment remove, reuse, stale lease, and corruption counters in `src/SharedMemoryStore/Diagnostics/StoreDiagnostics.cs`
+- [X] T062 [US3] Document removal, pending removal, stale lease recovery, and owner cleanup responsibilities in `docs/lifecycle.md`
 
 **Checkpoint**: User Stories 1 through 3 deliver the bounded-memory store lifecycle: publish, acquire, release, remove, and reuse.
 
@@ -144,16 +144,16 @@
 
 ### Tests for User Story 4
 
-- [ ] T063 [P] [US4] Add integration test for frame-shaped descriptor and payload storage through general APIs in `tests/SharedMemoryStore.IntegrationTests/FrameValueIntegrationTests.cs`
-- [ ] T064 [P] [US4] Add contract test proving no frame-specific public API is required in `tests/SharedMemoryStore.ContractTests/FrameNeutralContractTests.cs`
-- [ ] T065 [P] [US4] Add frame throughput benchmark for 500 publishes per second over 60 seconds in `benchmarks/SharedMemoryStore.Benchmarks/FrameThroughputBenchmarks.cs`
+- [X] T063 [P] [US4] Add integration test for frame-shaped descriptor and payload storage through general APIs in `tests/SharedMemoryStore.IntegrationTests/FrameValueIntegrationTests.cs`
+- [X] T064 [P] [US4] Add contract test proving no frame-specific public API is required in `tests/SharedMemoryStore.ContractTests/FrameNeutralContractTests.cs`
+- [X] T065 [P] [US4] Add frame throughput benchmark for 500 publishes per second over 60 seconds in `benchmarks/SharedMemoryStore.Benchmarks/FrameThroughputBenchmarks.cs`
 
 ### Implementation for User Story 4
 
-- [ ] T066 [P] [US4] Implement sample-only frame descriptor builder in `samples/FrameValue/FrameDescriptor.cs`
-- [ ] T067 [US4] Implement end-to-end frame publishing, multi-reader acquire, release, remove, and reuse sample in `samples/FrameValue/Program.cs`
-- [ ] T068 [US4] Add non-frame comparison path to prove identical store behavior in `samples/FrameValue/Program.cs`
-- [ ] T069 [US4] Document frame-as-opaque-value guidance and descriptor ownership in `docs/lifecycle.md`
+- [X] T066 [P] [US4] Implement sample-only frame descriptor builder in `samples/FrameValue/FrameDescriptor.cs`
+- [X] T067 [US4] Implement end-to-end frame publishing, multi-reader acquire, release, remove, and reuse sample in `samples/FrameValue/Program.cs`
+- [X] T068 [US4] Add non-frame comparison path to prove identical store behavior in `samples/FrameValue/Program.cs`
+- [X] T069 [US4] Document frame-as-opaque-value guidance and descriptor ownership in `docs/lifecycle.md`
 
 **Checkpoint**: Frame scenario is validated without adding frame-specific store operations.
 
@@ -167,17 +167,17 @@
 
 ### Tests for User Story 5
 
-- [ ] T070 [P] [US5] Add package metadata and XML documentation contract tests in `tests/SharedMemoryStore.ContractTests/PackageContractTests.cs`
-- [ ] T071 [P] [US5] Add clean consumer package smoke test in `tests/SharedMemoryStore.IntegrationTests/PackageConsumptionIntegrationTests.cs`
-- [ ] T072 [P] [US5] Add deterministic failure outcome integration tests for full store, duplicate key, missing key, oversized value, invalid release, and disposed store in `tests/SharedMemoryStore.IntegrationTests/FailureOutcomeIntegrationTests.cs`
+- [X] T070 [P] [US5] Add package metadata and XML documentation contract tests in `tests/SharedMemoryStore.ContractTests/PackageContractTests.cs`
+- [X] T071 [P] [US5] Add clean consumer package smoke test in `tests/SharedMemoryStore.IntegrationTests/PackageConsumptionIntegrationTests.cs`
+- [X] T072 [P] [US5] Add deterministic failure outcome integration tests for full store, duplicate key, missing key, oversized value, invalid release, and disposed store in `tests/SharedMemoryStore.IntegrationTests/FailureOutcomeIntegrationTests.cs`
 
 ### Implementation for User Story 5
 
-- [ ] T073 [US5] Finalize package id, version, authorship, description, tags, README, release notes, and license metadata in `src/SharedMemoryStore/SharedMemoryStore.csproj`
-- [ ] T074 [US5] Implement public create/open, publish, acquire, release, remove, diagnostics, and reuse example in `samples/BasicUsage/Program.cs`
-- [ ] T075 [US5] Add local package consumption validation script in `scripts/validate-package-consumption.ps1`
-- [ ] T076 [US5] Document installation, package creation, clean-project consumption, and release validation in `docs/packaging.md`
-- [ ] T077 [US5] Document public failure statuses and caller-owned diagnostics formatting in `docs/lifecycle.md`
+- [X] T073 [US5] Finalize package id, version, authorship, description, tags, README, release notes, and license metadata in `src/SharedMemoryStore/SharedMemoryStore.csproj`
+- [X] T074 [US5] Implement public create/open, publish, acquire, release, remove, diagnostics, and reuse example in `samples/BasicUsage/Program.cs`
+- [X] T075 [US5] Add local package consumption validation script in `scripts/validate-package-consumption.ps1`
+- [X] T076 [US5] Document installation, package creation, clean-project consumption, and release validation in `docs/packaging.md`
+- [X] T077 [US5] Document public failure statuses and caller-owned diagnostics formatting in `docs/lifecycle.md`
 
 **Checkpoint**: The feature is consumable as a general NuGet library using only public contracts and documentation.
 
@@ -187,18 +187,18 @@
 
 **Purpose**: Validate release quality, cross-story performance, documentation, formatting, and package readiness.
 
-- [ ] T078 [P] Add corruption detection and safe error-mode tests in `tests/SharedMemoryStore.UnitTests/CorruptStoreTests.cs`
-- [ ] T079 [P] Add process-style multi-store lifecycle tests in `tests/SharedMemoryStore.IntegrationTests/MultiStoreLifecycleIntegrationTests.cs`
-- [ ] T080 [P] Add benchmark hardware and configuration reporting in `benchmarks/SharedMemoryStore.Benchmarks/BenchmarkEnvironment.cs`
-- [ ] T081 Review and complete XML documentation on all public types in `src/SharedMemoryStore/SharedMemoryStore.cs`
-- [ ] T082 Review and complete XML documentation on all public types in `src/SharedMemoryStore/ValueLease.cs`
-- [ ] T083 Run formatting and analyzer validation for `SharedMemoryStore.sln`
-- [ ] T084 Run full Release test validation for `SharedMemoryStore.sln`
-- [ ] T085 Run Release package validation for `src/SharedMemoryStore/SharedMemoryStore.csproj`
-- [ ] T086 Run quickstart validation scenarios from `specs/001-frame-memory-store/quickstart.md`
-- [ ] T087 [P] Add remove and slot-reuse allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/RemoveReuseAllocationBenchmarks.cs`
-- [ ] T088 [P] Add 100,000-cycle producer/four-reader publish/acquire/release/remove lifecycle stress benchmark in `benchmarks/SharedMemoryStore.Benchmarks/LifecycleStressBenchmarks.cs`
-- [ ] T089 [P] Add deterministic failure-latency benchmark with p95 and maximum observed latency reporting in `benchmarks/SharedMemoryStore.Benchmarks/FailureLatencyBenchmarks.cs`
+- [X] T078 [P] Add corruption detection and safe error-mode tests in `tests/SharedMemoryStore.UnitTests/CorruptStoreTests.cs`
+- [X] T079 [P] Add process-style multi-store lifecycle tests in `tests/SharedMemoryStore.IntegrationTests/MultiStoreLifecycleIntegrationTests.cs`
+- [X] T080 [P] Add benchmark hardware and configuration reporting in `benchmarks/SharedMemoryStore.Benchmarks/BenchmarkEnvironment.cs`
+- [X] T081 Review and complete XML documentation on all public types in `src/SharedMemoryStore/SharedMemoryStore.cs`
+- [X] T082 Review and complete XML documentation on all public types in `src/SharedMemoryStore/ValueLease.cs`
+- [X] T083 Run formatting and analyzer validation for `SharedMemoryStore.slnx`
+- [X] T084 Run full Release test validation for `SharedMemoryStore.slnx`
+- [X] T085 Run Release package validation for `src/SharedMemoryStore/SharedMemoryStore.csproj`
+- [X] T086 Run quickstart validation scenarios from `specs/001-frame-memory-store/quickstart.md`
+- [X] T087 [P] Add remove and slot-reuse allocation benchmark after warm-up in `benchmarks/SharedMemoryStore.Benchmarks/RemoveReuseAllocationBenchmarks.cs`
+- [X] T088 [P] Add 100,000-cycle producer/four-reader publish/acquire/release/remove lifecycle stress benchmark in `benchmarks/SharedMemoryStore.Benchmarks/LifecycleStressBenchmarks.cs`
+- [X] T089 [P] Add deterministic failure-latency benchmark with p95 and maximum observed latency reporting in `benchmarks/SharedMemoryStore.Benchmarks/FailureLatencyBenchmarks.cs`
 
 ---
 
@@ -305,8 +305,17 @@ Task: T054 Add reuse benchmarks in benchmarks/SharedMemoryStore.Benchmarks/Reuse
 
 ## Format Validation
 
-- All task lines use `- [ ] T###` checklist format.
+- All task lines use `- [X] T###` checklist format.
 - Parallel tasks use `[P]` only when they touch independent files or can run before dependent integration.
 - User story phase tasks include `[US1]`, `[US2]`, `[US3]`, `[US4]`, or `[US5]`.
 - Setup, foundational, and polish tasks do not include story labels.
 - Every task description includes at least one exact file path.
+
+## Phase 9: Convergence
+
+- [X] T090 Keep disposing one `SharedMemoryStore` handle from transitioning the shared store header to an unusable state for other producers or readers, and add same-name multi-handle coverage in `tests/SharedMemoryStore.IntegrationTests/MultiStoreLifecycleIntegrationTests.cs` per FR-001 (contradicts)
+- [X] T091 Ensure released `ValueLease` instances stop exposing value or descriptor lengths and spans, and add post-release use-after-release coverage in `tests/SharedMemoryStore.ContractTests/ValueLeaseContractTests.cs` per SC-003 (contradicts)
+- [X] T092 Add sustained 60-second 1.3 MB frame throughput validation with explicit 500 publishes-per-second target reporting in `benchmarks/SharedMemoryStore.Benchmarks/FrameThroughputBenchmarks.cs` per SC-002 (partial)
+- [X] T093 Make the producer/four-reader lifecycle stress benchmark use concurrent readers and assert no usage-count underflow, leaked active leases, or use-after-release access in `benchmarks/SharedMemoryStore.Benchmarks/LifecycleStressBenchmarks.cs` per SC-003 (partial)
+- [X] T094 Extend reuse validation to one million publish/remove/reuse cycles and verify committed memory remains within 1% of configured capacity plus fixed overhead in `benchmarks/SharedMemoryStore.Benchmarks/ReuseBenchmarks.cs` per SC-004 (partial)
+- [X] T095 Complete deterministic failure-latency benchmark coverage for oversized descriptor, invalid release, and unsupported-platform outcomes with p95 and maximum latency reporting in `benchmarks/SharedMemoryStore.Benchmarks/FailureLatencyBenchmarks.cs` per SC-005 (partial)

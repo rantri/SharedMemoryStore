@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a SharedMemoryStore capability or compatibility change.
+title: "Feature: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Describe the consumer problem and why it belongs in this general-purpose library.
+    validations:
+      required: true
+  - type: textarea
+    id: api-impact
+    attributes:
+      label: Public API impact
+      description: Identify new or changed public types, members, statuses, or options.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility-impact
+    attributes:
+      label: Compatibility impact
+      description: Describe layout, lifecycle, semantic-version, or migration impact.
+    validations:
+      required: true
+  - type: textarea
+    id: dependency-impact
+    attributes:
+      label: Runtime dependency impact
+      description: List any new runtime dependencies and why they belong in the package.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or narrower approaches.
+    validations:
+      required: true

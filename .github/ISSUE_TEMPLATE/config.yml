@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support guidance
+    url: ../../SUPPORT.md
+    about: Choose the right path for questions, bugs, documentation issues, feature requests, and security reports.
+  - name: Security policy
+    url: ../../SECURITY.md
+    about: Report vulnerability details privately instead of opening a public issue.

@@ -1,0 +1,582 @@
+using System.Threading;
+using SharedMemoryStore.Diagnostics;
+using SharedMemoryStore.Interop;
+using SharedMemoryStore.Layout;
+using SharedMemoryStore.Leasing;
+using SharedMemoryStore.Options;
+using SharedMemoryStore.Slots;
+
+namespace SharedMemoryStore;
+
+/// <summary>
+/// Disposable owner of one bounded named shared-memory value store.
+/// </summary>
+public sealed unsafe class SharedMemoryStore : IDisposable
+{
+    private readonly object _gate = new();
+    private readonly Mutex _mutex;
+    private readonly MemoryMappedStoreRegion _region;
+    private readonly StoreLayout _layout;
+    private readonly SharedKeyIndex _index;
+    private readonly ReusableSlotTable _slots;
+    private readonly SlotWriter _writer;
+    private readonly SlotReader _reader;
+    private readonly SlotReclaimer _reclaimer;
+    private readonly LeaseRegistry _leases;
+    private readonly StoreDiagnostics _diagnostics;
+    private readonly bool _leaseRecoveryEnabled;
+    private bool _disposed;
+
+    private SharedMemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
+    {
+        _mutex = new Mutex(false, BuildMutexName(storeName));
+        _region = region;
+        _layout = layout;
+        _leaseRecoveryEnabled = leaseRecoveryEnabled;
+        _index = new SharedKeyIndex(region, layout);
+        _slots = new ReusableSlotTable(region, layout);
+        _writer = new SlotWriter(region);
+        _reader = new SlotReader(region, _slots);
+        _reclaimer = new SlotReclaimer(_slots, _index);
+        _leases = new LeaseRegistry(region, layout);
+        _diagnostics = new StoreDiagnostics();
+    }
+
+    /// <summary>
+    /// Creates or opens a named store using the supplied options.
+    /// </summary>
+    public static StoreOpenStatus TryCreateOrOpen(in SharedMemoryStoreOptions options, out SharedMemoryStore? store)
+    {
+        store = null;
+
+        var validation = SharedMemoryStoreOptionsValidator.Validate(options, out var layout);
+        if (validation != StoreOpenStatus.Success)
+        {
+            return validation;
+        }
+
+        var mappingStatus = MemoryMappedStoreRegion.TryOpen(options, out var region);
+        if (mappingStatus != StoreOpenStatus.Success || region is null)
+        {
+            return mappingStatus;
+        }
+
+        SharedMemoryStore candidate;
+        try
+        {
+            candidate = new SharedMemoryStore(region, layout, options.Name, options.EnableLeaseRecovery);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            region.Dispose();
+            return StoreOpenStatus.AccessDenied;
+        }
+        catch (Exception)
+        {
+            region.Dispose();
+            return StoreOpenStatus.MappingFailed;
+        }
+
+        StoreOpenStatus initializeStatus;
+        candidate.EnterStoreLock();
+        try
+        {
+            initializeStatus = candidate.InitializeOrValidate(options);
+        }
+        finally
+        {
+            candidate.ExitStoreLock();
+        }
+
+        if (initializeStatus != StoreOpenStatus.Success)
+        {
+            candidate.Dispose();
+            return initializeStatus;
+        }
+
+        store = candidate;
+        return StoreOpenStatus.Success;
+    }
+
+    /// <summary>
+    /// Publishes immutable value bytes and optional descriptor bytes under an opaque byte key.
+    /// </summary>
+    public StoreStatus TryPublish(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor = default)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var validation = ValidateOperationInput(key, value, descriptor);
+            if (validation != StoreStatus.Success)
+            {
+                return Record(validation);
+            }
+
+            var hash = StoreKey.Hash(key);
+            if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
+            {
+                ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
+                if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
+                {
+                    return Record(StoreStatus.DuplicateKey);
+                }
+            }
+
+            if (!_slots.TryReserve(out var slotIndex))
+            {
+                return Record(StoreStatus.StoreFull);
+            }
+
+            ref var slot = ref _slots.GetSlot(slotIndex);
+            try
+            {
+                _writer.Write(ref slot, value, descriptor);
+                if (!_index.TryInsert(key, hash, slotIndex, slot.Generation))
+                {
+                    _slots.Abort(slotIndex);
+                    return Record(StoreStatus.DuplicateKey);
+                }
+
+                var sequence = Interlocked.Increment(ref Header.Sequence);
+                _slots.Commit(slotIndex, hash, key.Length, descriptor.Length, value.Length, sequence);
+                return StoreStatus.Success;
+            }
+            catch (Exception)
+            {
+                _slots.Abort(slotIndex);
+                return Record(StoreStatus.UnknownFailure);
+            }
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Acquires a read lease for the value currently published under the supplied key.
+    /// </summary>
+    public StoreStatus TryAcquire(ReadOnlySpan<byte> key, out ValueLease lease)
+    {
+        lease = default;
+
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+            if (keyStatus != StoreStatus.Success)
+            {
+                return Record(keyStatus);
+            }
+
+            var hash = StoreKey.Hash(key);
+            if (!_index.TryFind(key, hash, out var slotIndex, out var generation))
+            {
+                return Record(StoreStatus.NotFound);
+            }
+
+            ref var slot = ref _slots.GetSlot(slotIndex);
+            if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished || slot.Generation != generation)
+            {
+                return Record(StoreStatus.NotFound);
+            }
+
+            var sequence = Interlocked.Increment(ref Header.Sequence);
+            if (!_leases.TryActivate(slotIndex, generation, sequence, out var leaseRecordId))
+            {
+                return Record(StoreStatus.LeaseTableFull);
+            }
+
+            Interlocked.Increment(ref slot.UsageCount);
+            if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished || slot.Generation != generation)
+            {
+                _ = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, generation, leaseRecordId);
+                return Record(StoreStatus.NotFound);
+            }
+
+            lease = new ValueLease(this, slotIndex, generation, leaseRecordId);
+            return StoreStatus.Success;
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Removes the value identified by the supplied key and reclaims its slot when no active lease protects it.
+    /// </summary>
+    public StoreStatus TryRemove(ReadOnlySpan<byte> key)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+            if (keyStatus != StoreStatus.Success)
+            {
+                return Record(keyStatus);
+            }
+
+            var hash = StoreKey.Hash(key);
+            if (!_index.TryFind(key, hash, out var slotIndex, out var generation))
+            {
+                return Record(StoreStatus.NotFound);
+            }
+
+            var status = _reclaimer.RequestRemove(slotIndex, generation);
+            return status == StoreStatus.Success ? status : Record(status);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Explicitly recovers stale active lease records according to the supplied owner policy.
+    /// </summary>
+    public StoreStatus TryRecoverLeases(in LeaseRecoveryOptions options, out LeaseRecoveryReport report)
+    {
+        if (_disposed)
+        {
+            report = default;
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                report = default;
+                return Record(ready);
+            }
+
+            var status = LeaseRecovery.Recover(_leases, _slots, _reclaimer, _leaseRecoveryEnabled, options, out report);
+            return status == StoreStatus.Success ? status : Record(status);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Returns a caller-formatted diagnostic snapshot without writing to console or mutating store state.
+    /// </summary>
+    public DiagnosticsSnapshot GetDiagnostics()
+    {
+        if (_disposed)
+        {
+            return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            if (_disposed)
+            {
+                return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0);
+            }
+
+            var states = _slots.CountStates();
+            return _diagnostics.CreateSnapshot(
+                _layout.TotalBytes,
+                _layout.SlotCount,
+                states.Free,
+                states.Published,
+                states.PendingRemoval,
+                _leases.ActiveCount());
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Releases this store handle and invalidates future operations and lease span projections.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _region.Dispose();
+        }
+        finally
+        {
+            ExitStoreLock();
+            _mutex.Dispose();
+        }
+    }
+
+    internal bool IsLeaseActive(int slotIndex, int generation, int leaseRecordId)
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            return !_disposed && _leases.IsActive(leaseRecordId, slotIndex, generation);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal int GetValueLength(int slotIndex, int generation)
+    {
+        return _disposed ? 0 : _reader.GetValueLength(slotIndex, generation);
+    }
+
+    internal int GetDescriptorLength(int slotIndex, int generation)
+    {
+        return _disposed ? 0 : _reader.GetDescriptorLength(slotIndex, generation);
+    }
+
+    internal ReadOnlySpan<byte> GetValueSpan(int slotIndex, int generation)
+    {
+        return _disposed ? ReadOnlySpan<byte>.Empty : _reader.GetValueSpan(slotIndex, generation);
+    }
+
+    internal ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, int generation)
+    {
+        return _disposed ? ReadOnlySpan<byte>.Empty : _reader.GetDescriptorSpan(slotIndex, generation);
+    }
+
+    internal StoreStatus ReleaseLease(int slotIndex, int generation, int leaseRecordId)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            if (_disposed)
+            {
+                return Record(StoreStatus.StoreDisposed);
+            }
+
+            var status = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, generation, leaseRecordId);
+            return status == StoreStatus.Success ? status : Record(status);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal StoreLayout Layout => _layout;
+
+    internal ref StoreHeader Header => ref *(StoreHeader*)_region.Pointer;
+
+    internal ref SharedSlotMetadata GetSlotForTesting(int slotIndex) => ref _slots.GetSlot(slotIndex);
+
+    private StoreOpenStatus InitializeOrValidate(SharedMemoryStoreOptions options)
+    {
+        ref var header = ref Header;
+        if (options.OpenMode == OpenMode.CreateNew || header.Magic == 0)
+        {
+            if (options.OpenMode == OpenMode.OpenExisting)
+            {
+                return StoreOpenStatus.IncompatibleLayout;
+            }
+
+            InitializeHeader();
+            _slots.Initialize();
+            _leases.Initialize();
+            return StoreOpenStatus.Success;
+        }
+
+        if (header.Magic != LayoutConstants.Magic
+            || header.LayoutMajorVersion != LayoutConstants.LayoutMajorVersion
+            || !_layout.MatchesHeader(header)
+            || !ValidateSectionBounds(header))
+        {
+            return StoreOpenStatus.IncompatibleLayout;
+        }
+
+        return Volatile.Read(ref header.StoreState) == LayoutConstants.StoreUnsupported
+            ? StoreOpenStatus.UnsupportedPlatform
+            : StoreOpenStatus.Success;
+    }
+
+    private void InitializeHeader()
+    {
+        ClearRegion(_layout.RequiredBytes);
+
+        ref var header = ref Header;
+        header.Magic = LayoutConstants.Magic;
+        header.LayoutMajorVersion = LayoutConstants.LayoutMajorVersion;
+        header.LayoutMinorVersion = LayoutConstants.LayoutMinorVersion;
+        header.HeaderLength = _layout.HeaderLength;
+        header.TotalBytes = _layout.TotalBytes;
+        header.SlotCount = _layout.SlotCount;
+        header.LeaseRecordCount = _layout.LeaseRecordCount;
+        header.MaxKeyBytes = _layout.MaxKeyBytes;
+        header.MaxDescriptorBytes = _layout.MaxDescriptorBytes;
+        header.MaxValueBytes = _layout.MaxValueBytes;
+        header.IndexEntryCount = _layout.IndexEntryCount;
+        header.IndexEntrySize = _layout.IndexEntrySize;
+        header.IndexOffset = _layout.IndexOffset;
+        header.IndexLength = _layout.IndexLength;
+        header.LeaseRegistryOffset = _layout.LeaseRegistryOffset;
+        header.LeaseRegistryLength = _layout.LeaseRegistryLength;
+        header.SlotMetadataOffset = _layout.SlotMetadataOffset;
+        header.SlotMetadataLength = _layout.SlotMetadataLength;
+        header.DescriptorStorageOffset = _layout.DescriptorStorageOffset;
+        header.DescriptorStorageLength = _layout.DescriptorStorageLength;
+        header.PayloadStorageOffset = _layout.PayloadStorageOffset;
+        header.PayloadStorageLength = _layout.PayloadStorageLength;
+        header.StoreId = DateTime.UtcNow.Ticks ^ Environment.ProcessId;
+        header.Sequence = 0;
+        Volatile.Write(ref header.StoreState, LayoutConstants.StoreReady);
+    }
+
+    private void ClearRegion(long length)
+    {
+        var pointer = _region.Pointer;
+        for (var i = 0L; i < length; i++)
+        {
+            pointer[i] = 0;
+        }
+    }
+
+    private StoreStatus ValidateOperationInput(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor)
+    {
+        var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+        if (keyStatus != StoreStatus.Success)
+        {
+            return keyStatus;
+        }
+
+        if (value.Length > _layout.MaxValueBytes)
+        {
+            return StoreStatus.ValueTooLarge;
+        }
+
+        return descriptor.Length > _layout.MaxDescriptorBytes
+            ? StoreStatus.DescriptorTooLarge
+            : StoreStatus.Success;
+    }
+
+    private StoreStatus EnsureReady()
+    {
+        if (_disposed)
+        {
+            return StoreStatus.StoreDisposed;
+        }
+
+        return Volatile.Read(ref Header.StoreState) switch
+        {
+            LayoutConstants.StoreReady => StoreStatus.Success,
+            LayoutConstants.StoreUnsupported => StoreStatus.UnsupportedPlatform,
+            LayoutConstants.StoreCorrupt => StoreStatus.CorruptStore,
+            _ => StoreStatus.UnknownFailure
+        };
+    }
+
+    private StoreStatus Record(StoreStatus status)
+    {
+        _diagnostics.Record(status);
+        return status;
+    }
+
+    private static bool ValidateSectionBounds(in StoreHeader header)
+    {
+        return header.IndexOffset >= header.HeaderLength
+            && header.IndexOffset + header.IndexLength <= header.TotalBytes
+            && header.LeaseRegistryOffset >= header.IndexOffset + header.IndexLength
+            && header.LeaseRegistryOffset + header.LeaseRegistryLength <= header.TotalBytes
+            && header.SlotMetadataOffset >= header.LeaseRegistryOffset + header.LeaseRegistryLength
+            && header.SlotMetadataOffset + header.SlotMetadataLength <= header.TotalBytes
+            && header.DescriptorStorageOffset >= header.SlotMetadataOffset + header.SlotMetadataLength
+            && header.DescriptorStorageOffset + header.DescriptorStorageLength <= header.TotalBytes
+            && header.PayloadStorageOffset >= header.DescriptorStorageOffset + header.DescriptorStorageLength
+            && header.PayloadStorageOffset + header.PayloadStorageLength <= header.TotalBytes;
+    }
+
+    private void EnterStoreLock()
+    {
+        try
+        {
+            _mutex.WaitOne();
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous owner ended without releasing the mutex; the shared state remains validated separately.
+        }
+
+        Monitor.Enter(_gate);
+    }
+
+    private void ExitStoreLock()
+    {
+        Monitor.Exit(_gate);
+        _mutex.ReleaseMutex();
+    }
+
+    private static string BuildMutexName(string storeName)
+    {
+        return @"Local\SharedMemoryStore-" + string.Create(storeName.Length, storeName, static (destination, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                var value = source[i];
+                destination[i] = char.IsLetterOrDigit(value) || value is '-' or '_' ? value : '_';
+            }
+        });
+    }
+}

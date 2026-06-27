@@ -1,0 +1,22 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/BasicUsage/BasicUsage.csproj" />
+    <Project Path="samples/FrameValue/FrameValue.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SharedMemoryStore/SharedMemoryStore.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj" />
+    <Project Path="tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj" />
+    <Project Path="tests/SharedMemoryStore.UnitTests/SharedMemoryStore.UnitTests.csproj" />
+  </Folder>
+</Solution>

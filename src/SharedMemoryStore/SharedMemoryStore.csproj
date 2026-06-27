@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PackageId>SharedMemoryStore</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>SharedMemoryStore contributors</Authors>
+    <Company>SharedMemoryStore</Company>
+    <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
+    <PackageTags>shared-memory;memory-mapped-file;zero-copy;library</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>Initial public package contract for publish, acquire, release, remove, diagnostics, and reuse.</PackageReleaseNotes>
+    <AssemblyName>SharedMemoryStore</AssemblyName>
+    <RootNamespace>SharedMemoryStore</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
