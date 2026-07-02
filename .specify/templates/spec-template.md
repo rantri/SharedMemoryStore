@@ -19,7 +19,7 @@
   Think of each story as a standalone slice of functionality that can be:
   - Developed independently
   - Tested independently
-  - Packaged independently
+  - Deployed independently
   - Demonstrated to users independently
 -->
 
@@ -75,10 +75,8 @@
   Fill them out with the right edge cases.
 -->
 
-- What happens at documented size, count, lifetime, and concurrency boundaries?
-- How does the library handle invalid inputs, resource exhaustion, cleanup
-  failures, and platform-specific unsupported behavior?
-- How are version skew, backward compatibility, and migration scenarios handled?
+- What happens when [boundary condition]?
+- How does system handle [error scenario]?
 
 ## Requirements *(mandatory)*
 
@@ -89,30 +87,16 @@
 
 ### Functional Requirements
 
-- **FR-001**: Library MUST [specific capability, e.g., "create or open a named shared memory region"]
-- **FR-002**: Library MUST [specific validation behavior, e.g., "reject invalid region names with a documented exception"]
-- **FR-003**: Consumers MUST be able to [key interaction, e.g., "dispose resources deterministically"]
-- **FR-004**: Library MUST [data or compatibility requirement, e.g., "preserve documented binary layout"]
-- **FR-005**: Library MUST [diagnostic behavior, e.g., "surface failures through documented errors and diagnostics hooks"]
-
-### Library Contract & Compatibility *(mandatory)*
-
-- **LC-001**: Public API surface MUST be described, including namespaces,
-  types, methods, errors, lifecycle rules, and examples.
-- **LC-002**: NuGet packaging impact MUST be described, including package
-  metadata, public documentation, and release notes.
-- **LC-003**: Semantic version impact MUST be identified as none, patch, minor,
-  or major with rationale.
-- **LC-004**: Future C++ and Python portability considerations MUST be listed
-  when the feature defines core concepts, data structures, errors, or interop
-  behavior.
-- **LC-005**: Diagnostics and resource ownership expectations MUST be stated for
-  public APIs that allocate, pin, map, share, or dispose resources.
+- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
+- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]
+- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
+- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
+- **FR-005**: System MUST [behavior, e.g., "log all security events"]
 
 *Example of marking unclear requirements:*
 
-- **FR-006**: Library MUST support [NEEDS CLARIFICATION: platform support not specified - Windows only, Linux only, or cross-platform?]
-- **FR-007**: Library MUST retain compatibility for [NEEDS CLARIFICATION: supported package versions not specified]
+- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
+- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
 ### Key Entities *(include if feature involves data)*
 
@@ -128,11 +112,10 @@
 
 ### Measurable Outcomes
 
-- **SC-001**: [Measurable metric, e.g., "Consumers can complete the primary library operation in under 50ms for the documented input size"]
-- **SC-002**: [Measurable metric, e.g., "Library handles 100 concurrent operations without data corruption or resource leaks"]
-- **SC-003**: [Consumer success metric, e.g., "A clean .NET 10 project can use the feature through documented APIs only"]
-- **SC-004**: [Operational metric, e.g., "Diagnostics identify all documented failure modes without console output"]
-- **SC-005**: [Library quality metric, e.g., "Package can be consumed from a clean .NET 10 project using only documented APIs"]
+- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
+- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
+- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
+- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
 
 ## Assumptions
 
@@ -142,7 +125,7 @@
   chosen when the feature description did not specify certain details.
 -->
 
-- [Assumption about target consumers, e.g., "Consumers are .NET 10 applications"]
-- [Assumption about scope boundaries, e.g., "C++ and Python bindings are out of scope for this feature unless explicitly specified"]
-- [Assumption about data/environment, e.g., "Target platforms provide the required shared-memory primitives"]
-- [Dependency on existing system/service, e.g., "Requires the existing package signing or publishing pipeline"]
+- [Assumption about target users, e.g., "Users have stable internet connectivity"]
+- [Assumption about scope boundaries, e.g., "Mobile support is out of scope for v1"]
+- [Assumption about data/environment, e.g., "Existing authentication system will be reused"]
+- [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]

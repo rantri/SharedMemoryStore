@@ -18,43 +18,29 @@
   the iteration process.
 -->
 
-**Language/Version**: C# / .NET 10 for the first implementation; identify any
-future C++ or Python portability considerations
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
 
-**Primary Dependencies**: [NuGet packages or NEEDS CLARIFICATION; justify every runtime dependency]
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
 
 **Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
-**Testing**: dotnet test with unit, contract, and integration coverage
+**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
 
-**Target Platform**: .NET 10 supported platforms; document platform-specific behavior
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
 
-**Project Type**: NuGet package / reusable library
+**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
 
-**Performance Goals**: [library-specific latency, throughput, allocation, or concurrency target or NEEDS CLARIFICATION]
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
 
-**Constraints**: [API compatibility, package size, allocation, platform, threading, or memory constraints or NEEDS CLARIFICATION]
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
 
-**Scale/Scope**: [expected library consumers, data size, process count, memory region count, or NEEDS CLARIFICATION]
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- Library/package first: Feature exposes reusable library APIs and does not
-  couple behavior to a specific production application.
-- NuGet deliverable: Plan identifies package metadata, public namespaces, XML
-  documentation, and packaging impact.
-- Stable contracts: Public API, shared-memory semantics, serialized formats,
-  errors, and semantic version impact are documented.
-- .NET 10 baseline with portability: Implementation targets C#/.NET 10 and
-  documents future C++/Python portability constraints.
-- Test coverage: Unit, contract, integration, and relevant concurrency/resource
-  tests are planned before implementation tasks.
-- Dependency discipline: New runtime dependencies, global state, background
-  work, or process-wide configuration are justified.
-- Diagnostics and resource ownership: Consumer-controlled diagnostics and public
-  API lifecycle/cleanup rules are specified.
+[Gates determined based on constitution file]
 
 ## Project Structure
 
@@ -79,22 +65,39 @@ specs/[###-feature]/
 -->
 
 ```text
+# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
 src/
-└── SharedMemoryStore/
-    ├── SharedMemoryStore.csproj
-    └── [library source organized by responsibility]
+├── models/
+├── services/
+├── cli/
+└── lib/
 
 tests/
-├── SharedMemoryStore.UnitTests/
-├── SharedMemoryStore.ContractTests/
-└── SharedMemoryStore.IntegrationTests/
+├── contract/
+├── integration/
+└── unit/
 
-docs/
-└── [consumer documentation and examples]
+# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
+backend/
+├── src/
+│   ├── models/
+│   ├── services/
+│   └── api/
+└── tests/
 
-bindings/
-├── cpp/       # Add only when C++ implementation/bindings are planned
-└── python/    # Add only when Python implementation/bindings are planned
+frontend/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+└── tests/
+
+# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
+api/
+└── [same as backend above]
+
+ios/ or android/
+└── [platform-specific structure: feature modules, UI flows, platform tests]
 ```
 
 **Structure Decision**: [Document the selected structure and reference the real
