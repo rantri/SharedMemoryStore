@@ -10,8 +10,8 @@ policy files, samples, and release-maintenance material.
   documentation map, and project policies.
 - [Getting started](getting-started.md): local package source setup, first
   runnable workflow, and expected status outcomes.
-- [Usage guide](usage.md): create/open, publish, acquire, release, remove,
-  reuse, diagnostics, and dispose.
+- [Usage guide](usage.md): create/open, publish, reserve, segmented publish,
+  acquire, release, remove, reuse, diagnostics, recovery, and dispose.
 - [Examples](examples.md): basic workflow, error handling, and frame-shaped
   values represented as opaque bytes.
 
@@ -21,7 +21,8 @@ policy files, samples, and release-maintenance material.
   [Packaging](packaging.md), [Support](../SUPPORT.md), [License](../LICENSE).
 - Package consumers: [Usage guide](usage.md), [Errors](errors.md),
   [Diagnostics](diagnostics.md), [Lifecycle](lifecycle.md),
-  [Basic sample](../samples/BasicUsage/README.md).
+  [Basic sample](../samples/BasicUsage/README.md),
+  [Zero-copy ingest sample](../samples/ZeroCopyIngest/README.md).
 - Production reviewers: [Public API contract](../specs/001-frame-memory-store/contracts/public-api.md),
   [Error taxonomy contract](../specs/001-frame-memory-store/contracts/error-taxonomy.md),
   [Shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md),
@@ -75,12 +76,16 @@ policy files, samples, and release-maintenance material.
 
 - [samples/BasicUsage/README.md](../samples/BasicUsage/README.md)
 - [samples/FrameValue/README.md](../samples/FrameValue/README.md)
+- [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
 
 ## Contract Sources
 
 - [specs/001-frame-memory-store/contracts/public-api.md](../specs/001-frame-memory-store/contracts/public-api.md)
 - [specs/001-frame-memory-store/contracts/error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
 - [specs/001-frame-memory-store/contracts/shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
+- [specs/003-zero-copy-ingest/contracts/reservation-api.md](../specs/003-zero-copy-ingest/contracts/reservation-api.md)
+- [specs/003-zero-copy-ingest/contracts/ingest-layout.md](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
+- [specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md](../specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
 
 Runtime behavior claims in public documentation must trace back to these
 contracts or to the current package project metadata in

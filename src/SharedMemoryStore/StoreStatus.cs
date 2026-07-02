@@ -41,7 +41,7 @@ public enum StoreStatus
     /// <summary>The operation completed successfully.</summary>
     Success = 0,
 
-    /// <summary>The supplied key already identifies a published or pending-removal value.</summary>
+    /// <summary>The supplied key already identifies a published, pending-removal, or pending-reservation value.</summary>
     DuplicateKey = 1,
 
     /// <summary>The supplied key does not identify a published value.</summary>
@@ -84,5 +84,17 @@ public enum StoreStatus
     AccessDenied = 14,
 
     /// <summary>An unexpected runtime failure occurred.</summary>
-    UnknownFailure = 15
+    UnknownFailure = 15,
+
+    /// <summary>The reservation token does not match a pending slot generation.</summary>
+    InvalidReservation = 16,
+
+    /// <summary>The reservation has not advanced exactly the announced payload length.</summary>
+    ReservationIncomplete = 17,
+
+    /// <summary>The reservation has already been committed, aborted, disposed, or recovered.</summary>
+    ReservationAlreadyCompleted = 18,
+
+    /// <summary>The reservation write progress would move outside the announced payload length.</summary>
+    ReservationWriteOutOfRange = 19
 }

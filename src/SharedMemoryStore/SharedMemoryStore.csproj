@@ -9,7 +9,7 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <PackageId>SharedMemoryStore</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>SharedMemoryStore contributors</Authors>
     <Company>SharedMemoryStore</Company>
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
@@ -17,7 +17,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Initial public package contract for publish, acquire, release, remove, diagnostics, and reuse.</PackageReleaseNotes>
+    <PackageReleaseNotes>Adds zero-copy reservation ingest, segmented publish, explicit reservation recovery, diagnostics, samples, benchmarks, and documentation.</PackageReleaseNotes>
     <AssemblyName>SharedMemoryStore</AssemblyName>
     <RootNamespace>SharedMemoryStore</RootNamespace>
   </PropertyGroup>

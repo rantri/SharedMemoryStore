@@ -43,6 +43,8 @@ Invoke-DotNet add (Join-Path $consumerDir "SharedMemoryStore.ConsumerSmoke.cspro
 $program = @'
 using Store = SharedMemoryStore.SharedMemoryStore;
 using SharedMemoryStore;
+using System.Buffers;
+using System.Buffers.Binary;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -70,12 +72,74 @@ using (store)
     if (!new byte[] { 2, 3, 4 }.AsSpan().SequenceEqual(lease.ValueSpan)) return 4;
     if (lease.Release() != StoreStatus.Success) return 5;
     if (store.TryRemove([1]) != StoreStatus.Success) return 6;
-    if (store.TryPublish([1], [5]) != StoreStatus.Success) return 7;
+    var frame = CreateLengthPrefixedFrame(new byte[] { 5, 6 });
+    if (await PublishLengthPrefixedFrameAsync(store, new byte[] { 1 }, frame, new byte[] { 8 }) != StoreStatus.Success) return 7;
+    if (ReadStoredFrame(store, new byte[] { 1 }, new byte[] { 5, 6 }) != StoreStatus.Success) return 8;
+    if (store.TryRemove([1]) != StoreStatus.Success) return 13;
+
+    var segmented = new ReadOnlySequence<byte>(new byte[] { 7, 8, 9 });
+    if (store.TryPublishSegments([1], segmented, [3], out var copied) != StoreStatus.Success) return 14;
+    if (copied != 3) return 15;
+    if (store.TryRemove([1]) != StoreStatus.Success) return 16;
+    if (store.TryRecoverReservations(new ReservationRecoveryOptions(false), out var report) != StoreStatus.Success) return 17;
+    if (report.ScannedReservationCount != 0) return 18;
 }
 
-if (store.TryPublish([1], [6]) != StoreStatus.StoreDisposed) return 8;
+if (store.TryPublish([1], [6]) != StoreStatus.StoreDisposed) return 19;
 
 return 0;
+
+static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(Store store, byte[] key, byte[] frame, byte[] descriptor)
+{
+    await using var stream = new MemoryStream(frame);
+    var header = new byte[4];
+    await stream.ReadExactlyAsync(header);
+    var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+    var status = store.TryReserve(key, payloadLength, descriptor, out var reservation);
+    if (status != StoreStatus.Success) return status;
+
+    while (reservation.RemainingBytes > 0)
+    {
+        var read = await stream.ReadAsync(reservation.GetMemory(reservation.RemainingBytes));
+        if (read == 0)
+        {
+            return reservation.Abort();
+        }
+
+        status = reservation.Advance(read);
+        if (status != StoreStatus.Success)
+        {
+            _ = reservation.Abort();
+            return status;
+        }
+    }
+
+    return reservation.Commit();
+}
+
+static StoreStatus ReadStoredFrame(Store store, byte[] key, byte[] expectedPayload)
+{
+    var status = store.TryAcquire(key, out var lease);
+    if (status != StoreStatus.Success) return status;
+    try
+    {
+        return expectedPayload.AsSpan().SequenceEqual(lease.ValueSpan)
+            ? StoreStatus.Success
+            : StoreStatus.UnknownFailure;
+    }
+    finally
+    {
+        _ = lease.Release();
+    }
+}
+
+static byte[] CreateLengthPrefixedFrame(byte[] payload)
+{
+    var frame = new byte[4 + payload.Length];
+    BinaryPrimitives.WriteInt32LittleEndian(frame.AsSpan(0, 4), payload.Length);
+    payload.CopyTo(frame.AsSpan(4));
+    return frame;
+}
 '@
 
 Set-Content -LiteralPath (Join-Path $consumerDir "Program.cs") -Value $program -Encoding UTF8

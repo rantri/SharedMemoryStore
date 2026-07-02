@@ -1,21 +1,21 @@
 # Packaging
 
 The runtime package is built from `src/SharedMemoryStore/SharedMemoryStore.csproj`
-and targets `net10.0`. Runtime dependencies are limited to the .NET BCL. This
-feature does not add runtime dependencies or change runtime behavior.
+and targets `net10.0`. Runtime dependencies are limited to the .NET BCL. The
+zero-copy ingest feature adds public APIs without adding runtime dependencies.
 
 Current package metadata:
 
 | Field | Value |
 |-------|-------|
 | `PackageId` | `SharedMemoryStore` |
-| `Version` | `0.1.0` |
+| `Version` | `0.2.0` |
 | `TargetFramework` | `net10.0` |
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;library` |
 | `PackageLicenseExpression` | `MIT` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `Initial public package contract for publish, acquire, release, remove, diagnostics, and reuse.` |
+| `PackageReleaseNotes` | `Adds zero-copy reservation ingest, segmented publish, explicit reservation recovery, diagnostics, samples, benchmarks, and documentation.` |
 | `RepositoryType` | `git` |
 
 The package project packs the root [readme](../README.md) at the package root so
@@ -38,7 +38,8 @@ scripts/validate-package-consumption.ps1
 
 The clean consumer validation packs the local project, creates a clean console
 application, installs `SharedMemoryStore` from the local package source, and
-exercises create/open, publish, acquire, release, remove, reuse, and dispose.
+exercises create/open, publish, reservation ingest, segmented publish, acquire,
+release, remove, reuse, recovery status paths, and dispose.
 This command is a maintainer validation path, not a requirement for ordinary
 package users.
 

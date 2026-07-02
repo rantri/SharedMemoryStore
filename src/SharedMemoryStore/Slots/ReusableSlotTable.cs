@@ -31,6 +31,7 @@ internal sealed unsafe class ReusableSlotTable
             slot.DescriptorLength = 0;
             slot.ValueLength = 0;
             slot.PublisherProcessId = 0;
+            slot.Reserved = 0;
             slot.KeyHash = 0;
             slot.DescriptorOffset = _layout.DescriptorStorageOffset + ((long)i * _layout.DescriptorStride);
             slot.PayloadOffset = _layout.PayloadStorageOffset + ((long)i * _layout.PayloadStride);
@@ -50,6 +51,11 @@ internal sealed unsafe class ReusableSlotTable
                 Volatile.Write(ref slot.State, LayoutConstants.SlotPublishing);
                 slot.UsageCount = 0;
                 slot.PublisherProcessId = Environment.ProcessId;
+                slot.Reserved = 0;
+                slot.KeyHash = 0;
+                slot.KeyLength = 0;
+                slot.DescriptorLength = 0;
+                slot.ValueLength = 0;
                 slot.CommittedSequence = 0;
                 slotIndex = candidate;
                 return true;
@@ -68,7 +74,82 @@ internal sealed unsafe class ReusableSlotTable
         slot.ValueLength = 0;
         slot.DescriptorLength = 0;
         slot.UsageCount = 0;
+        slot.PublisherProcessId = 0;
+        slot.Reserved = 0;
+        slot.CommittedSequence = 0;
         Volatile.Write(ref slot.State, LayoutConstants.SlotFree);
+    }
+
+    public void PrepareReservation(int slotIndex, ulong keyHash, int keyLength, int descriptorLength, int valueLength)
+    {
+        ref var slot = ref GetSlot(slotIndex);
+        slot.KeyHash = keyHash;
+        slot.KeyLength = keyLength;
+        slot.DescriptorLength = descriptorLength;
+        slot.ValueLength = valueLength;
+        slot.PublisherProcessId = Environment.ProcessId;
+        slot.Reserved = 0;
+        slot.CommittedSequence = 0;
+    }
+
+    public StoreStatus AdvanceReservation(int slotIndex, int generation, int byteCount)
+    {
+        if ((uint)slotIndex >= (uint)_layout.SlotCount)
+        {
+            return StoreStatus.InvalidReservation;
+        }
+
+        ref var slot = ref GetSlot(slotIndex);
+        if (slot.Generation != generation)
+        {
+            return StoreStatus.InvalidReservation;
+        }
+
+        if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublishing)
+        {
+            return StoreStatus.ReservationAlreadyCompleted;
+        }
+
+        var remaining = slot.ValueLength - slot.Reserved;
+        if (byteCount < 0 || byteCount > remaining)
+        {
+            return StoreStatus.ReservationWriteOutOfRange;
+        }
+
+        slot.Reserved += byteCount;
+        return StoreStatus.Success;
+    }
+
+    public StoreStatus ValidatePendingReservation(int slotIndex, int generation, out SharedSlotMetadata slot)
+    {
+        slot = default;
+        if ((uint)slotIndex >= (uint)_layout.SlotCount)
+        {
+            return StoreStatus.InvalidReservation;
+        }
+
+        ref var current = ref GetSlot(slotIndex);
+        slot = current;
+        if (current.Generation != generation)
+        {
+            return StoreStatus.InvalidReservation;
+        }
+
+        return Volatile.Read(ref current.State) == LayoutConstants.SlotPublishing
+            ? StoreStatus.Success
+            : StoreStatus.ReservationAlreadyCompleted;
+    }
+
+    public bool IsPendingReservation(int slotIndex, int generation)
+    {
+        if ((uint)slotIndex >= (uint)_layout.SlotCount)
+        {
+            return false;
+        }
+
+        ref var slot = ref GetSlot(slotIndex);
+        return Volatile.Read(ref slot.State) == LayoutConstants.SlotPublishing
+            && slot.Generation == generation;
     }
 
     public void Commit(int slotIndex, ulong keyHash, int keyLength, int descriptorLength, int valueLength, long sequence)
@@ -79,6 +160,7 @@ internal sealed unsafe class ReusableSlotTable
         slot.DescriptorLength = descriptorLength;
         slot.ValueLength = valueLength;
         slot.PublisherProcessId = Environment.ProcessId;
+        slot.Reserved = 0;
         slot.CommittedSequence = sequence;
         Volatile.Write(ref slot.State, LayoutConstants.SlotPublished);
     }
@@ -93,6 +175,8 @@ internal sealed unsafe class ReusableSlotTable
         slot.DescriptorLength = 0;
         slot.PublisherProcessId = 0;
         slot.UsageCount = 0;
+        slot.Reserved = 0;
+        slot.CommittedSequence = 0;
         checked
         {
             slot.Generation++;
@@ -120,11 +204,12 @@ internal sealed unsafe class ReusableSlotTable
             && slot.Generation == generation;
     }
 
-    public (int Free, int Published, int PendingRemoval) CountStates()
+    public (int Free, int Published, int PendingRemoval, int ActiveReservations) CountStates()
     {
         var free = 0;
         var published = 0;
         var pending = 0;
+        var activeReservations = 0;
 
         for (var i = 0; i < _layout.SlotCount; i++)
         {
@@ -140,9 +225,12 @@ internal sealed unsafe class ReusableSlotTable
                 case LayoutConstants.SlotRemoveRequested:
                     pending++;
                     break;
+                case LayoutConstants.SlotPublishing:
+                    activeReservations++;
+                    break;
             }
         }
 
-        return (free, published, pending);
+        return (free, published, pending, activeReservations);
     }
 }

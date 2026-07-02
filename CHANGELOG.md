@@ -3,6 +3,26 @@
 All notable package and documentation changes are recorded in reverse
 chronological order.
 
+## 0.2.0 - 2026-07-02
+
+### Added
+
+- Zero-copy reservation ingest with `TryReserve`, `ValueReservation`,
+  exact-byte `Advance`, atomic `Commit`, `Abort`, and disposal cleanup.
+- Segmented `ReadOnlySequence<byte>` publication through `TryPublishSegments`
+  without a temporary full-payload array.
+- Explicit reservation recovery, appended reservation statuses, layout minor
+  version `1`, reservation diagnostics, contract tests, integration tests,
+  sample, and benchmarks.
+
+### Compatibility
+
+- Package remains `SharedMemoryStore` targeting `net10.0`.
+- Runtime dependencies remain .NET BCL only.
+- Existing publish, acquire, lease, remove, diagnostics, and package workflows
+  remain compatible.
+- Shared-memory layout major version remains `1`; minor version is now `1`.
+
 ## 0.1.0 - 2026-06-27
 
 ### Added

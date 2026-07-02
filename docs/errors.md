@@ -25,7 +25,8 @@ Expected store pressure and lookup failures should be handled by checking
 ## Operation Statuses
 
 - `Success`: the operation completed.
-- `DuplicateKey`: a key already maps to a published or pending-removal value.
+- `DuplicateKey`: a key already maps to a published, pending-removal, or
+  pending-reservation value.
 - `NotFound`: the key is absent or no longer published.
 - `KeyTooLarge`: the key exceeds `MaxKeyBytes`.
 - `ValueTooLarge`: the payload exceeds `MaxValueBytes`.
@@ -40,6 +41,14 @@ Expected store pressure and lookup failures should be handled by checking
 - `CorruptStore`: the store detected unsafe shared-memory state.
 - `AccessDenied`: the process lacks required access.
 - `UnknownFailure`: an unexpected runtime failure occurred.
+- `InvalidReservation`: the reservation token does not match a pending slot
+  generation.
+- `ReservationIncomplete`: commit was attempted before the exact announced
+  payload length was advanced.
+- `ReservationAlreadyCompleted`: the reservation was already committed,
+  aborted, disposed, or recovered.
+- `ReservationWriteOutOfRange`: reservation progress would move outside the
+  announced payload length.
 
 ## Common Situations
 
@@ -109,6 +118,16 @@ Cleanup failure:
 
 If a store handle is already disposed, operations return `StoreDisposed`.
 Release leases before disposal when release status matters.
+
+Reservation lifecycle failure:
+
+```csharp
+var reserve = store.TryReserve(key, 4, default, out var reservation);
+var commit = reservation.Commit();
+```
+
+Expected status for the commit before any `Advance()` call:
+`ReservationIncomplete`. Abort or finish the reservation before reusing the key.
 
 Version mismatch:
 

@@ -39,10 +39,18 @@ public sealed class PublicApiContractTests
             "StoreDisposed",
             "CorruptStore",
             "AccessDenied",
-            "UnknownFailure"
+            "UnknownFailure",
+            "InvalidReservation",
+            "ReservationIncomplete",
+            "ReservationAlreadyCompleted",
+            "ReservationWriteOutOfRange"
         };
 
         Assert.Equal(names, Enum.GetNames<StoreStatus>());
+        Assert.Equal(16, (int)StoreStatus.InvalidReservation);
+        Assert.Equal(17, (int)StoreStatus.ReservationIncomplete);
+        Assert.Equal(18, (int)StoreStatus.ReservationAlreadyCompleted);
+        Assert.Equal(19, (int)StoreStatus.ReservationWriteOutOfRange);
     }
 
     [Fact]
@@ -53,6 +61,9 @@ public sealed class PublicApiContractTests
         Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryAcquire), BindingFlags.Public | BindingFlags.Instance));
         Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryRemove), BindingFlags.Public | BindingFlags.Instance));
         Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryRecoverLeases), BindingFlags.Public | BindingFlags.Instance));
+        Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryReserve), BindingFlags.Public | BindingFlags.Instance));
+        Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryPublishSegments), BindingFlags.Public | BindingFlags.Instance));
+        Assert.NotNull(typeof(Store).GetMethod(nameof(Store.TryRecoverReservations), BindingFlags.Public | BindingFlags.Instance));
         Assert.NotNull(typeof(Store).GetMethod(nameof(Store.GetDiagnostics), BindingFlags.Public | BindingFlags.Instance));
         Assert.Contains(typeof(IDisposable), typeof(Store).GetInterfaces());
     }

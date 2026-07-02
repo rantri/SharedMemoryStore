@@ -8,7 +8,7 @@ readers can exchange data without copying payloads through a broker process.
 Package identity:
 
 - PackageId: `SharedMemoryStore`
-- Version: `0.1.0`
+- Version: `0.2.0`
 - Target framework: `net10.0`
 - License: MIT, see the [license file](LICENSE)
 - Runtime dependencies: .NET BCL only
@@ -28,6 +28,12 @@ The initial public contract supports:
 - acquire a `ValueLease`, read descriptor and value spans, and release or
   dispose the lease exactly once.
 - remove values and reuse slots after active readers release their leases.
+- reserve store-owned payload memory for direct length-delimited frame ingest,
+  advance exact write progress, and commit atomically.
+- publish segmented buffered payloads through `ReadOnlySequence<byte>` without a
+  temporary full-payload array.
+- abort or explicitly recover incomplete reservations without exposing partial
+  bytes to readers.
 - run owner-controlled stale lease recovery when enabled.
 - inspect caller-formatted diagnostics snapshots without library console output.
 
@@ -79,6 +85,11 @@ using (store)
     var firstByte = lease.ValueSpan[0];
     status = lease.Release();
     status = store.TryRemove([1, 2, 3]);
+
+    status = store.TryReserve([4], 3, [1], out var reservation);
+    new byte[] { 7, 8, 9 }.CopyTo(reservation.GetSpan());
+    status = reservation.Advance(3);
+    status = reservation.Commit();
 }
 ```
 
@@ -92,8 +103,8 @@ platforms, stale leases, cleanup failures, and version mismatches.
 - [Documentation index](docs/index.md): complete table of contents by audience.
 - [Getting started](docs/getting-started.md): install, local package source,
   minimal workflow, and expected statuses.
-- [Usage guide](docs/usage.md): create/open, publish, acquire, release, remove,
-  reuse, diagnostics, and dispose.
+- [Usage guide](docs/usage.md): create/open, publish, reserve, segmented publish,
+  acquire, release, remove, reuse, diagnostics, recovery, and dispose.
 - [Errors and statuses](docs/errors.md): deterministic status outcomes and
   troubleshooting.
 - [Diagnostics](docs/diagnostics.md): snapshot fields and consumer-owned
@@ -115,11 +126,15 @@ Detailed behavior sources:
 - [Public API contract](specs/001-frame-memory-store/contracts/public-api.md)
 - [Error taxonomy contract](specs/001-frame-memory-store/contracts/error-taxonomy.md)
 - [Shared-memory layout contract](specs/001-frame-memory-store/contracts/shared-memory-layout.md)
+- [Reservation API contract](specs/003-zero-copy-ingest/contracts/reservation-api.md)
+- [Ingest layout contract](specs/003-zero-copy-ingest/contracts/ingest-layout.md)
+- [Reservation diagnostics and errors](specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
 
 Runnable samples:
 
 - [Basic usage sample](samples/BasicUsage/README.md)
 - [Frame value sample](samples/FrameValue/README.md)
+- [Zero-copy ingest sample](samples/ZeroCopyIngest/README.md)
 
 ## Project Policies
 
@@ -152,4 +167,4 @@ dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifac
 
 Documentation changes must keep package metadata, README content, release notes,
 support policy, security policy, and contract links aligned with the current
-`0.1.0` package behavior.
+`0.2.0` package behavior.

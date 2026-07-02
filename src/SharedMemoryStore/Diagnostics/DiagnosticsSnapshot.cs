@@ -12,6 +12,12 @@ public readonly struct DiagnosticsSnapshot
         int publishedSlotCount,
         int pendingRemovalCount,
         int activeLeaseCount,
+        int activeReservationCount,
+        long abortedReservationCount,
+        long recoveredReservationCount,
+        long activeReservationRecoveryCount,
+        long unsupportedReservationRecoveryCount,
+        long failedReservationRecoveryCount,
         long capacityPressureCount,
         StoreStatus lastFailureStatus,
         ReadOnlySpan<long> failureCounts)
@@ -22,6 +28,12 @@ public readonly struct DiagnosticsSnapshot
         PublishedSlotCount = publishedSlotCount;
         PendingRemovalCount = pendingRemovalCount;
         ActiveLeaseCount = activeLeaseCount;
+        ActiveReservationCount = activeReservationCount;
+        AbortedReservationCount = abortedReservationCount;
+        RecoveredReservationCount = recoveredReservationCount;
+        ActiveReservationRecoveryCount = activeReservationRecoveryCount;
+        UnsupportedReservationRecoveryCount = unsupportedReservationRecoveryCount;
+        FailedReservationRecoveryCount = failedReservationRecoveryCount;
         CapacityPressureCount = capacityPressureCount;
         LastFailureStatus = lastFailureStatus;
         DuplicateKeyFailures = failureCounts[(int)StoreStatus.DuplicateKey];
@@ -39,6 +51,11 @@ public readonly struct DiagnosticsSnapshot
         CorruptStoreFailures = failureCounts[(int)StoreStatus.CorruptStore];
         AccessDeniedFailures = failureCounts[(int)StoreStatus.AccessDenied];
         UnknownFailureFailures = failureCounts[(int)StoreStatus.UnknownFailure];
+        InvalidReservationFailures = failureCounts[(int)StoreStatus.InvalidReservation];
+        ReservationIncompleteFailures = failureCounts[(int)StoreStatus.ReservationIncomplete];
+        ReservationAlreadyCompletedFailures = failureCounts[(int)StoreStatus.ReservationAlreadyCompleted];
+        ReservationWriteOutOfRangeFailures = failureCounts[(int)StoreStatus.ReservationWriteOutOfRange];
+        FailedCommitCount = ReservationIncompleteFailures;
     }
 
     /// <summary>Gets the configured mapped-region length.</summary>
@@ -58,6 +75,27 @@ public readonly struct DiagnosticsSnapshot
 
     /// <summary>Gets the number of active lease records.</summary>
     public int ActiveLeaseCount { get; }
+
+    /// <summary>Gets the number of slots currently reserved but not committed.</summary>
+    public int ActiveReservationCount { get; }
+
+    /// <summary>Gets the number of reservations aborted through this store handle.</summary>
+    public long AbortedReservationCount { get; }
+
+    /// <summary>Gets the number of failed reservation commit attempts through this store handle.</summary>
+    public long FailedCommitCount { get; }
+
+    /// <summary>Gets the number of stale reservations recovered through this store handle.</summary>
+    public long RecoveredReservationCount { get; }
+
+    /// <summary>Gets the number of active reservations observed during explicit recovery scans.</summary>
+    public long ActiveReservationRecoveryCount { get; }
+
+    /// <summary>Gets the number of reservations recovery could not evaluate safely on this platform.</summary>
+    public long UnsupportedReservationRecoveryCount { get; }
+
+    /// <summary>Gets the number of reservations recovery could not reclaim because shared state was inconsistent.</summary>
+    public long FailedReservationRecoveryCount { get; }
 
     /// <summary>Gets the number of capacity-pressure failures observed by this store handle.</summary>
     public long CapacityPressureCount { get; }
@@ -110,6 +148,18 @@ public readonly struct DiagnosticsSnapshot
     /// <summary>Gets unknown-failure count.</summary>
     public long UnknownFailureFailures { get; }
 
+    /// <summary>Gets invalid-reservation failure count.</summary>
+    public long InvalidReservationFailures { get; }
+
+    /// <summary>Gets incomplete-reservation failure count.</summary>
+    public long ReservationIncompleteFailures { get; }
+
+    /// <summary>Gets already-completed-reservation failure count.</summary>
+    public long ReservationAlreadyCompletedFailures { get; }
+
+    /// <summary>Gets out-of-range reservation write failure count.</summary>
+    public long ReservationWriteOutOfRangeFailures { get; }
+
     /// <summary>
     /// Returns the failure count for a deterministic operation status.
     /// </summary>
@@ -132,6 +182,10 @@ public readonly struct DiagnosticsSnapshot
             StoreStatus.CorruptStore => CorruptStoreFailures,
             StoreStatus.AccessDenied => AccessDeniedFailures,
             StoreStatus.UnknownFailure => UnknownFailureFailures,
+            StoreStatus.InvalidReservation => InvalidReservationFailures,
+            StoreStatus.ReservationIncomplete => ReservationIncompleteFailures,
+            StoreStatus.ReservationAlreadyCompleted => ReservationAlreadyCompletedFailures,
+            StoreStatus.ReservationWriteOutOfRange => ReservationWriteOutOfRangeFailures,
             _ => 0
         };
     }

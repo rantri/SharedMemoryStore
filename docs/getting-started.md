@@ -9,7 +9,7 @@ create/open, publish, acquire, release, remove, and dispose workflow.
 - PowerShell for repository validation scripts.
 - Windows x64 for the current named memory-mapped-file validation target.
 
-The package is prerelease `0.1.0`. If it has not been published to a package
+The package is prerelease `0.2.0`. If it has not been published to a package
 feed, build a local package source from the repository.
 
 ## Create a Local Package Source
@@ -95,3 +95,5 @@ Success
   stale recovery, and disposal.
 - Use [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) for a
   runnable repository sample.
+- Use [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
+  for direct reservation and segmented publish workflows.

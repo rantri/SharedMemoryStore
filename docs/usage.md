@@ -60,6 +60,49 @@ Expected success returns `StoreStatus.Success`. Common non-success statuses are
 `StoreFull`, `UnsupportedPlatform`, `StoreDisposed`, `CorruptStore`, and
 `UnknownFailure`.
 
+## Direct Reservation Ingest
+
+Use `TryReserve` when the key, descriptor, and payload length are known before
+payload bytes arrive. The returned `ValueReservation` exposes writable
+store-owned memory. Readers cannot acquire the key until `Commit()` succeeds.
+
+```csharp
+var reserve = store.TryReserve(key, payloadLength: 4, descriptor, out var reservation);
+if (reserve == StoreStatus.Success)
+{
+    new byte[] { 4, 5, 6, 7 }.CopyTo(reservation.GetSpan());
+    var advance = reservation.Advance(4);
+    var commit = advance == StoreStatus.Success
+        ? reservation.Commit()
+        : reservation.Abort();
+}
+```
+
+`Commit()` succeeds only after `Advance()` has recorded exactly the announced
+payload length. Commit before completion returns `ReservationIncomplete`.
+Advancing past the remaining payload length returns
+`ReservationWriteOutOfRange`. `Abort()` and active-reservation disposal remove
+the pending key without exposing partial bytes.
+
+Writable spans and memory are valid only while the reservation is pending and
+the store handle remains open. Descriptor bytes are fixed at reservation time.
+
+## Segmented Publish
+
+Use `TryPublishSegments` when payload bytes already exist in one or more
+segments and flattening them into a temporary full-payload array would be
+wasteful.
+
+```csharp
+ReadOnlySequence<byte> payload = GetPayloadSequence();
+var publish = store.TryPublishSegments(key, payload, descriptor, out var copiedBytes);
+```
+
+The helper reserves one contiguous store slot, copies each segment in order,
+advances reservation progress, and commits only after the copied byte count
+matches the sequence length. On copy, advance, or commit failure, it aborts the
+active reservation before returning.
+
 ## Acquire and Read
 
 Acquire returns a `ValueLease` that protects the slot generation while the
@@ -145,6 +188,31 @@ var recovery = store.TryRecoverLeases(
 
 Use recovery for controlled owner workflows, not as a replacement for normal
 lease disposal.
+
+## Stale Reservation Recovery
+
+Incomplete reservations are recovered explicitly by the owner. This keeps
+cleanup policy visible and avoids hidden background work.
+
+```csharp
+var recovery = store.TryRecoverReservations(
+    new ReservationRecoveryOptions(RecoverCurrentProcessReservations: false),
+    out var report);
+```
+
+Recovery removes pending key index entries before reclaiming slots. Current
+process recovery is intended for tests and controlled shutdown paths.
+Diagnostics expose recovered, still-active, unsupported, and failed recovery
+counts so callers can route cleanup outcomes to their own logs or metrics.
+
+## Trusted Same-Host Boundary
+
+Direct writable reservations are intended for trusted services on the same host.
+Use operating-system permissions and deployment controls to prevent untrusted
+processes from opening the mapping. The package does not protect against a
+malicious process that is already inside that trust boundary and can mutate the
+shared memory. See [Portability](portability.md) for the language-neutral
+boundary and future binding guidance.
 
 ## Dispose
 

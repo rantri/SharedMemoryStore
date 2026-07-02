@@ -40,7 +40,8 @@ $requiredGuideFiles = @(
 
 $requiredSampleFiles = @(
     "samples/BasicUsage/README.md",
-    "samples/FrameValue/README.md"
+    "samples/FrameValue/README.md",
+    "samples/ZeroCopyIngest/README.md"
 )
 
 $contractFiles = @(
@@ -50,7 +51,7 @@ $contractFiles = @(
 )
 
 $allRequiredFiles = $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleFiles
-$publicDocumentationFiles = $allRequiredFiles + @("samples/BasicUsage/Program.cs", "samples/FrameValue/Program.cs")
+$publicDocumentationFiles = $allRequiredFiles + @("samples/BasicUsage/Program.cs", "samples/FrameValue/Program.cs", "samples/ZeroCopyIngest/Program.cs")
 
 function Add-Failure {
     param([string]$Message)
@@ -88,7 +89,7 @@ function Assert-Contains {
     }
 
     $content = Read-Text $RelativePath
-    if (-not $content.Contains($Needle, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($content.IndexOf($Needle, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
         Add-Failure "$RelativePath does not contain '$Needle' ($Reason)"
     }
 }
@@ -184,7 +185,7 @@ function Assert-PackageMetadata {
     $expected = @{
         TargetFramework = "net10.0"
         PackageId = "SharedMemoryStore"
-        Version = "0.1.0"
+        Version = "0.2.0"
         Description = "A bounded named shared-memory key-value store for opaque binary values."
         PackageLicenseExpression = "MIT"
         PackageReadmeFile = "README.md"
@@ -215,11 +216,11 @@ function Assert-PackageMetadata {
     }
 
     Assert-Contains "README.md" "SharedMemoryStore" "package README identity"
-    Assert-Contains "README.md" "0.1.0" "package version alignment"
+    Assert-Contains "README.md" "0.2.0" "package version alignment"
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"
-    Assert-Contains "CHANGELOG.md" "0.1.0" "release notes alignment"
+    Assert-Contains "CHANGELOG.md" "0.2.0" "release notes alignment"
     Assert-Contains "docs/packaging.md" "PackageId" "package documentation notes"
     Assert-Contains "docs/packaging.md" "PackageReleaseNotes" "package release notes documentation"
 }

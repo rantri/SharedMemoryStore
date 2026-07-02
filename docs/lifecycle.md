@@ -13,7 +13,8 @@ and the shared layout state machine is defined by the
 - Store owner: creates or opens the mapping, chooses capacity limits, enables or
   disables explicit lease recovery, and disposes the handle.
 - Producer: publishes immutable payload bytes and optional descriptor bytes
-  under an opaque byte key.
+  under an opaque byte key, either through `TryPublish` or a pending
+  `ValueReservation`.
 - Reader: acquires a `ValueLease`, reads descriptor and value spans, and
   releases or disposes the lease exactly once.
 - Maintainer: updates contracts and release notes when lifecycle behavior
@@ -50,6 +51,23 @@ Use recovery for controlled owner policy, process-liveness cleanup, or tests
 that intentionally recover current-process leases. Normal consumers should still
 release or dispose leases directly.
 
+## Reservation Ownership
+
+A reservation owns one slot generation while its state is `SlotPublishing`.
+During that period the key is present in the index for duplicate detection, but
+`TryAcquire` returns `NotFound`. The producer may write only into the remaining
+payload region returned by `GetSpan()` or `GetMemory()` and must call
+`Advance()` with the exact number of bytes written.
+
+`Commit()` publishes the value only when progress equals the announced payload
+length. `Abort()` removes the pending key before reclaiming the slot. Disposing
+an active reservation aborts it; disposing or aborting after completion is a
+deterministic no-op or status-returning failure.
+
+`TryRecoverReservations` is owner controlled. It scans pending reservations,
+evaluates producer liveness where supported, removes the pending index entry,
+and reclaims the slot without exposing payload bytes.
+
 ## Abnormal Termination
 
 If a process terminates while holding a lease, the shared lease record can remain
@@ -60,6 +78,10 @@ not run background reclamation threads.
 If a process terminates while publishing or reclaiming, later operations validate
 shared state before exposing payload spans. Impossible state transitions move
 the store toward safe error outcomes such as `CorruptStore`.
+
+If a process terminates while holding a reservation, the pending key remains
+invisible to readers and occupies capacity until an owner explicitly aborts or
+recovers it.
 
 Frame-shaped data is represented as ordinary descriptor and value bytes. The
 core store does not parse frame headers, metadata, payload sections, or any
@@ -74,6 +96,7 @@ corruption-safe mode.
 
 - Dispose every store handle.
 - Release or dispose every successful `ValueLease`.
+- Commit, abort, dispose, or recover every pending `ValueReservation`.
 - Avoid retaining span references after release or store disposal.
 - Record diagnostics before disposing when troubleshooting a failure.
 - Use `TryRecoverLeases` only when the owner policy permits recovery.

@@ -1,7 +1,7 @@
 # Release Preparation
 
 This guide is the maintainer checklist for preparing a package release. It is
-written for the current prerelease `0.1.0` package and should be updated when
+written for the current prerelease `0.2.0` package and should be updated when
 package metadata, public API behavior, compatibility scope, support policy, or
 security reporting changes.
 
@@ -74,12 +74,15 @@ scripts/validate-package-consumption.ps1
 dotnet test -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
+dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
+dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *DirectIngest*
+dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 
 Expected result: documentation inventory, placeholder checks, internal links,
-package metadata alignment, samples, clean package consumption, tests, and pack
-all pass.
+package metadata alignment, samples, clean package consumption, tests, ingest
+benchmarks, and pack all pass.
 
 ## Documentation-Only Changes
 
@@ -88,3 +91,23 @@ when they clarify existing behavior without changing a public compatibility
 promise. A documentation change is not documentation-only if it redefines public
 API behavior, shared-memory layout behavior, error outcomes, lifecycle
 ownership, security process, or support guarantees.
+
+## 0.2.0 Readiness Notes
+
+Validation run on 2026-07-02:
+
+- `scripts/validate-docs.ps1`: passed.
+- `dotnet build SharedMemoryStore.slnx -c Release`: passed.
+- `dotnet test SharedMemoryStore.slnx -c Release --no-build`: passed, 62
+  tests.
+- `dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release`: passed.
+- `scripts/validate-package-consumption.ps1`: passed and packed
+  `SharedMemoryStore.0.2.0.nupkg`.
+- `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation direct-allocation`:
+  passed. Result: 100,000 frames, 0 total allocated bytes, 0.000 allocated
+  bytes/frame, final status `Success`.
+- `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation sustained-throughput`:
+  passed. Environment: .NET 10.0.5, Windows NT 10.0.26200.0, 32 logical CPUs,
+  1,300,000-byte payloads. Simple publish measured 22,782.13 publishes/s
+  across 1,366,928 frames; direct ingest measured 30,620.36 frames/s across
+  1,837,222 frames. Direct ingest was 1.344x simple publish, a 34.4% increase.

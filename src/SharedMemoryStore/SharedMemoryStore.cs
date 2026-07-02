@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Threading;
 using SharedMemoryStore.Diagnostics;
+using SharedMemoryStore.Ingest;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.Layout;
 using SharedMemoryStore.Leasing;
@@ -25,6 +27,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     private readonly LeaseRegistry _leases;
     private readonly StoreDiagnostics _diagnostics;
     private readonly bool _leaseRecoveryEnabled;
+    private readonly ReservationMemoryManager _reservationMemory;
     private bool _disposed;
 
     private SharedMemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
@@ -40,6 +43,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         _reclaimer = new SlotReclaimer(_slots, _index);
         _leases = new LeaseRegistry(region, layout);
         _diagnostics = new StoreDiagnostics();
+        _reservationMemory = new ReservationMemoryManager(region, layout);
     }
 
     /// <summary>
@@ -162,6 +166,103 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         {
             ExitStoreLock();
         }
+    }
+
+    /// <summary>
+    /// Reserves one key, fixed descriptor, and announced payload length for direct store-owned payload writes.
+    /// </summary>
+    /// <remarks>
+    /// The reservation remains invisible to readers until <see cref="ValueReservation.Commit"/> succeeds.
+    /// Callers must advance exactly <paramref name="payloadLength"/> bytes before commit. Disposing an active
+    /// reservation aborts it and descriptor bytes are immutable after reservation creation.
+    /// </remarks>
+    public StoreStatus TryReserve(
+        ReadOnlySpan<byte> key,
+        int payloadLength,
+        ReadOnlySpan<byte> descriptor,
+        out ValueReservation reservation)
+    {
+        reservation = default;
+
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var validation = ValidateReservationInput(key, payloadLength, descriptor);
+            if (validation != StoreStatus.Success)
+            {
+                return Record(validation);
+            }
+
+            var hash = StoreKey.Hash(key);
+            if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
+            {
+                ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
+                if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
+                {
+                    return Record(StoreStatus.DuplicateKey);
+                }
+            }
+
+            if (!_slots.TryReserve(out var slotIndex))
+            {
+                return Record(StoreStatus.StoreFull);
+            }
+
+            ref var slot = ref _slots.GetSlot(slotIndex);
+            try
+            {
+                _slots.PrepareReservation(slotIndex, hash, key.Length, descriptor.Length, payloadLength);
+                _writer.WriteDescriptor(ref slot, descriptor);
+                if (!_index.TryInsert(key, hash, slotIndex, slot.Generation))
+                {
+                    _slots.Abort(slotIndex);
+                    return Record(StoreStatus.DuplicateKey);
+                }
+
+                reservation = new ValueReservation(this, slotIndex, slot.Generation, payloadLength);
+                return StoreStatus.Success;
+            }
+            catch (Exception)
+            {
+                _index.TryRemoveSlot(slotIndex, slot.Generation);
+                _slots.Abort(slotIndex);
+                return Record(StoreStatus.UnknownFailure);
+            }
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
+    /// Publishes a segmented payload as one contiguous store value without allocating a temporary full-payload array.
+    /// </summary>
+    public StoreStatus TryPublishSegments(
+        ReadOnlySpan<byte> key,
+        in ReadOnlySequence<byte> payload,
+        ReadOnlySpan<byte> descriptor,
+        out long copiedBytes)
+    {
+        if (_disposed)
+        {
+            copiedBytes = 0;
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        var status = SegmentedPublisher.Publish(this, key, payload, descriptor, out copiedBytes);
+        return status == StoreStatus.Success ? status : Record(status);
     }
 
     /// <summary>
@@ -296,13 +397,53 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     }
 
     /// <summary>
+    /// Explicitly recovers stale pending reservations according to the supplied owner policy.
+    /// </summary>
+    public StoreStatus TryRecoverReservations(in ReservationRecoveryOptions options, out ReservationRecoveryReport report)
+    {
+        if (_disposed)
+        {
+            report = default;
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                report = default;
+                return Record(ready);
+            }
+
+            var status = ReservationRecovery.Recover(_layout, _slots, _index, options, out report);
+            if (status == StoreStatus.Success)
+            {
+                _diagnostics.RecordReservationRecoveryResults(
+                    report.RecoveredReservationCount,
+                    report.ActiveReservationCount,
+                    report.UnsupportedReservationCount,
+                    report.FailedRecoveryCount);
+                return status;
+            }
+
+            return Record(status);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    /// <summary>
     /// Returns a caller-formatted diagnostic snapshot without writing to console or mutating store state.
     /// </summary>
     public DiagnosticsSnapshot GetDiagnostics()
     {
         if (_disposed)
         {
-            return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0);
+            return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0, 0);
         }
 
         EnterStoreLock();
@@ -310,7 +451,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         {
             if (_disposed)
             {
-                return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0);
+                return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0, 0);
             }
 
             var states = _slots.CountStates();
@@ -320,6 +461,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
                 states.Free,
                 states.Published,
                 states.PendingRemoval,
+                states.ActiveReservations,
                 _leases.ActiveCount());
         }
         finally
@@ -424,6 +566,205 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal ref SharedSlotMetadata GetSlotForTesting(int slotIndex) => ref _slots.GetSlot(slotIndex);
 
+    internal bool IsReservationPending(int slotIndex, int generation)
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            return !_disposed && _slots.IsPendingReservation(slotIndex, generation);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal int GetReservationBytesWritten(int slotIndex, int generation)
+    {
+        if (_disposed)
+        {
+            return 0;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            return !_disposed && _slots.ValidatePendingReservation(slotIndex, generation, out var slot) == StoreStatus.Success
+                ? slot.Reserved
+                : 0;
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal Span<byte> GetReservationSpan(int slotIndex, int generation, int sizeHint)
+    {
+        if (_disposed)
+        {
+            return Span<byte>.Empty;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            if (_disposed || _slots.ValidatePendingReservation(slotIndex, generation, out var slot) != StoreStatus.Success)
+            {
+                return Span<byte>.Empty;
+            }
+
+            var remaining = slot.ValueLength - slot.Reserved;
+            if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+            {
+                return Span<byte>.Empty;
+            }
+
+            return _reservationMemory.GetSpan(slotIndex, slot.Reserved, remaining);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal Memory<byte> GetReservationMemory(int slotIndex, int generation, int sizeHint)
+    {
+        if (_disposed)
+        {
+            return Memory<byte>.Empty;
+        }
+
+        EnterStoreLock();
+        try
+        {
+            if (_disposed || _slots.ValidatePendingReservation(slotIndex, generation, out var slot) != StoreStatus.Success)
+            {
+                return Memory<byte>.Empty;
+            }
+
+            var remaining = slot.ValueLength - slot.Reserved;
+            if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+            {
+                return Memory<byte>.Empty;
+            }
+
+            return _reservationMemory.GetMemory(slotIndex, slot.Reserved, remaining);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal StoreStatus AdvanceReservation(int slotIndex, int generation, int byteCount)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var status = _slots.AdvanceReservation(slotIndex, generation, byteCount);
+            return status == StoreStatus.Success ? status : Record(status);
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal StoreStatus CommitReservation(int slotIndex, int generation)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var status = _slots.ValidatePendingReservation(slotIndex, generation, out var slot);
+            if (status != StoreStatus.Success)
+            {
+                return Record(status);
+            }
+
+            if (slot.Reserved != slot.ValueLength)
+            {
+                return Record(StoreStatus.ReservationIncomplete);
+            }
+
+            var sequence = Interlocked.Increment(ref Header.Sequence);
+            _slots.Commit(slotIndex, slot.KeyHash, slot.KeyLength, slot.DescriptorLength, slot.ValueLength, sequence);
+            return StoreStatus.Success;
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
+    internal StoreStatus AbortReservation(int slotIndex, int generation, bool countAbort)
+    {
+        if (_disposed)
+        {
+            return Record(StoreStatus.StoreDisposed);
+        }
+
+        EnterStoreLock();
+        try
+        {
+            var ready = EnsureReady();
+            if (ready != StoreStatus.Success)
+            {
+                return Record(ready);
+            }
+
+            var status = _slots.ValidatePendingReservation(slotIndex, generation, out _);
+            if (status != StoreStatus.Success)
+            {
+                return Record(status);
+            }
+
+            if (!_index.TryRemoveSlot(slotIndex, generation))
+            {
+                return Record(StoreStatus.CorruptStore);
+            }
+
+            _slots.Reclaim(slotIndex);
+            if (countAbort)
+            {
+                _diagnostics.RecordReservationAbort();
+            }
+
+            return StoreStatus.Success;
+        }
+        finally
+        {
+            ExitStoreLock();
+        }
+    }
+
     private StoreOpenStatus InitializeOrValidate(SharedMemoryStoreOptions options)
     {
         ref var header = ref Header;
@@ -503,6 +844,24 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         }
 
         if (value.Length > _layout.MaxValueBytes)
+        {
+            return StoreStatus.ValueTooLarge;
+        }
+
+        return descriptor.Length > _layout.MaxDescriptorBytes
+            ? StoreStatus.DescriptorTooLarge
+            : StoreStatus.Success;
+    }
+
+    private StoreStatus ValidateReservationInput(ReadOnlySpan<byte> key, int payloadLength, ReadOnlySpan<byte> descriptor)
+    {
+        var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+        if (keyStatus != StoreStatus.Success)
+        {
+            return keyStatus;
+        }
+
+        if (payloadLength < 0 || payloadLength > _layout.MaxValueBytes)
         {
             return StoreStatus.ValueTooLarge;
         }

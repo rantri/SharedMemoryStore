@@ -20,13 +20,24 @@ metrics, traces, alerts, or support evidence.
 - `PublishedSlotCount`: slots currently published.
 - `PendingRemovalCount`: slots waiting for final lease release.
 - `ActiveLeaseCount`: active lease records.
+- `ActiveReservationCount`: slots currently reserved but not committed.
+- `AbortedReservationCount`: reservations aborted through this handle.
+- `FailedCommitCount`: incomplete reservation commit attempts.
+- `RecoveredReservationCount`: stale reservations recovered through this handle.
+- `ActiveReservationRecoveryCount`: reservations observed as still active during
+  explicit recovery scans.
+- `UnsupportedReservationRecoveryCount`: reservations that recovery could not
+  evaluate safely on the current platform.
+- `FailedReservationRecoveryCount`: reservations recovery could not reclaim
+  because slot or index state was inconsistent.
 - `CapacityPressureCount`: count of store-full and lease-table-full failures.
 - `LastFailureStatus`: last non-success operation status observed by the
   handle.
 - per-status failure counters for duplicate key, missing key, oversized inputs,
   store full, lease table full, invalid lease, repeated release, pending
   removal, unsupported platform, disposed store, corrupt store, access denied,
-  and unknown failure.
+  unknown failure, invalid reservation, incomplete reservation, repeated
+  reservation completion, and out-of-range reservation writes.
 
 ## Example
 
@@ -54,6 +65,10 @@ var fullFailures = snapshot.GetFailureCount(StoreStatus.StoreFull);
   removals are requested.
 - Nonzero `LeaseAlreadyReleasedFailures` or `InvalidLeaseFailures` indicates
   lease ownership or disposal paths need review.
+- Nonzero reservation failure counters indicate a producer advanced, committed,
+  aborted, disposed, or recovered a reservation outside the expected lifecycle.
+- Nonzero reservation recovery result counters identify whether recovery found
+  live owners, unsupported owner-liveness checks, or inconsistent shared state.
 - `UnsupportedPlatformFailures` indicates a platform or recovery capability
   mismatch.
 - `CorruptStoreFailures` means the process should stop unsafe access and gather

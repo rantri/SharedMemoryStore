@@ -91,3 +91,72 @@ var publish = store.TryPublish([1], frame, descriptor);
 
 The [Frame value sample](../samples/FrameValue/README.md) shows this pattern and
 also publishes a non-frame value to show that the core lifecycle is identical.
+
+## Direct Frame Ingest
+
+When a frame header gives the payload length before the bytes are read, reserve
+the store slot first and receive directly into the writable reservation memory:
+
+```csharp
+var status = store.TryReserve([1], payloadLength, descriptor, out var reservation);
+if (status == StoreStatus.Success)
+{
+    while (reservation.RemainingBytes > 0)
+    {
+        var target = reservation.GetMemory(Math.Min(4096, reservation.RemainingBytes));
+        var received = await socket.ReceiveAsync(target);
+        if (received == 0)
+        {
+            _ = reservation.Abort();
+            break;
+        }
+
+        status = reservation.Advance(received);
+        if (status != StoreStatus.Success)
+        {
+            _ = reservation.Abort();
+            break;
+        }
+    }
+
+    if (status == StoreStatus.Success)
+    {
+        status = reservation.Commit();
+    }
+}
+```
+
+The [zero-copy ingest sample](../samples/ZeroCopyIngest/README.md) demonstrates
+direct chunked writes, a runnable length-prefixed stream adapter, abort cleanup,
+reader acquire, remove, and segmented publication.
+
+## Pipelines Adapter
+
+`System.IO.Pipelines` remains an adapter layer over the store contract. Read the
+frame with the pipeline, slice the payload as a `ReadOnlySequence<byte>`, and
+publish that sequence without flattening it:
+
+```csharp
+var read = await pipe.Reader.ReadAsync();
+var reader = new SequenceReader<byte>(read.Buffer);
+if (reader.TryReadLittleEndian(out int payloadLength)
+    && read.Buffer.Length - 4 >= payloadLength)
+{
+    var payload = read.Buffer.Slice(reader.Position, payloadLength);
+    var status = store.TryPublishSegments(key, payload, descriptor, out var copiedBytes);
+}
+```
+
+This copies the pipeline-owned segments into one committed store value. It does
+not make `System.IO.Pipelines` part of the runtime package contract.
+
+## Segmented Buffered Frames
+
+Already-buffered segments can be published without flattening:
+
+```csharp
+ReadOnlySequence<byte> frame = GetBufferedFrame();
+var status = store.TryPublishSegments([2], frame, descriptor, out var copiedBytes);
+```
+
+The committed value is still one immutable contiguous payload for readers.

@@ -27,6 +27,15 @@ public sealed class PackageContractTests
         Assert.Contains("<PackageReadmeFile>README.md</PackageReadmeFile>", project);
     }
 
+    [Fact]
+    public void RuntimeProjectHasNoPackageReferences()
+    {
+        var root = FindRepositoryRoot();
+        var project = File.ReadAllText(Path.Combine(root, "src", "SharedMemoryStore", "SharedMemoryStore.csproj"));
+
+        Assert.DoesNotContain("<PackageReference", project, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -10,6 +10,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/BasicUsage/BasicUsage.csproj" />
     <Project Path="samples/FrameValue/FrameValue.csproj" />
+    <Project Path="samples/ZeroCopyIngest/ZeroCopyIngest.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/SharedMemoryStore/SharedMemoryStore.csproj" />

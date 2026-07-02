@@ -10,7 +10,8 @@ The detailed source is the
 
 Future implementations must use the same little-endian field encoding, 8-byte
 alignment, state-value assignments, key hashing, exact byte-key equality, slot
-generation, lease registry, and remove/reuse state machine.
+generation, lease registry, reservation progress, and remove/reuse state
+machine.
 
 Layout compatibility follows semantic versioning. A major layout-version change
 requires migration notes and contract-test updates. Minor compatible additions
@@ -18,12 +19,39 @@ must preserve existing field offsets and state semantics.
 
 ## Current Baseline
 
-- Runtime package: `SharedMemoryStore` `0.1.0`.
+- Runtime package: `SharedMemoryStore` `0.2.0`.
 - Target framework: `net10.0`.
 - First validated platform: Windows x64 named memory-mapped files.
 - Current language implementation: C#.
 - Future audience: C++ and Python implementations or bindings that conform to
   the documented layout and lifecycle contracts.
+
+## Reservation Portability
+
+`SlotPublishing` is the language-neutral pending reservation state. During that
+state, `SharedSlotMetadata.Reserved` stores bytes advanced by the producer,
+`ValueLength` stores the announced payload length, and `PublisherProcessId`
+identifies the owner for explicit recovery. Commit must validate slot
+generation and exact progress before transitioning to `SlotPublished`.
+
+Future C++ and Python implementations must treat writable reservation memory as
+valid only while the slot remains pending and generation-matched. Scatter/gather
+committed values are out of scope for this layout; segmented publish copies into
+one contiguous slot value.
+
+## Trusted Same-Host Boundary
+
+The direct ingest API exposes writable shared-memory bytes to producers before
+commit. The security model assumes only trusted same-host services can open the
+mapping and participate in the store. Deployment is responsible for operating
+system ACLs, service identity, process isolation, and package distribution.
+
+SharedMemoryStore validates lifecycle state, slot generation, key ownership, and
+reader visibility, but it does not defend against a malicious in-boundary writer
+that intentionally corrupts mapped bytes, forges metadata, or ignores the public
+API. Future C++, Python, or other bindings must document the same trust boundary
+instead of implying protection from hostile processes that already have mapping
+access.
 
 ## Unsupported Scenarios
 
@@ -34,6 +62,8 @@ must preserve existing field offsets and state semantics.
   deterministic unsupported statuses for affected operations.
 - Application-specific schemas, including frame metadata, are not parsed by the
   core store.
+- Protection against malicious writers with legitimate in-boundary access is
+  outside the package scope.
 
 ## Compatibility Rules
 
