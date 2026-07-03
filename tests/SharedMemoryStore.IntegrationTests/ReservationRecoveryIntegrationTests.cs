@@ -93,9 +93,9 @@ public sealed class ReservationRecoveryIntegrationTests
         }
 
         var diagnostics = store.GetDiagnostics();
-        Assert.Equal(FailureInjectionCycleCount / 4, diagnostics.ReservationIncompleteFailures);
+        Assert.Equal(FailureInjectionCycleCount / 4, diagnostics.GetFailureCount(StoreStatus.ReservationIncomplete));
         Assert.Equal(FailureInjectionCycleCount / 4, diagnostics.RecoveredReservationCount);
-        Assert.Equal(FailureInjectionCycleCount / 4, diagnostics.InvalidReservationFailures);
+        Assert.Equal(FailureInjectionCycleCount / 4, diagnostics.GetFailureCount(StoreStatus.InvalidReservation));
         Assert.Equal((FailureInjectionCycleCount / 4) * 3, diagnostics.AbortedReservationCount);
         Assert.Equal(1, diagnostics.FreeSlotCount);
     }

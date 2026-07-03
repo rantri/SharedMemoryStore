@@ -10,7 +10,7 @@ public sealed class ReservationValidationTests
         var options = StoreTestNames.Options(slotCount: 1, maxKeyBytes: 2, maxValueBytes: 3, maxDescriptorBytes: 1);
         using var store = StoreTestNames.CreateStore(options);
 
-        Assert.Equal(StoreStatus.KeyTooLarge, store.TryReserve(ReadOnlySpan<byte>.Empty, 1, default, out _));
+        Assert.Equal(StoreStatus.InvalidKey, store.TryReserve(ReadOnlySpan<byte>.Empty, 1, default, out _));
         Assert.Equal(StoreStatus.KeyTooLarge, store.TryReserve([1, 2, 3], 1, default, out _));
         Assert.Equal(StoreStatus.ValueTooLarge, store.TryReserve([1], -1, default, out _));
         Assert.Equal(StoreStatus.ValueTooLarge, store.TryReserve([1], 4, default, out _));
@@ -41,9 +41,9 @@ public sealed class ReservationValidationTests
         Assert.Equal(StoreStatus.Success, store.TryRecoverReservations(new ReservationRecoveryOptions(true), out var report));
 
         var diagnostics = store.GetDiagnostics();
-        Assert.Equal(1, diagnostics.ReservationWriteOutOfRangeFailures);
-        Assert.Equal(1, diagnostics.ReservationIncompleteFailures);
-        Assert.Equal(1, diagnostics.InvalidReservationFailures);
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.ReservationWriteOutOfRange));
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.ReservationIncomplete));
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.InvalidReservation));
         Assert.Equal(1, diagnostics.AbortedReservationCount);
         Assert.Equal(1, diagnostics.RecoveredReservationCount);
         Assert.Equal(1, diagnostics.ActiveReservationRecoveryCount);

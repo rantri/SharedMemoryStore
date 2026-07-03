@@ -21,7 +21,7 @@ dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release -- 
 
 The sample covers:
 
-- length-prefixed stream ingest, chunked writes through store-owned memory,
+- length-prefixed stream ingest, chunked writes through reservation spans,
   exact progress, commit, acquire, release, and remove.
 - a `System.IO.Pipelines` adapter that publishes the payload sequence through
   `TryPublishSegments`.

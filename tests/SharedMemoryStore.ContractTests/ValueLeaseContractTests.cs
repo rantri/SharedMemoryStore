@@ -31,4 +31,20 @@ public sealed class ValueLeaseContractTests
         Assert.False(lease.IsValid);
         Assert.Equal(StoreStatus.InvalidLease, lease.Release());
     }
+
+    [Fact]
+    public void CommittedPayloadRemainsVisibleAfterReservationCompletes()
+    {
+        using var store = ContractStoreFactory.Create(ContractStoreFactory.Options());
+
+        Assert.Equal(StoreStatus.Success, store.TryReserve([1], 3, default, out var reservation));
+        new byte[] { 4, 5, 6 }.CopyTo(reservation.GetSpan(3));
+        Assert.Equal(StoreStatus.Success, reservation.Advance(3));
+        Assert.Equal(StoreStatus.Success, reservation.Commit());
+        Assert.True(reservation.GetSpan().IsEmpty);
+
+        Assert.Equal(StoreStatus.Success, store.TryAcquire([1], out var lease));
+        Assert.Equal(new byte[] { 4, 5, 6 }, lease.ValueSpan.ToArray());
+        lease.Dispose();
+    }
 }

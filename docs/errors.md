@@ -21,6 +21,10 @@ Expected store pressure and lookup failures should be handled by checking
 - `InsufficientCapacity`: `TotalBytes` cannot contain the requested layout.
 - `AccessDenied`: the process lacks required mapping access.
 - `MappingFailed`: the runtime failed to create or open the mapping.
+- `StoreBusy`: shared synchronization was not acquired within the selected wait
+  policy.
+- `OperationCanceled`: cancellation was observed before shared synchronization
+  was acquired.
 
 ## Operation Statuses
 
@@ -28,6 +32,7 @@ Expected store pressure and lookup failures should be handled by checking
 - `DuplicateKey`: a key already maps to a published, pending-removal, or
   pending-reservation value.
 - `NotFound`: the key is absent or no longer published.
+- `InvalidKey`: the key is empty or otherwise invalid.
 - `KeyTooLarge`: the key exceeds `MaxKeyBytes`.
 - `ValueTooLarge`: the payload exceeds `MaxValueBytes`.
 - `DescriptorTooLarge`: the descriptor exceeds `MaxDescriptorBytes`.
@@ -49,6 +54,10 @@ Expected store pressure and lookup failures should be handled by checking
   aborted, disposed, or recovered.
 - `ReservationWriteOutOfRange`: reservation progress would move outside the
   announced payload length.
+- `StoreBusy`: shared synchronization was not acquired within the selected wait
+  policy.
+- `OperationCanceled`: cancellation was observed before shared synchronization
+  was acquired.
 
 ## Common Situations
 
@@ -97,7 +106,7 @@ Expected status: `InvalidLease`.
 Unsupported platform:
 
 ```csharp
-var open = Store.TryCreateOrOpen(options, out var store);
+var open = MemoryStore.TryCreateOrOpen(options, out var store);
 ```
 
 Expected status on unsupported platforms: `UnsupportedPlatform`.
@@ -123,7 +132,7 @@ Disposal races:
 
 Public store methods and token methods racing with disposal complete normally
 when they entered first, or return `StoreDisposed`, an invalid token outcome, an
-already-completed token outcome, or an empty span/memory projection. Callers
+already-completed token outcome, or an empty span projection. Callers
 should not see internal mapped-memory, mutex, or object-disposal exceptions from
 documented public boundaries.
 

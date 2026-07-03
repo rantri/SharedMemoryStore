@@ -64,7 +64,7 @@ leases owned by another live process. Skipped live-owner records are reported as
 A reservation owns one slot generation while its state is `SlotPublishing`.
 During that period the key is present in the index for duplicate detection, but
 `TryAcquire` returns `NotFound`. The producer may write only into the remaining
-payload region returned by `GetSpan()` or `GetMemory()` and must call
+payload region returned by `GetSpan()` and must call
 `Advance()` with the exact number of bytes written.
 
 `Commit()` publishes the value only when progress equals the announced payload

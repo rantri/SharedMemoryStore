@@ -1,6 +1,6 @@
 using System.Buffers;
 using System.Reflection;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.ContractTests;
 
@@ -9,7 +9,9 @@ public sealed class ReservationApiContractTests
     [Fact]
     public void TryReserveAndValueReservationMembersMatchContract()
     {
-        var reserve = typeof(Store).GetMethod(nameof(Store.TryReserve), BindingFlags.Public | BindingFlags.Instance);
+        var reserve = typeof(Store)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(method => method.Name == nameof(Store.TryReserve) && method.GetParameters().Length == 4);
         Assert.NotNull(reserve);
         Assert.Equal(typeof(StoreStatus), reserve.ReturnType);
 
@@ -26,17 +28,18 @@ public sealed class ReservationApiContractTests
         Assert.NotNull(typeof(ValueReservation).GetProperty(nameof(ValueReservation.BytesWritten)));
         Assert.NotNull(typeof(ValueReservation).GetProperty(nameof(ValueReservation.RemainingBytes)));
         Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.GetSpan), BindingFlags.Public | BindingFlags.Instance));
-        Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.GetMemory), BindingFlags.Public | BindingFlags.Instance));
-        Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.Advance), BindingFlags.Public | BindingFlags.Instance));
-        Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.Commit), BindingFlags.Public | BindingFlags.Instance));
-        Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.Abort), BindingFlags.Public | BindingFlags.Instance));
+        Assert.Null(typeof(ValueReservation).GetMethod("GetMemory", BindingFlags.Public | BindingFlags.Instance));
+        Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Advance));
+        Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Commit));
+        Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Abort));
     }
 
     [Fact]
     public void TryPublishSegmentsAndRecoveryMembersMatchContract()
     {
-        var publishSegments = typeof(Store).GetMethod(nameof(Store.TryPublishSegments), BindingFlags.Public | BindingFlags.Instance);
-        Assert.NotNull(publishSegments);
+        var publishSegments = typeof(Store)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(method => method.Name == nameof(Store.TryPublishSegments) && method.GetParameters().Length == 4);
         var segmentParameters = publishSegments.GetParameters();
         Assert.Equal(typeof(ReadOnlySpan<byte>), segmentParameters[0].ParameterType);
         Assert.Equal(typeof(ReadOnlySequence<byte>).MakeByRefType(), segmentParameters[1].ParameterType);
@@ -44,8 +47,9 @@ public sealed class ReservationApiContractTests
         Assert.Equal(typeof(ReadOnlySpan<byte>), segmentParameters[2].ParameterType);
         Assert.Equal(typeof(long).MakeByRefType(), segmentParameters[3].ParameterType);
 
-        var recover = typeof(Store).GetMethod(nameof(Store.TryRecoverReservations), BindingFlags.Public | BindingFlags.Instance);
-        Assert.NotNull(recover);
+        var recover = typeof(Store)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Single(method => method.Name == nameof(Store.TryRecoverReservations) && method.GetParameters().Length == 2);
         Assert.Equal(typeof(ReservationRecoveryOptions), recover.GetParameters()[0].ParameterType.GetElementType());
         Assert.Equal(typeof(ReservationRecoveryReport).MakeByRefType(), recover.GetParameters()[1].ParameterType);
     }

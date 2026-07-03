@@ -24,7 +24,7 @@ partial identity.
 
 ## Current Baseline
 
-- Runtime package: `SharedMemoryStore` `0.2.0`.
+- Runtime package: `SharedMemoryStore` `1.0.0`.
 - Target framework: `net10.0`.
 - First validated platform: Windows x64 named memory-mapped files.
 - Current language implementation: C#.

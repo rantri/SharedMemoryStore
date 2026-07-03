@@ -1,5 +1,4 @@
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -14,7 +13,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
 };
 
-var openStatus = Store.TryCreateOrOpen(options, out var store);
+var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
 {
     Console.WriteLine($"open failed: {openStatus}");

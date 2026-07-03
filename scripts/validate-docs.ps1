@@ -31,6 +31,7 @@ $requiredGuideFiles = @(
     "docs/errors.md",
     "docs/diagnostics.md",
     "docs/lifecycle.md",
+    "docs/integration.md",
     "docs/packaging.md",
     "docs/portability.md",
     "docs/performance.md",
@@ -41,6 +42,7 @@ $requiredGuideFiles = @(
 $requiredSampleFiles = @(
     "samples/BasicUsage/README.md",
     "samples/FrameValue/README.md",
+    "samples/HostedServiceIntegration/README.md",
     "samples/ZeroCopyIngest/README.md"
 )
 
@@ -185,7 +187,7 @@ function Assert-PackageMetadata {
     $expected = @{
         TargetFramework = "net10.0"
         PackageId = "SharedMemoryStore"
-        Version = "0.2.0"
+        Version = "1.0.0"
         Description = "A bounded named shared-memory key-value store for opaque binary values."
         PackageLicenseExpression = "MIT"
         PackageReadmeFile = "README.md"
@@ -216,11 +218,11 @@ function Assert-PackageMetadata {
     }
 
     Assert-Contains "README.md" "SharedMemoryStore" "package README identity"
-    Assert-Contains "README.md" "0.2.0" "package version alignment"
+    Assert-Contains "README.md" "1.0.0" "package version alignment"
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"
-    Assert-Contains "CHANGELOG.md" "0.2.0" "release notes alignment"
+    Assert-Contains "CHANGELOG.md" "1.0.0" "release notes alignment"
     Assert-Contains "docs/packaging.md" "PackageId" "package documentation notes"
     Assert-Contains "docs/packaging.md" "PackageReleaseNotes" "package release notes documentation"
 }

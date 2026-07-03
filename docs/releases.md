@@ -1,7 +1,7 @@
 # Release Preparation
 
 This guide is the maintainer checklist for preparing a package release. It is
-written for the current prerelease `0.2.0` package and should be updated when
+written for the current `1.0.0` package and should be updated when
 package metadata, public API behavior, compatibility scope, support policy, or
 security reporting changes.
 
@@ -37,9 +37,9 @@ entry should identify:
 - known limitations.
 - migration notes for breaking changes.
 
-For this prerelease line, do not imply stable `1.0.0` compatibility. Public API,
-layout, lifecycle, error, or support-policy changes still require explicit
-semantic-version review.
+For the `1.0.0` production API line, public API, layout, lifecycle, error, or
+support-policy changes require explicit semantic-version review and migration
+notes.
 
 ## Compatibility Review
 
@@ -94,6 +94,20 @@ when they clarify existing behavior without changing a public compatibility
 promise. A documentation change is not documentation-only if it redefines public
 API behavior, shared-memory layout behavior, error outcomes, lifecycle
 ownership, security process, or support guarantees.
+
+## 1.0.0 Production API Readiness Notes
+
+The `1.0.0` release is the production public API contract step. Migration from
+`0.2.0` requires:
+
+- Replace `SharedMemoryStore.SharedMemoryStore` with `MemoryStore`.
+- Replace retained reservation `GetMemory` writes with immediate `GetSpan`
+  writes followed by `Advance`.
+- Handle `InvalidKey`, `StoreBusy`, and `OperationCanceled` outcomes.
+- Replace diagnostics convenience members with
+  `GetFailureCount(StoreStatus.SomeStatus)`.
+- Keep hosting, dependency injection, logging, and health integration outside
+  the core package unless an optional adapter package or sample is used.
 
 ## 0.2.0 Readiness Notes
 

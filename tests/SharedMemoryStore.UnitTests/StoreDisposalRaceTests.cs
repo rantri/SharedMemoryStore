@@ -41,7 +41,7 @@ public sealed class StoreDisposalRaceTests
         Assert.True(lease.ValueSpan.IsEmpty);
         Assert.Equal(StoreStatus.StoreDisposed, lease.Release());
         Assert.False(reservation.IsValid);
-        Assert.True(reservation.GetMemory().IsEmpty);
+        Assert.True(reservation.GetSpan().IsEmpty);
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Advance(1));
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Commit());
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Abort());

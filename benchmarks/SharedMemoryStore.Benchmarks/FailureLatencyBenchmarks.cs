@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Attributes;
 using System.Diagnostics;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.Benchmarks;
 
@@ -15,6 +15,7 @@ public class FailureLatencyBenchmarks
     private readonly byte[] _missingKey = [2];
     private readonly byte[] _oversizedValue = [1, 2, 3, 4, 5];
     private readonly byte[] _oversizedDescriptor = [1, 2];
+    private CancellationTokenSource _canceled = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -22,6 +23,8 @@ public class FailureLatencyBenchmarks
         _store = BenchmarkStoreFactory.Create(slotCount: 1, maxValueBytes: 4);
         _store.TryPublish(_existingKey, [1]);
         _unsupportedRecoveryStore = BenchmarkStoreFactory.Create(slotCount: 1, maxValueBytes: 4, enableRecovery: false);
+        _canceled = new CancellationTokenSource();
+        _canceled.Cancel();
     }
 
     [GlobalCleanup]
@@ -29,6 +32,7 @@ public class FailureLatencyBenchmarks
     {
         _store.Dispose();
         _unsupportedRecoveryStore.Dispose();
+        _canceled.Dispose();
     }
 
     [Benchmark]
@@ -36,6 +40,9 @@ public class FailureLatencyBenchmarks
 
     [Benchmark]
     public StoreStatus MissingKey() => _store.TryAcquire(_missingKey, out _);
+
+    [Benchmark]
+    public StoreStatus InvalidKey() => _store.TryPublish(ReadOnlySpan<byte>.Empty, [1]);
 
     [Benchmark]
     public StoreStatus OversizedValue() => _store.TryPublish(_missingKey, _oversizedValue);
@@ -51,6 +58,15 @@ public class FailureLatencyBenchmarks
 
     [Benchmark]
     public StoreStatus UnsupportedPlatform() => _unsupportedRecoveryStore.TryRecoverLeases(new LeaseRecoveryOptions(true), out _);
+
+    [Benchmark]
+    public StoreStatus CanceledAcquire() => _store.TryAcquire(
+        _missingKey,
+        new StoreWaitOptions(TimeSpan.FromSeconds(1), _canceled.Token),
+        out _);
+
+    [Benchmark]
+    public StoreStatus DiagnosticsDefaultWait() => _store.TryGetDiagnostics(out _);
 
     [Benchmark]
     public FailureLatencyReport ExpectedFailureLatencyReport()

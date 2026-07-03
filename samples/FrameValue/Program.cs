@@ -1,6 +1,5 @@
 using FrameValue;
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var frame = new byte[1_300_000];
 for (var i = 0; i < frame.Length; i++)
@@ -22,7 +21,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, frame.Length, descriptor.Length, 16, 4)
 };
 
-var openStatus = Store.TryCreateOrOpen(options, out var store);
+var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
 {
     Console.WriteLine($"open failed: {openStatus}");

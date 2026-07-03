@@ -32,7 +32,7 @@ public sealed class IngestLayoutContractTests
         Assert.Equal(StoreStatus.Success, reservation.Abort());
     }
 
-    private static ref SharedSlotMetadata FindPublishingSlot(SharedMemoryStore store)
+    private static ref SharedSlotMetadata FindPublishingSlot(MemoryStore store)
     {
         for (var i = 0; i < store.Layout.SlotCount; i++)
         {

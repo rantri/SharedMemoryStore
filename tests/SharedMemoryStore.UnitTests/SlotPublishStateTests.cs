@@ -1,6 +1,6 @@
 using SharedMemoryStore.Layout;
 using SharedMemoryStore.UnitTests.TestSupport;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.UnitTests;
 

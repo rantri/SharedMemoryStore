@@ -5,10 +5,11 @@ namespace SharedMemoryStore.Ingest;
 internal static class SegmentedPublisher
 {
     public static StoreStatus Publish(
-        SharedMemoryStore store,
+        MemoryStore store,
         ReadOnlySpan<byte> key,
         in ReadOnlySequence<byte> payload,
         ReadOnlySpan<byte> descriptor,
+        StoreWaitOptions waitOptions,
         out long copiedBytes)
     {
         copiedBytes = 0;
@@ -17,7 +18,7 @@ internal static class SegmentedPublisher
             return StoreStatus.ValueTooLarge;
         }
 
-        var status = store.TryReserve(key, (int)payload.Length, descriptor, out var reservation);
+        var status = store.TryReserve(key, (int)payload.Length, descriptor, waitOptions, out var reservation);
         if (status != StoreStatus.Success)
         {
             return status;
@@ -33,16 +34,16 @@ internal static class SegmentedPublisher
                     var target = reservation.GetSpan(source.Length);
                     if (target.IsEmpty)
                     {
-                        _ = reservation.Abort();
+                        _ = reservation.Abort(waitOptions);
                         return StoreStatus.ReservationWriteOutOfRange;
                     }
 
                     var copyLength = Math.Min(source.Length, target.Length);
                     source[..copyLength].CopyTo(target);
-                    status = reservation.Advance(copyLength);
+                    status = reservation.Advance(copyLength, waitOptions);
                     if (status != StoreStatus.Success)
                     {
-                        _ = reservation.Abort();
+                        _ = reservation.Abort(waitOptions);
                         return status;
                     }
 
@@ -51,17 +52,17 @@ internal static class SegmentedPublisher
                 }
             }
 
-            status = reservation.Commit();
+            status = reservation.Commit(waitOptions);
             if (status != StoreStatus.Success)
             {
-                _ = reservation.Abort();
+                _ = reservation.Abort(waitOptions);
             }
 
             return status;
         }
         catch
         {
-            _ = reservation.Abort();
+            _ = reservation.Abort(waitOptions);
             return StoreStatus.UnknownFailure;
         }
     }

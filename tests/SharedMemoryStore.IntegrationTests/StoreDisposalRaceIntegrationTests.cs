@@ -57,7 +57,7 @@ public sealed class StoreDisposalRaceIntegrationTests
     }
 
     private static StoreStatus InvokeOperation(
-        SharedMemoryStore store,
+        MemoryStore store,
         int worker,
         int operation,
         ValueLease heldLease,
@@ -86,13 +86,13 @@ public sealed class StoreDisposalRaceIntegrationTests
         };
     }
 
-    private static StoreStatus ReadDiagnostics(SharedMemoryStore store)
+    private static StoreStatus ReadDiagnostics(MemoryStore store)
     {
         _ = store.GetDiagnostics();
         return StoreStatus.Success;
     }
 
-    private static StoreStatus ReserveAndDispose(SharedMemoryStore store, byte[] key)
+    private static StoreStatus ReserveAndDispose(MemoryStore store, byte[] key)
     {
         var status = store.TryReserve(key, 1, default, out var reservation);
         if (status != StoreStatus.Success)
@@ -110,7 +110,7 @@ public sealed class StoreDisposalRaceIntegrationTests
         return StoreStatus.Success;
     }
 
-    private static StoreStatus DisposeStore(SharedMemoryStore store)
+    private static StoreStatus DisposeStore(MemoryStore store)
     {
         store.Dispose();
         return StoreStatus.Success;

@@ -64,13 +64,12 @@ public sealed class ReservationStateTests
     }
 
     [Fact]
-    public void MemoryViewCanFillReservationPayload()
+    public void SpanViewCanFillReservationPayload()
     {
         using var store = StoreTestNames.CreateStore(StoreTestNames.Options());
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 3, default, out var reservation));
-        var memory = reservation.GetMemory(3);
-        new byte[] { 8, 9, 10 }.CopyTo(memory.Span);
+        new byte[] { 8, 9, 10 }.CopyTo(reservation.GetSpan(3));
         Assert.Equal(StoreStatus.Success, reservation.Advance(3));
         Assert.Equal(StoreStatus.Success, reservation.Commit());
 

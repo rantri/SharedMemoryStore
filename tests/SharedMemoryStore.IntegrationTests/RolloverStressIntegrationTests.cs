@@ -60,7 +60,7 @@ public sealed class RolloverStressIntegrationTests
         Assert.False(staleLease.IsValid);
     }
 
-    private static StoreStatus InvokeMixedOperation(SharedMemoryStore store, int worker, int operation)
+    private static StoreStatus InvokeMixedOperation(MemoryStore store, int worker, int operation)
     {
         var key = Key(100_000 + operation);
         return ((operation + worker) % 8) switch
@@ -76,7 +76,7 @@ public sealed class RolloverStressIntegrationTests
         };
     }
 
-    private static StoreStatus PublishAcquireRemoveRelease(SharedMemoryStore store, byte[] key, int operation)
+    private static StoreStatus PublishAcquireRemoveRelease(MemoryStore store, byte[] key, int operation)
     {
         var status = store.TryPublish(key, [(byte)operation]);
         if (status != StoreStatus.Success)
@@ -101,7 +101,7 @@ public sealed class RolloverStressIntegrationTests
         return lease.Release();
     }
 
-    private static StoreStatus ReserveCommitRemove(SharedMemoryStore store, byte[] key, int operation)
+    private static StoreStatus ReserveCommitRemove(MemoryStore store, byte[] key, int operation)
     {
         var status = store.TryReserve(key, 1, default, out var reservation);
         if (status != StoreStatus.Success)
@@ -134,19 +134,19 @@ public sealed class RolloverStressIntegrationTests
         return store.TryRemove(key);
     }
 
-    private static StoreStatus ReserveAbort(SharedMemoryStore store, byte[] key)
+    private static StoreStatus ReserveAbort(MemoryStore store, byte[] key)
     {
         var status = store.TryReserve(key, 1, default, out var reservation);
         return status == StoreStatus.Success ? reservation.Abort() : status;
     }
 
-    private static StoreStatus PublishSegmentsRemove(SharedMemoryStore store, byte[] key, int operation)
+    private static StoreStatus PublishSegmentsRemove(MemoryStore store, byte[] key, int operation)
     {
         var status = store.TryPublishSegments(key, new ReadOnlySequence<byte>([(byte)operation]), default, out _);
         return status == StoreStatus.Success ? store.TryRemove(key) : status;
     }
 
-    private static StoreStatus ReadDiagnostics(SharedMemoryStore store)
+    private static StoreStatus ReadDiagnostics(MemoryStore store)
     {
         _ = store.GetDiagnostics();
         return StoreStatus.Success;

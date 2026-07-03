@@ -22,7 +22,7 @@ metrics, traces, alerts, or support evidence.
 - `ActiveLeaseCount`: active lease records.
 - `ActiveReservationCount`: slots currently reserved but not committed.
 - `AbortedReservationCount`: reservations aborted through this handle.
-- `FailedCommitCount`: incomplete reservation commit attempts.
+- `GetFailureCount(StoreStatus.ReservationIncomplete)`: incomplete reservation commit attempts.
 - `RecoveredLeaseCount`: stale or eligible leases recovered through this
   handle.
 - `ActiveLeaseRecoveryCount`: active leases skipped during explicit recovery
@@ -51,11 +51,9 @@ metrics, traces, alerts, or support evidence.
   by this handle.
 - `LastFailureStatus`: last non-success operation status observed by the
   handle.
-- per-status failure counters for duplicate key, missing key, oversized inputs,
-  store full, lease table full, invalid lease, repeated release, pending
-  removal, unsupported platform, disposed store, corrupt store, access denied,
-  unknown failure, invalid reservation, incomplete reservation, repeated
-  reservation completion, and out-of-range reservation writes.
+- aggregate per-status failure access through
+  `GetFailureCount(StoreStatus status)`, including validation, contention,
+  cancellation, lifecycle, capacity, platform, and unexpected failure statuses.
 
 ## Example
 
@@ -79,11 +77,11 @@ var fullFailures = snapshot.GetFailureCount(StoreStatus.StoreFull);
 ## Troubleshooting Signals
 
 - Rising `CapacityPressureCount` indicates slot or lease-record pressure.
-- Nonzero `RemovePendingFailures` indicates readers are holding leases while
+- Nonzero `GetFailureCount(StoreStatus.RemovePending)` indicates readers are holding leases while
   removals are requested.
-- Nonzero `LeaseAlreadyReleasedFailures` or `InvalidLeaseFailures` indicates
+- Nonzero `GetFailureCount(StoreStatus.LeaseAlreadyReleased)` or `GetFailureCount(StoreStatus.InvalidLease)` indicates
   lease ownership or disposal paths need review.
-- Nonzero reservation failure counters indicate a producer advanced, committed,
+- Nonzero reservation failure counts indicate a producer advanced, committed,
   aborted, disposed, or recovered a reservation outside the expected lifecycle.
 - Nonzero reservation recovery result counters identify whether recovery found
   live owners, unsupported owner-liveness checks, or inconsistent shared state.
@@ -93,9 +91,9 @@ var fullFailures = snapshot.GetFailureCount(StoreStatus.StoreFull);
   rather than live capacity pressure. Internal compaction is synchronous and
   caller-triggered by normal mutation paths; the library does not start a
   background maintenance worker.
-- `UnsupportedPlatformFailures` indicates a platform or recovery capability
+- `GetFailureCount(StoreStatus.UnsupportedPlatform)` indicates a platform or recovery capability
   mismatch.
-- `CorruptStoreFailures` means the process should stop unsafe access and gather
+- `GetFailureCount(StoreStatus.CorruptStore)` means the process should stop unsafe access and gather
   evidence for maintainers.
 
 ## Support Evidence

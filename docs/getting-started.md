@@ -9,7 +9,7 @@ create/open, publish, acquire, release, remove, and dispose workflow.
 - PowerShell for repository validation scripts.
 - Windows x64 for the current named memory-mapped-file validation target.
 
-The package is prerelease `0.2.0`. If it has not been published to a package
+The package version is `1.0.0`. If it has not been published to a package
 feed, build a local package source from the repository.
 
 ## Create a Local Package Source
@@ -31,7 +31,6 @@ Replace `artifacts/tryout/Program.cs` with this program:
 
 ```csharp
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -46,7 +45,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
 };
 
-var openStatus = Store.TryCreateOrOpen(options, out var store);
+var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 Console.WriteLine(openStatus);
 if (openStatus != StoreOpenStatus.Success || store is null)
 {

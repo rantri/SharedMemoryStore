@@ -1,4 +1,4 @@
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.UnitTests.TestSupport;
 

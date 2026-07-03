@@ -1,6 +1,6 @@
 using System.Globalization;
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 if (args.Length < 8)
 {

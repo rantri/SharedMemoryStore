@@ -14,7 +14,7 @@ namespace SharedMemoryStore;
 /// <summary>
 /// Disposable owner of one bounded named shared-memory value store.
 /// </summary>
-public sealed unsafe class SharedMemoryStore : IDisposable
+public sealed unsafe class MemoryStore : IDisposable
 {
     private readonly object _gate = new();
     private readonly Mutex _mutex;
@@ -33,7 +33,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     private long _indexCompactionCount;
     private bool _disposed;
 
-    private SharedMemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
+    private MemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
     {
         _mutex = new Mutex(false, BuildMutexName(storeName));
         _region = region;
@@ -52,9 +52,30 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// <summary>
     /// Creates or opens a named store using the supplied options.
     /// </summary>
-    public static StoreOpenStatus TryCreateOrOpen(in SharedMemoryStoreOptions options, out SharedMemoryStore? store)
+    public static StoreOpenStatus TryCreateOrOpen(in SharedMemoryStoreOptions options, out MemoryStore? store)
+    {
+        return TryCreateOrOpen(options, StoreWaitOptions.Default, out store);
+    }
+
+    /// <summary>
+    /// Creates or opens a named store using the supplied options and wait policy.
+    /// </summary>
+    public static StoreOpenStatus TryCreateOrOpen(
+        in SharedMemoryStoreOptions options,
+        StoreWaitOptions waitOptions,
+        out MemoryStore? store)
     {
         store = null;
+
+        if (!waitOptions.IsValid)
+        {
+            return StoreOpenStatus.InvalidOptions;
+        }
+
+        if (waitOptions.CancellationToken.IsCancellationRequested)
+        {
+            return StoreOpenStatus.OperationCanceled;
+        }
 
         var validation = SharedMemoryStoreOptionsValidator.Validate(options, out var layout);
         if (validation != StoreOpenStatus.Success)
@@ -68,10 +89,10 @@ public sealed unsafe class SharedMemoryStore : IDisposable
             return mappingStatus;
         }
 
-        SharedMemoryStore candidate;
+        MemoryStore candidate;
         try
         {
-            candidate = new SharedMemoryStore(region, layout, options.Name, options.EnableLeaseRecovery);
+            candidate = new MemoryStore(region, layout, options.Name, options.EnableLeaseRecovery);
         }
         catch (UnauthorizedAccessException)
         {
@@ -85,7 +106,12 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         }
 
         StoreOpenStatus initializeStatus;
-        candidate.EnterStoreLock();
+        if (!candidate.TryEnterStoreLock(waitOptions, out var lockStatus))
+        {
+            candidate.DisposeUninitialized();
+            return ToOpenStatus(lockStatus);
+        }
+
         try
         {
             initializeStatus = candidate.InitializeOrValidate(options);
@@ -110,14 +136,25 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryPublish(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor = default)
     {
-        if (!TryEnterOperation(out var operation))
+        return TryPublish(key, value, descriptor, StoreWaitOptions.Default);
+    }
+
+    /// <summary>
+    /// Publishes immutable value bytes using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryPublish(
+        ReadOnlySpan<byte> key,
+        ReadOnlySpan<byte> value,
+        ReadOnlySpan<byte> descriptor,
+        StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -179,7 +216,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// Reserves one key, fixed descriptor, and announced payload length for direct store-owned payload writes.
     /// </summary>
     /// <remarks>
-    /// The reservation remains invisible to readers until <see cref="ValueReservation.Commit"/> succeeds.
+    /// The reservation remains invisible to readers until commit succeeds.
     /// Callers must advance exactly <paramref name="payloadLength"/> bytes before commit. Disposing an active
     /// reservation aborts it and descriptor bytes are immutable after reservation creation.
     /// </remarks>
@@ -189,16 +226,28 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         ReadOnlySpan<byte> descriptor,
         out ValueReservation reservation)
     {
+        return TryReserve(key, payloadLength, descriptor, StoreWaitOptions.Default, out reservation);
+    }
+
+    /// <summary>
+    /// Reserves store-owned payload storage using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryReserve(
+        ReadOnlySpan<byte> key,
+        int payloadLength,
+        ReadOnlySpan<byte> descriptor,
+        StoreWaitOptions waitOptions,
+        out ValueReservation reservation)
+    {
         reservation = default;
 
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -266,13 +315,20 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         ReadOnlySpan<byte> descriptor,
         out long copiedBytes)
     {
-        if (_lifecycle.IsDisposed)
-        {
-            copiedBytes = 0;
-            return Record(StoreStatus.StoreDisposed);
-        }
+        return TryPublishSegments(key, payload, descriptor, StoreWaitOptions.Default, out copiedBytes);
+    }
 
-        var status = SegmentedPublisher.Publish(this, key, payload, descriptor, out copiedBytes);
+    /// <summary>
+    /// Publishes a segmented payload using the supplied wait policy for each synchronized reservation operation.
+    /// </summary>
+    public StoreStatus TryPublishSegments(
+        ReadOnlySpan<byte> key,
+        in ReadOnlySequence<byte> payload,
+        ReadOnlySpan<byte> descriptor,
+        StoreWaitOptions waitOptions,
+        out long copiedBytes)
+    {
+        var status = SegmentedPublisher.Publish(this, key, payload, descriptor, waitOptions, out copiedBytes);
         return status == StoreStatus.Success ? status : Record(status);
     }
 
@@ -281,16 +337,23 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryAcquire(ReadOnlySpan<byte> key, out ValueLease lease)
     {
+        return TryAcquire(key, StoreWaitOptions.Default, out lease);
+    }
+
+    /// <summary>
+    /// Acquires a read lease using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryAcquire(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions, out ValueLease lease)
+    {
         lease = default;
 
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -347,14 +410,21 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRemove(ReadOnlySpan<byte> key)
     {
-        if (!TryEnterOperation(out var operation))
+        return TryRemove(key, StoreWaitOptions.Default);
+    }
+
+    /// <summary>
+    /// Removes the value identified by the supplied key using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryRemove(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -395,15 +465,25 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRecoverLeases(in LeaseRecoveryOptions options, out LeaseRecoveryReport report)
     {
-        if (!TryEnterOperation(out var operation))
+        return TryRecoverLeases(options, StoreWaitOptions.Default, out report);
+    }
+
+    /// <summary>
+    /// Explicitly recovers stale active lease records using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryRecoverLeases(
+        in LeaseRecoveryOptions options,
+        StoreWaitOptions waitOptions,
+        out LeaseRecoveryReport report)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             report = default;
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -443,15 +523,25 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRecoverReservations(in ReservationRecoveryOptions options, out ReservationRecoveryReport report)
     {
-        if (!TryEnterOperation(out var operation))
+        return TryRecoverReservations(options, StoreWaitOptions.Default, out report);
+    }
+
+    /// <summary>
+    /// Explicitly recovers stale pending reservations using the supplied wait policy for shared synchronization.
+    /// </summary>
+    public StoreStatus TryRecoverReservations(
+        in ReservationRecoveryOptions options,
+        StoreWaitOptions waitOptions,
+        out ReservationRecoveryReport report)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             report = default;
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -491,19 +581,36 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public DiagnosticsSnapshot GetDiagnostics()
     {
-        if (!TryEnterOperation(out var operation))
+        _ = TryGetDiagnostics(StoreWaitOptions.Default, out var snapshot);
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Attempts to create a caller-formatted diagnostic snapshot using the default wait policy.
+    /// </summary>
+    public StoreStatus TryGetDiagnostics(out DiagnosticsSnapshot snapshot)
+    {
+        return TryGetDiagnostics(StoreWaitOptions.Default, out snapshot);
+    }
+
+    /// <summary>
+    /// Attempts to create a caller-formatted diagnostic snapshot using the supplied wait policy.
+    /// </summary>
+    public StoreStatus TryGetDiagnostics(StoreWaitOptions waitOptions, out DiagnosticsSnapshot snapshot)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return CreateDisposedSnapshot();
+            snapshot = enterStatus == StoreStatus.StoreDisposed ? CreateDisposedSnapshot() : default;
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var states = _slots.CountStates();
                 var indexState = _index.CountStates();
-                return _diagnostics.CreateSnapshot(
+                snapshot = _diagnostics.CreateSnapshot(
                     _layout.TotalBytes,
                     _layout.SlotCount,
                     states.Free,
@@ -513,6 +620,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
                     _leases.ActiveCount(),
                     indexState,
                     Volatile.Read(ref _indexCompactionCount));
+                return StoreStatus.Success;
             }
             finally
             {
@@ -533,39 +641,39 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
         try
         {
-            EnterStoreLock();
-            try
+            var lockTaken = TryEnterStoreLock(StoreWaitOptions.Default, out _);
+            if (lockTaken)
             {
-                if (_disposed)
+                try
                 {
-                    return;
+                    DisposeCore();
                 }
-
-                _disposed = true;
-                _reservationMemory.Dispose();
-                _region.Dispose();
+                finally
+                {
+                    ExitStoreLock();
+                }
             }
-            finally
+            else
             {
-                ExitStoreLock();
+                DisposeCore();
             }
         }
         finally
         {
             _lifecycle.CompleteDispose();
+            _mutex.Dispose();
         }
     }
 
     internal bool IsLeaseActive(int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return false;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _leases.IsActive(leaseRecordId, slotIndex, lifecycleId);
@@ -579,14 +687,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal int GetValueLength(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return 0;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _reader.GetValueLength(slotIndex, lifecycleId);
@@ -600,14 +707,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal int GetDescriptorLength(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return 0;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _reader.GetDescriptorLength(slotIndex, lifecycleId);
@@ -621,14 +727,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal ReadOnlySpan<byte> GetValueSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return ReadOnlySpan<byte>.Empty;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _reader.GetValueSpan(slotIndex, lifecycleId);
@@ -642,14 +747,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return ReadOnlySpan<byte>.Empty;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _reader.GetDescriptorSpan(slotIndex, lifecycleId);
@@ -663,14 +767,22 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal StoreStatus ReleaseLease(int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
     {
-        if (!TryEnterOperation(out var operation))
+        return ReleaseLease(slotIndex, lifecycleId, leaseRecordId, StoreWaitOptions.Default);
+    }
+
+    internal StoreStatus ReleaseLease(
+        int slotIndex,
+        SlotLifecycleId lifecycleId,
+        int leaseRecordId,
+        StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var status = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, lifecycleId, leaseRecordId);
@@ -711,14 +823,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal bool IsReservationPending(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return false;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _slots.IsPendingReservation(slotIndex, lifecycleId);
@@ -732,14 +843,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal int GetReservationBytesWritten(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return 0;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 return _slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) == StoreStatus.Success
@@ -755,14 +865,13 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal Span<byte> GetReservationSpan(int slotIndex, SlotLifecycleId lifecycleId, int sizeHint)
     {
-        if (!TryEnterOperation(out var operation))
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
         {
             return Span<byte>.Empty;
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 if (_slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) != StoreStatus.Success)
@@ -785,48 +894,24 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         }
     }
 
-    internal Memory<byte> GetReservationMemory(int slotIndex, SlotLifecycleId lifecycleId, int sizeHint)
-    {
-        if (!TryEnterOperation(out var operation))
-        {
-            return Memory<byte>.Empty;
-        }
-
-        using (operation)
-        {
-            EnterStoreLock();
-            try
-            {
-                if (_slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) != StoreStatus.Success)
-                {
-                    return Memory<byte>.Empty;
-                }
-
-                var remaining = slot.ValueLength - slot.Reserved;
-                if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
-                {
-                    return Memory<byte>.Empty;
-                }
-
-                return _reservationMemory.GetMemory(slotIndex, slot.Reserved, remaining);
-            }
-            finally
-            {
-                ExitStoreLock();
-            }
-        }
-    }
-
     internal StoreStatus AdvanceReservation(int slotIndex, SlotLifecycleId lifecycleId, int byteCount)
     {
-        if (!TryEnterOperation(out var operation))
+        return AdvanceReservation(slotIndex, lifecycleId, byteCount, StoreWaitOptions.Default);
+    }
+
+    internal StoreStatus AdvanceReservation(
+        int slotIndex,
+        SlotLifecycleId lifecycleId,
+        int byteCount,
+        StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -847,14 +932,18 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal StoreStatus CommitReservation(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!TryEnterOperation(out var operation))
+        return CommitReservation(slotIndex, lifecycleId, StoreWaitOptions.Default);
+    }
+
+    internal StoreStatus CommitReservation(int slotIndex, SlotLifecycleId lifecycleId, StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -887,14 +976,22 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal StoreStatus AbortReservation(int slotIndex, SlotLifecycleId lifecycleId, bool countAbort)
     {
-        if (!TryEnterOperation(out var operation))
+        return AbortReservation(slotIndex, lifecycleId, countAbort, StoreWaitOptions.Default);
+    }
+
+    internal StoreStatus AbortReservation(
+        int slotIndex,
+        SlotLifecycleId lifecycleId,
+        bool countAbort,
+        StoreWaitOptions waitOptions)
+    {
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
-            return Record(StoreStatus.StoreDisposed);
+            return Record(enterStatus);
         }
 
         using (operation)
         {
-            EnterStoreLock();
             try
             {
                 var ready = EnsureReady();
@@ -1040,9 +1137,125 @@ public sealed unsafe class SharedMemoryStore : IDisposable
             : StoreStatus.Success;
     }
 
-    private bool TryEnterOperation(out StoreLifecycleGate.Operation operation)
+    private bool TryEnterOperation(
+        StoreWaitOptions waitOptions,
+        out StoreLifecycleGate.Operation operation,
+        out StoreStatus status)
     {
-        return _lifecycle.TryEnter(out operation);
+        operation = default;
+        if (!waitOptions.IsValid)
+        {
+            status = StoreStatus.UnknownFailure;
+            return false;
+        }
+
+        if (!_lifecycle.TryEnter(out operation))
+        {
+            status = StoreStatus.StoreDisposed;
+            return false;
+        }
+
+        if (TryEnterStoreLock(waitOptions, out status))
+        {
+            return true;
+        }
+
+        operation.Dispose();
+        return false;
+    }
+
+    private bool TryEnterStoreLock(StoreWaitOptions waitOptions, out StoreStatus status)
+    {
+        if (waitOptions.CancellationToken.IsCancellationRequested)
+        {
+            status = StoreStatus.OperationCanceled;
+            return false;
+        }
+
+        bool acquired;
+        try
+        {
+            acquired = WaitForStoreMutex(waitOptions);
+        }
+        catch (AbandonedMutexException)
+        {
+            // The previous owner ended without releasing the mutex; shared state is validated after acquisition.
+            acquired = true;
+        }
+
+        if (!acquired)
+        {
+            status = waitOptions.CancellationToken.IsCancellationRequested
+                ? StoreStatus.OperationCanceled
+                : StoreStatus.StoreBusy;
+            return false;
+        }
+
+        Monitor.Enter(_gate);
+        if (_lifecycle.IsDisposingOrDisposed || _disposed)
+        {
+            Monitor.Exit(_gate);
+            _mutex.ReleaseMutex();
+            status = StoreStatus.StoreDisposed;
+            return false;
+        }
+
+        status = StoreStatus.Success;
+        return true;
+    }
+
+    private bool WaitForStoreMutex(StoreWaitOptions waitOptions)
+    {
+        if (!waitOptions.CancellationToken.CanBeCanceled)
+        {
+            return waitOptions.IsInfinite
+                ? _mutex.WaitOne(System.Threading.Timeout.InfiniteTimeSpan)
+                : _mutex.WaitOne(waitOptions.Timeout);
+        }
+
+        var waitHandles = new WaitHandle[] { _mutex, waitOptions.CancellationToken.WaitHandle };
+        var signaled = waitOptions.IsInfinite
+            ? WaitHandle.WaitAny(waitHandles)
+            : WaitHandle.WaitAny(waitHandles, waitOptions.Timeout);
+
+        return signaled switch
+        {
+            0 => true,
+            1 => false,
+            WaitHandle.WaitTimeout => false,
+            _ => false
+        };
+    }
+
+    private static StoreOpenStatus ToOpenStatus(StoreStatus status)
+    {
+        return status switch
+        {
+            StoreStatus.Success => StoreOpenStatus.Success,
+            StoreStatus.StoreBusy => StoreOpenStatus.StoreBusy,
+            StoreStatus.OperationCanceled => StoreOpenStatus.OperationCanceled,
+            StoreStatus.StoreDisposed => StoreOpenStatus.StoreBusy,
+            _ => StoreOpenStatus.MappingFailed
+        };
+    }
+
+    private void DisposeUninitialized()
+    {
+        DisposeCore();
+        _mutex.Dispose();
+        _lifecycle.CompleteDispose();
+    }
+
+    private void DisposeCore()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _reservationMemory.Dispose();
+        _region.Dispose();
     }
 
     private DiagnosticsSnapshot CreateDisposedSnapshot()

@@ -13,7 +13,6 @@ size from those limits.
 
 ```csharp
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -28,7 +27,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(128, 1_048_576, 256, 64, 256)
 };
 
-var open = Store.TryCreateOrOpen(options, out var store);
+var open = MemoryStore.TryCreateOrOpen(options, out var store);
 if (open != StoreOpenStatus.Success || store is null)
 {
     // InvalidOptions, UnsupportedPlatform, AccessDenied, MappingFailed,
@@ -41,6 +40,14 @@ if (open != StoreOpenStatus.Success || store is null)
 `OpenMode.OpenExisting` fails with `NotFound` when it does not exist.
 `OpenMode.CreateOrOpen` creates the mapping when needed and validates layout
 compatibility when opening an existing mapping.
+
+## Wait Policies
+
+Public operations use `StoreWaitOptions.Default`, a one-second bounded wait for
+shared synchronization. Use `StoreWaitOptions.NoWait` for health checks or
+request paths that should immediately return `StoreBusy`, and
+`StoreWaitOptions.Infinite` only when indefinite blocking is an intentional
+legacy-style choice. Canceled waits return `OperationCanceled`.
 
 ## Publish
 
@@ -56,9 +63,9 @@ var publish = store.TryPublish(key, payload, descriptor);
 ```
 
 Expected success returns `StoreStatus.Success`. Common non-success statuses are
-`DuplicateKey`, `KeyTooLarge`, `ValueTooLarge`, `DescriptorTooLarge`,
-`StoreFull`, `UnsupportedPlatform`, `StoreDisposed`, `CorruptStore`, and
-`UnknownFailure`.
+`DuplicateKey`, `InvalidKey`, `KeyTooLarge`, `ValueTooLarge`,
+`DescriptorTooLarge`, `StoreFull`, `StoreBusy`, `OperationCanceled`,
+`UnsupportedPlatform`, `StoreDisposed`, `CorruptStore`, and `UnknownFailure`.
 
 ## Direct Reservation Ingest
 
@@ -84,8 +91,9 @@ Advancing past the remaining payload length returns
 `ReservationWriteOutOfRange`. `Abort()` and active-reservation disposal remove
 the pending key without exposing partial bytes.
 
-Writable spans and memory are valid only while the reservation is pending and
-the store handle remains open. Descriptor bytes are fixed at reservation time.
+Writable spans are valid only while the reservation is pending and the store
+handle remains open. Descriptor bytes are fixed at reservation time. The public
+reservation API does not expose retained writable `Memory<byte>`.
 
 ## Segmented Publish
 

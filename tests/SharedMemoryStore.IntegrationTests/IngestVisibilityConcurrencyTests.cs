@@ -1,5 +1,5 @@
 using SharedMemoryStore.IntegrationTests.TestSupport;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.IntegrationTests;
 

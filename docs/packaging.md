@@ -9,7 +9,7 @@ Current package metadata:
 | Field | Value |
 |-------|-------|
 | `PackageId` | `SharedMemoryStore` |
-| `Version` | `0.2.0` |
+| `Version` | `1.0.0` |
 | `TargetFramework` | `net10.0` |
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;library` |

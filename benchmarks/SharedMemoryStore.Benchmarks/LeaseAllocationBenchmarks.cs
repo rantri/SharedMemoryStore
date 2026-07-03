@@ -1,5 +1,5 @@
 using BenchmarkDotNet.Attributes;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.Benchmarks;
 

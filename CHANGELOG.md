@@ -3,6 +3,31 @@
 All notable package and documentation changes are recorded in reverse
 chronological order.
 
+## 1.0.0 - 2026-07-03
+
+### Changed
+
+- Renamed the primary concrete store type from `SharedMemoryStore` to
+  `MemoryStore` while keeping the package ID and root namespace
+  `SharedMemoryStore`.
+- Added `StoreWaitOptions` and wait-policy overloads for open/create, publish,
+  reserve, segmented publish, acquire, remove, recovery, diagnostics, lease
+  release, and reservation token operations.
+- Removed public retained writable `ValueReservation.GetMemory`; reservation
+  payload writes now use immediate `GetSpan` access followed by `Advance`.
+- Added `InvalidKey`, `StoreBusy`, and `OperationCanceled` operation statuses
+  plus open/create equivalents for busy and canceled synchronization waits.
+- Added `SharedMemoryStoreOptions.Create` and public option validation details.
+- Pruned diagnostics failure-count convenience properties in favor of
+  `DiagnosticsSnapshot.GetFailureCount(StoreStatus)`.
+
+### Compatibility
+
+- This is a breaking production API contract step from the prerelease
+  `0.2.0` surface.
+- Runtime dependencies remain .NET BCL only; the core package does not take
+  Microsoft.Extensions hosting dependencies.
+
 ## 0.2.0 - 2026-07-02
 
 ### Added

@@ -1,7 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using System.Threading;
 using System.Threading.Tasks;
-using Store = SharedMemoryStore.SharedMemoryStore;
+using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.Benchmarks;
 
@@ -91,7 +91,7 @@ public class LifecycleStressBenchmarks
 
         var diagnostics = _store.GetDiagnostics();
         var leakedActiveLeases = diagnostics.ActiveLeaseCount;
-        var underflowDetected = diagnostics.CorruptStoreFailures > 0 || firstFailure == (int)StoreStatus.CorruptStore;
+        var underflowDetected = diagnostics.GetFailureCount(StoreStatus.CorruptStore) > 0 || firstFailure == (int)StoreStatus.CorruptStore;
         var useAfterReleaseWasDetected = Volatile.Read(ref useAfterReleaseDetected) != 0;
 
         return new LifecycleStressValidationResult(

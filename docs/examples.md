@@ -9,7 +9,6 @@ Frame-shaped values follow the opaque-byte rules in the
 
 ```csharp
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -24,7 +23,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
 };
 
-var openStatus = Store.TryCreateOrOpen(options, out var store);
+var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
 {
     Console.WriteLine(openStatus);
@@ -103,14 +102,17 @@ if (status == StoreStatus.Success)
 {
     while (reservation.RemainingBytes > 0)
     {
-        var target = reservation.GetMemory(Math.Min(4096, reservation.RemainingBytes));
-        var received = await socket.ReceiveAsync(target);
+        var receiveLength = Math.Min(4096, reservation.RemainingBytes);
+        var buffer = new byte[receiveLength];
+        var received = await socket.ReceiveAsync(buffer.AsMemory());
         if (received == 0)
         {
             _ = reservation.Abort();
             break;
         }
 
+        var target = reservation.GetSpan(received);
+        buffer.AsSpan(0, received).CopyTo(target);
         status = reservation.Advance(received);
         if (status != StoreStatus.Success)
         {

@@ -29,12 +29,12 @@ public sealed class ZeroCopyIngestIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void DirectMemoryFillCommitsCompleteImmutableValue()
+    public void DirectSpanFillCommitsSmallImmutableValue()
     {
         using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options());
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([2], 4, [9], out var reservation));
-        new byte[] { 4, 5, 6, 7 }.CopyTo(reservation.GetMemory(4).Span);
+        new byte[] { 4, 5, 6, 7 }.CopyTo(reservation.GetSpan(4));
         Assert.Equal(StoreStatus.Success, reservation.Advance(4));
         Assert.Equal(StoreStatus.Success, reservation.Commit());
 

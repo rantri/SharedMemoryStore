@@ -1,9 +1,10 @@
 using SharedMemoryStore.Layout;
+using SharedMemoryStore.Options;
 
 namespace SharedMemoryStore;
 
 /// <summary>
-/// Selects how <see cref="SharedMemoryStore.TryCreateOrOpen"/> should resolve the named mapping.
+/// Selects how <see cref="MemoryStore"/> should resolve the named mapping.
 /// </summary>
 public enum OpenMode
 {
@@ -65,6 +66,54 @@ public sealed class SharedMemoryStoreOptions
             maxDescriptorBytes,
             maxKeyBytes,
             leaseRecordCount);
+    }
+
+    /// <summary>
+    /// Creates valid ordinary store options and derives the required mapped-region size.
+    /// </summary>
+    public static SharedMemoryStoreOptions Create(
+        string name,
+        int slotCount,
+        int maxValueBytes,
+        int maxDescriptorBytes,
+        int maxKeyBytes,
+        int leaseRecordCount,
+        OpenMode openMode = OpenMode.CreateOrOpen,
+        bool enableLeaseRecovery = false)
+    {
+        return new SharedMemoryStoreOptions
+        {
+            Name = name,
+            OpenMode = openMode,
+            SlotCount = slotCount,
+            MaxValueBytes = maxValueBytes,
+            MaxDescriptorBytes = maxDescriptorBytes,
+            MaxKeyBytes = maxKeyBytes,
+            LeaseRecordCount = leaseRecordCount,
+            EnableLeaseRecovery = enableLeaseRecovery,
+            TotalBytes = CalculateRequiredBytes(
+                slotCount,
+                maxValueBytes,
+                maxDescriptorBytes,
+                maxKeyBytes,
+                leaseRecordCount)
+        };
+    }
+
+    /// <summary>
+    /// Validates this option instance and returns actionable public validation details.
+    /// </summary>
+    public StoreOptionsValidationResult Validate()
+    {
+        return SharedMemoryStoreOptionsValidator.ValidateDetailed(this, out _);
+    }
+
+    /// <summary>
+    /// Validates an option instance and returns actionable public validation details.
+    /// </summary>
+    public static StoreOptionsValidationResult Validate(SharedMemoryStoreOptions? options)
+    {
+        return SharedMemoryStoreOptionsValidator.ValidateDetailed(options, out _);
     }
 }
 

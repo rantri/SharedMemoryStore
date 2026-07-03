@@ -12,6 +12,8 @@ internal sealed class StoreLifecycleGate
 
     public bool IsDisposed => Volatile.Read(ref _state) == Disposed;
 
+    public bool IsDisposingOrDisposed => Volatile.Read(ref _state) != Open;
+
     public bool TryEnter(out Operation operation)
     {
         lock (_sync)

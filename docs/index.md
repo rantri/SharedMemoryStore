@@ -14,6 +14,8 @@ policy files, samples, and release-maintenance material.
   acquire, release, remove, reuse, diagnostics, recovery, and dispose.
 - [Examples](examples.md): basic workflow, error handling, and frame-shaped
   values represented as opaque bytes.
+- [Integration](integration.md): optional lifecycle, health, and hosting
+  boundaries outside the core package.
 
 ## By Audience
 
@@ -21,6 +23,7 @@ policy files, samples, and release-maintenance material.
   [Packaging](packaging.md), [Support](../SUPPORT.md), [License](../LICENSE).
 - Package consumers: [Usage guide](usage.md), [Errors](errors.md),
   [Diagnostics](diagnostics.md), [Lifecycle](lifecycle.md),
+  [Integration](integration.md),
   [Basic sample](../samples/BasicUsage/README.md),
   [Zero-copy ingest sample](../samples/ZeroCopyIngest/README.md).
 - Production reviewers: [Public API contract](../specs/001-frame-memory-store/contracts/public-api.md),
@@ -48,6 +51,7 @@ policy files, samples, and release-maintenance material.
 - [Errors](errors.md)
 - [Diagnostics](diagnostics.md)
 - [Lifecycle](lifecycle.md)
+- [Integration](integration.md)
 - [Packaging](packaging.md)
 - [Portability](portability.md)
 - [Performance](performance.md)
@@ -76,6 +80,7 @@ policy files, samples, and release-maintenance material.
 
 - [samples/BasicUsage/README.md](../samples/BasicUsage/README.md)
 - [samples/FrameValue/README.md](../samples/FrameValue/README.md)
+- [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md)
 - [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
 
 ## Contract Sources

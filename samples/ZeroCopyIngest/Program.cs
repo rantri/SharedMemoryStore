@@ -2,11 +2,10 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Pipelines;
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var mode = args.Length == 0 ? "all" : args[0].ToLowerInvariant();
 var options = CreateOptions();
-var openStatus = Store.TryCreateOrOpen(options, out var store);
+var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
 {
     Console.WriteLine($"open failed: {openStatus}");
@@ -54,7 +53,7 @@ using (store)
     }
 }
 
-static async Task<byte[]> RunLengthPrefixedStreamIngestAsync(Store store)
+static async Task<byte[]> RunLengthPrefixedStreamIngestAsync(MemoryStore store)
 {
     var key = new byte[] { 1 };
     var payload = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 };
@@ -74,14 +73,17 @@ static async Task<byte[]> RunLengthPrefixedStreamIngestAsync(Store store)
 
     while (reservation.RemainingBytes > 0)
     {
-        var target = reservation.GetMemory(Math.Min(4, reservation.RemainingBytes));
-        var received = await stream.ReadAsync(target);
+        var readLength = Math.Min(4, reservation.RemainingBytes);
+        var buffer = new byte[readLength];
+        var received = await stream.ReadAsync(buffer);
         if (received == 0)
         {
             Console.WriteLine($"stream abort: {reservation.Abort()}");
             return key;
         }
 
+        var target = reservation.GetSpan(received);
+        buffer.AsSpan(0, received).CopyTo(target);
         var advance = reservation.Advance(received);
         if (advance != StoreStatus.Success)
         {
@@ -95,7 +97,7 @@ static async Task<byte[]> RunLengthPrefixedStreamIngestAsync(Store store)
     return key;
 }
 
-static async Task RunPipelinesAdapterExampleAsync(Store store)
+static async Task RunPipelinesAdapterExampleAsync(MemoryStore store)
 {
     var key = new byte[] { 4 };
     var payload = new byte[] { 30, 31, 32, 33, 34, 35 };
@@ -127,7 +129,7 @@ static async Task RunPipelinesAdapterExampleAsync(Store store)
     RunReaderExample(store, key, "pipeline reader");
 }
 
-static void RunSegmentedBufferedExample(Store store)
+static void RunSegmentedBufferedExample(MemoryStore store)
 {
     var key = new byte[] { 3 };
     var first = new byte[] { 20, 21 };
@@ -140,7 +142,7 @@ static void RunSegmentedBufferedExample(Store store)
     RunReaderExample(store, key, "segmented reader");
 }
 
-static void RunAbortExample(Store store)
+static void RunAbortExample(MemoryStore store)
 {
     var key = new byte[] { 2 };
     Console.WriteLine($"abort reserve: {store.TryReserve(key, 4, default, out var reservation)}");
@@ -149,7 +151,7 @@ static void RunAbortExample(Store store)
     Console.WriteLine($"abort acquire: {store.TryAcquire(key, out _)}");
 }
 
-static byte[] SeedReaderValue(Store store)
+static byte[] SeedReaderValue(MemoryStore store)
 {
     var key = new byte[] { 9 };
     var descriptor = CreateDescriptor(3, frameKind: 9);
@@ -157,7 +159,7 @@ static byte[] SeedReaderValue(Store store)
     return key;
 }
 
-static void RunReaderExample(Store store, byte[] key, string label)
+static void RunReaderExample(MemoryStore store, byte[] key, string label)
 {
     var status = store.TryAcquire(key, out var lease);
     Console.WriteLine($"{label} acquire: {status}");

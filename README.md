@@ -1,6 +1,6 @@
 # SharedMemoryStore
 
-SharedMemoryStore is a prerelease `net10.0` library package for bounded named
+SharedMemoryStore is a `net10.0` library package for bounded named
 shared-memory key-value storage. It stores opaque byte keys, optional descriptor
 bytes, and immutable payload bytes in a memory-mapped region so producers and
 readers can exchange data without copying payloads through a broker process.
@@ -8,15 +8,14 @@ readers can exchange data without copying payloads through a broker process.
 Package identity:
 
 - PackageId: `SharedMemoryStore`
-- Version: `0.2.0`
+- Version: `1.0.0`
 - Target framework: `net10.0`
 - License: MIT, see the [license file](LICENSE)
 - Runtime dependencies: .NET BCL only
 
-The current package is intended for early adopters who can validate it against
-their own workload. Windows x64 named memory-mapped files are the first
-validated runtime target. C++ and Python are future portability audiences, not
-current bindings.
+The `1.0.0` package establishes the production public API contract. Windows x64
+named memory-mapped files are the first validated runtime target. C++ and
+Python are future portability audiences, not current bindings.
 
 ## What It Provides
 
@@ -58,7 +57,6 @@ Minimal workflow:
 
 ```csharp
 using SharedMemoryStore;
-using Store = SharedMemoryStore.SharedMemoryStore;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -73,7 +71,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
 };
 
-var open = Store.TryCreateOrOpen(options, out var store);
+var open = MemoryStore.TryCreateOrOpen(options, out var store);
 if (open != StoreOpenStatus.Success || store is null)
 {
     return;
@@ -115,6 +113,8 @@ safe across generation rollover.
   observability.
 - [Lifecycle](docs/lifecycle.md): store ownership, leases, removal, stale
   recovery, abnormal termination, and cleanup.
+- [Integration](docs/integration.md): optional lifecycle, health, hosting, and
+  narrow-interface boundaries outside the core package.
 - [Examples](docs/examples.md): basic workflow, error handling, and
   frame-shaped values.
 - [Performance scope](docs/performance.md): measured scope and unmeasured
@@ -139,6 +139,7 @@ Runnable samples:
 - [Basic usage sample](samples/BasicUsage/README.md)
 - [Frame value sample](samples/FrameValue/README.md)
 - [Zero-copy ingest sample](samples/ZeroCopyIngest/README.md)
+- [Hosted service integration sample](samples/HostedServiceIntegration/README.md)
 
 ## Project Policies
 
@@ -171,4 +172,4 @@ dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifac
 
 Documentation changes must keep package metadata, README content, release notes,
 support policy, security policy, and contract links aligned with the current
-`0.2.0` package behavior.
+`1.0.0` package behavior.

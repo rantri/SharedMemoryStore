@@ -14,9 +14,9 @@ public sealed class ErrorTaxonomyContractTests
         Assert.Equal(StoreStatus.InvalidReservation, reservation.Abort());
 
         var diagnostics = store.GetDiagnostics();
-        Assert.Equal(1, diagnostics.ReservationIncompleteFailures);
-        Assert.Equal(1, diagnostics.ReservationWriteOutOfRangeFailures);
-        Assert.Equal(1, diagnostics.InvalidReservationFailures);
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.ReservationIncomplete));
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.ReservationWriteOutOfRange));
+        Assert.Equal(1, diagnostics.GetFailureCount(StoreStatus.InvalidReservation));
         Assert.Equal(1, diagnostics.AbortedReservationCount);
         Assert.Equal(0, diagnostics.ActiveReservationRecoveryCount);
         Assert.Equal(0, diagnostics.UnsupportedReservationRecoveryCount);

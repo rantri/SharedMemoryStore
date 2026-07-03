@@ -41,7 +41,6 @@ Invoke-DotNet new console -f net10.0 -n SharedMemoryStore.ConsumerSmoke -o $cons
 Invoke-DotNet add (Join-Path $consumerDir "SharedMemoryStore.ConsumerSmoke.csproj") package SharedMemoryStore --source $packageDir
 
 $program = @'
-using Store = SharedMemoryStore.SharedMemoryStore;
 using SharedMemoryStore;
 using System.Buffers;
 using System.Buffers.Binary;
@@ -59,7 +58,7 @@ var options = new SharedMemoryStoreOptions
     TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 32, 8, 8, 2)
 };
 
-var open = Store.TryCreateOrOpen(options, out var store);
+var open = MemoryStore.TryCreateOrOpen(options, out var store);
 if (open != StoreOpenStatus.Success || store is null)
 {
     return 1;
@@ -89,7 +88,7 @@ if (store.TryPublish([1], [6]) != StoreStatus.StoreDisposed) return 19;
 
 return 0;
 
-static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(Store store, byte[] key, byte[] frame, byte[] descriptor)
+static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(MemoryStore store, byte[] key, byte[] frame, byte[] descriptor)
 {
     await using var stream = new MemoryStream(frame);
     var header = new byte[4];
@@ -100,12 +99,15 @@ static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(Store store, byte
 
     while (reservation.RemainingBytes > 0)
     {
-        var read = await stream.ReadAsync(reservation.GetMemory(reservation.RemainingBytes));
+        var buffer = new byte[reservation.RemainingBytes];
+        var read = await stream.ReadAsync(buffer);
         if (read == 0)
         {
             return reservation.Abort();
         }
 
+        var target = reservation.GetSpan(read);
+        buffer.AsSpan(0, read).CopyTo(target);
         status = reservation.Advance(read);
         if (status != StoreStatus.Success)
         {
@@ -117,7 +119,7 @@ static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(Store store, byte
     return reservation.Commit();
 }
 
-static StoreStatus ReadStoredFrame(Store store, byte[] key, byte[] expectedPayload)
+static StoreStatus ReadStoredFrame(MemoryStore store, byte[] key, byte[] expectedPayload)
 {
     var status = store.TryAcquire(key, out var lease);
     if (status != StoreStatus.Success) return status;

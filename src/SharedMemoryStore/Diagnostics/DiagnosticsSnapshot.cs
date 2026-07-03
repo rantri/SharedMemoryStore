@@ -60,27 +60,52 @@ public readonly struct DiagnosticsSnapshot
         MaxObservedProbeLength = maxObservedProbeLength;
         IndexCompactionCount = indexCompactionCount;
         LastFailureStatus = lastFailureStatus;
-        DuplicateKeyFailures = failureCounts[(int)StoreStatus.DuplicateKey];
-        NotFoundFailures = failureCounts[(int)StoreStatus.NotFound];
-        KeyTooLargeFailures = failureCounts[(int)StoreStatus.KeyTooLarge];
-        ValueTooLargeFailures = failureCounts[(int)StoreStatus.ValueTooLarge];
-        DescriptorTooLargeFailures = failureCounts[(int)StoreStatus.DescriptorTooLarge];
-        StoreFullFailures = failureCounts[(int)StoreStatus.StoreFull];
-        LeaseTableFullFailures = failureCounts[(int)StoreStatus.LeaseTableFull];
-        InvalidLeaseFailures = failureCounts[(int)StoreStatus.InvalidLease];
-        LeaseAlreadyReleasedFailures = failureCounts[(int)StoreStatus.LeaseAlreadyReleased];
-        RemovePendingFailures = failureCounts[(int)StoreStatus.RemovePending];
-        UnsupportedPlatformFailures = failureCounts[(int)StoreStatus.UnsupportedPlatform];
-        StoreDisposedFailures = failureCounts[(int)StoreStatus.StoreDisposed];
-        CorruptStoreFailures = failureCounts[(int)StoreStatus.CorruptStore];
-        AccessDeniedFailures = failureCounts[(int)StoreStatus.AccessDenied];
-        UnknownFailureFailures = failureCounts[(int)StoreStatus.UnknownFailure];
-        InvalidReservationFailures = failureCounts[(int)StoreStatus.InvalidReservation];
-        ReservationIncompleteFailures = failureCounts[(int)StoreStatus.ReservationIncomplete];
-        ReservationAlreadyCompletedFailures = failureCounts[(int)StoreStatus.ReservationAlreadyCompleted];
-        ReservationWriteOutOfRangeFailures = failureCounts[(int)StoreStatus.ReservationWriteOutOfRange];
-        FailedCommitCount = ReservationIncompleteFailures;
+        _duplicateKeyFailures = failureCounts[(int)StoreStatus.DuplicateKey];
+        _notFoundFailures = failureCounts[(int)StoreStatus.NotFound];
+        _keyTooLargeFailures = failureCounts[(int)StoreStatus.KeyTooLarge];
+        _valueTooLargeFailures = failureCounts[(int)StoreStatus.ValueTooLarge];
+        _descriptorTooLargeFailures = failureCounts[(int)StoreStatus.DescriptorTooLarge];
+        _storeFullFailures = failureCounts[(int)StoreStatus.StoreFull];
+        _leaseTableFullFailures = failureCounts[(int)StoreStatus.LeaseTableFull];
+        _invalidLeaseFailures = failureCounts[(int)StoreStatus.InvalidLease];
+        _leaseAlreadyReleasedFailures = failureCounts[(int)StoreStatus.LeaseAlreadyReleased];
+        _removePendingFailures = failureCounts[(int)StoreStatus.RemovePending];
+        _unsupportedPlatformFailures = failureCounts[(int)StoreStatus.UnsupportedPlatform];
+        _storeDisposedFailures = failureCounts[(int)StoreStatus.StoreDisposed];
+        _corruptStoreFailures = failureCounts[(int)StoreStatus.CorruptStore];
+        _accessDeniedFailures = failureCounts[(int)StoreStatus.AccessDenied];
+        _unknownFailureFailures = failureCounts[(int)StoreStatus.UnknownFailure];
+        _invalidReservationFailures = failureCounts[(int)StoreStatus.InvalidReservation];
+        _reservationIncompleteFailures = failureCounts[(int)StoreStatus.ReservationIncomplete];
+        _reservationAlreadyCompletedFailures = failureCounts[(int)StoreStatus.ReservationAlreadyCompleted];
+        _reservationWriteOutOfRangeFailures = failureCounts[(int)StoreStatus.ReservationWriteOutOfRange];
+        _invalidKeyFailures = failureCounts[(int)StoreStatus.InvalidKey];
+        _storeBusyFailures = failureCounts[(int)StoreStatus.StoreBusy];
+        _operationCanceledFailures = failureCounts[(int)StoreStatus.OperationCanceled];
     }
+
+    private readonly long _duplicateKeyFailures;
+    private readonly long _notFoundFailures;
+    private readonly long _keyTooLargeFailures;
+    private readonly long _valueTooLargeFailures;
+    private readonly long _descriptorTooLargeFailures;
+    private readonly long _storeFullFailures;
+    private readonly long _leaseTableFullFailures;
+    private readonly long _invalidLeaseFailures;
+    private readonly long _leaseAlreadyReleasedFailures;
+    private readonly long _removePendingFailures;
+    private readonly long _unsupportedPlatformFailures;
+    private readonly long _storeDisposedFailures;
+    private readonly long _corruptStoreFailures;
+    private readonly long _accessDeniedFailures;
+    private readonly long _unknownFailureFailures;
+    private readonly long _invalidReservationFailures;
+    private readonly long _reservationIncompleteFailures;
+    private readonly long _reservationAlreadyCompletedFailures;
+    private readonly long _reservationWriteOutOfRangeFailures;
+    private readonly long _invalidKeyFailures;
+    private readonly long _storeBusyFailures;
+    private readonly long _operationCanceledFailures;
 
     /// <summary>Gets the configured mapped-region length.</summary>
     public long TotalBytes { get; }
@@ -105,9 +130,6 @@ public readonly struct DiagnosticsSnapshot
 
     /// <summary>Gets the number of reservations aborted through this store handle.</summary>
     public long AbortedReservationCount { get; }
-
-    /// <summary>Gets the number of failed reservation commit attempts through this store handle.</summary>
-    public long FailedCommitCount { get; }
 
     /// <summary>Gets the number of stale or eligible leases recovered through this store handle.</summary>
     public long RecoveredLeaseCount { get; }
@@ -166,63 +188,6 @@ public readonly struct DiagnosticsSnapshot
     /// <summary>Gets the last non-success status observed by this store handle.</summary>
     public StoreStatus LastFailureStatus { get; }
 
-    /// <summary>Gets duplicate-key failure count.</summary>
-    public long DuplicateKeyFailures { get; }
-
-    /// <summary>Gets not-found failure count.</summary>
-    public long NotFoundFailures { get; }
-
-    /// <summary>Gets oversized-key failure count.</summary>
-    public long KeyTooLargeFailures { get; }
-
-    /// <summary>Gets oversized-value failure count.</summary>
-    public long ValueTooLargeFailures { get; }
-
-    /// <summary>Gets oversized-descriptor failure count.</summary>
-    public long DescriptorTooLargeFailures { get; }
-
-    /// <summary>Gets store-full failure count.</summary>
-    public long StoreFullFailures { get; }
-
-    /// <summary>Gets lease-table-full failure count.</summary>
-    public long LeaseTableFullFailures { get; }
-
-    /// <summary>Gets invalid-lease failure count.</summary>
-    public long InvalidLeaseFailures { get; }
-
-    /// <summary>Gets repeated-release failure count.</summary>
-    public long LeaseAlreadyReleasedFailures { get; }
-
-    /// <summary>Gets remove-pending count.</summary>
-    public long RemovePendingFailures { get; }
-
-    /// <summary>Gets unsupported-platform failure count.</summary>
-    public long UnsupportedPlatformFailures { get; }
-
-    /// <summary>Gets disposed-store failure count.</summary>
-    public long StoreDisposedFailures { get; }
-
-    /// <summary>Gets corrupt-store failure count.</summary>
-    public long CorruptStoreFailures { get; }
-
-    /// <summary>Gets access-denied failure count.</summary>
-    public long AccessDeniedFailures { get; }
-
-    /// <summary>Gets unknown-failure count.</summary>
-    public long UnknownFailureFailures { get; }
-
-    /// <summary>Gets invalid-reservation failure count.</summary>
-    public long InvalidReservationFailures { get; }
-
-    /// <summary>Gets incomplete-reservation failure count.</summary>
-    public long ReservationIncompleteFailures { get; }
-
-    /// <summary>Gets already-completed-reservation failure count.</summary>
-    public long ReservationAlreadyCompletedFailures { get; }
-
-    /// <summary>Gets out-of-range reservation write failure count.</summary>
-    public long ReservationWriteOutOfRangeFailures { get; }
-
     /// <summary>
     /// Returns the failure count for a deterministic operation status.
     /// </summary>
@@ -230,25 +195,28 @@ public readonly struct DiagnosticsSnapshot
     {
         return status switch
         {
-            StoreStatus.DuplicateKey => DuplicateKeyFailures,
-            StoreStatus.NotFound => NotFoundFailures,
-            StoreStatus.KeyTooLarge => KeyTooLargeFailures,
-            StoreStatus.ValueTooLarge => ValueTooLargeFailures,
-            StoreStatus.DescriptorTooLarge => DescriptorTooLargeFailures,
-            StoreStatus.StoreFull => StoreFullFailures,
-            StoreStatus.LeaseTableFull => LeaseTableFullFailures,
-            StoreStatus.InvalidLease => InvalidLeaseFailures,
-            StoreStatus.LeaseAlreadyReleased => LeaseAlreadyReleasedFailures,
-            StoreStatus.RemovePending => RemovePendingFailures,
-            StoreStatus.UnsupportedPlatform => UnsupportedPlatformFailures,
-            StoreStatus.StoreDisposed => StoreDisposedFailures,
-            StoreStatus.CorruptStore => CorruptStoreFailures,
-            StoreStatus.AccessDenied => AccessDeniedFailures,
-            StoreStatus.UnknownFailure => UnknownFailureFailures,
-            StoreStatus.InvalidReservation => InvalidReservationFailures,
-            StoreStatus.ReservationIncomplete => ReservationIncompleteFailures,
-            StoreStatus.ReservationAlreadyCompleted => ReservationAlreadyCompletedFailures,
-            StoreStatus.ReservationWriteOutOfRange => ReservationWriteOutOfRangeFailures,
+            StoreStatus.DuplicateKey => _duplicateKeyFailures,
+            StoreStatus.NotFound => _notFoundFailures,
+            StoreStatus.KeyTooLarge => _keyTooLargeFailures,
+            StoreStatus.ValueTooLarge => _valueTooLargeFailures,
+            StoreStatus.DescriptorTooLarge => _descriptorTooLargeFailures,
+            StoreStatus.StoreFull => _storeFullFailures,
+            StoreStatus.LeaseTableFull => _leaseTableFullFailures,
+            StoreStatus.InvalidLease => _invalidLeaseFailures,
+            StoreStatus.LeaseAlreadyReleased => _leaseAlreadyReleasedFailures,
+            StoreStatus.RemovePending => _removePendingFailures,
+            StoreStatus.UnsupportedPlatform => _unsupportedPlatformFailures,
+            StoreStatus.StoreDisposed => _storeDisposedFailures,
+            StoreStatus.CorruptStore => _corruptStoreFailures,
+            StoreStatus.AccessDenied => _accessDeniedFailures,
+            StoreStatus.UnknownFailure => _unknownFailureFailures,
+            StoreStatus.InvalidReservation => _invalidReservationFailures,
+            StoreStatus.ReservationIncomplete => _reservationIncompleteFailures,
+            StoreStatus.ReservationAlreadyCompleted => _reservationAlreadyCompletedFailures,
+            StoreStatus.ReservationWriteOutOfRange => _reservationWriteOutOfRangeFailures,
+            StoreStatus.InvalidKey => _invalidKeyFailures,
+            StoreStatus.StoreBusy => _storeBusyFailures,
+            StoreStatus.OperationCanceled => _operationCanceledFailures,
             _ => 0
         };
     }

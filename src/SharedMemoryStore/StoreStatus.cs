@@ -30,7 +30,13 @@ public enum StoreOpenStatus
     AccessDenied = 7,
 
     /// <summary>The runtime failed to create or open the memory mapping.</summary>
-    MappingFailed = 8
+    MappingFailed = 8,
+
+    /// <summary>The store could not be opened because shared synchronization was busy for the selected wait policy.</summary>
+    StoreBusy = 9,
+
+    /// <summary>The open or create operation was canceled before shared synchronization was acquired.</summary>
+    OperationCanceled = 10
 }
 
 /// <summary>
@@ -96,5 +102,14 @@ public enum StoreStatus
     ReservationAlreadyCompleted = 18,
 
     /// <summary>The reservation write progress would move outside the announced payload length.</summary>
-    ReservationWriteOutOfRange = 19
+    ReservationWriteOutOfRange = 19,
+
+    /// <summary>The supplied key is empty or otherwise invalid.</summary>
+    InvalidKey = 20,
+
+    /// <summary>Shared synchronization was busy for the selected wait policy.</summary>
+    StoreBusy = 21,
+
+    /// <summary>The operation was canceled before shared synchronization was acquired.</summary>
+    OperationCanceled = 22
 }

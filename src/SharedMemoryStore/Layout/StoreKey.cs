@@ -7,7 +7,12 @@ internal static unsafe class StoreKey
 
     public static StoreStatus Validate(ReadOnlySpan<byte> key, int maxKeyBytes)
     {
-        return key.Length is <= 0 || key.Length > maxKeyBytes
+        if (key.Length <= 0)
+        {
+            return StoreStatus.InvalidKey;
+        }
+
+        return key.Length > maxKeyBytes
             ? StoreStatus.KeyTooLarge
             : StoreStatus.Success;
     }

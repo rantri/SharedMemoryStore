@@ -7,12 +7,12 @@ namespace SharedMemoryStore;
 /// </summary>
 public readonly struct ValueLease : IDisposable
 {
-    private readonly SharedMemoryStore? _store;
+    private readonly MemoryStore? _store;
     private readonly int _slotIndex;
     private readonly SlotLifecycleId _lifecycleId;
     private readonly int _leaseRecordId;
 
-    internal ValueLease(SharedMemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
+    internal ValueLease(MemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
     {
         _store = store;
         _slotIndex = slotIndex;
@@ -41,6 +41,14 @@ public readonly struct ValueLease : IDisposable
     public StoreStatus Release()
     {
         return _store?.ReleaseLease(_slotIndex, _lifecycleId, _leaseRecordId) ?? StoreStatus.InvalidLease;
+    }
+
+    /// <summary>
+    /// Releases the lease exactly once using the supplied wait policy.
+    /// </summary>
+    public StoreStatus Release(StoreWaitOptions waitOptions)
+    {
+        return _store?.ReleaseLease(_slotIndex, _lifecycleId, _leaseRecordId, waitOptions) ?? StoreStatus.InvalidLease;
     }
 
     /// <summary>
