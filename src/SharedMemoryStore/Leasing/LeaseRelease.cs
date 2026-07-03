@@ -11,7 +11,7 @@ internal static class LeaseRelease
         ReusableSlotTable slots,
         SlotReclaimer reclaimer,
         int slotIndex,
-        int generation,
+        SlotLifecycleId lifecycleId,
         int leaseRecordId)
     {
         if ((uint)leaseRecordId >= (uint)registry.RecordCount)
@@ -28,13 +28,13 @@ internal static class LeaseRelease
 
         if (state != LayoutConstants.LeaseActive
             || record.SlotIndex != slotIndex
-            || record.SlotGeneration != generation)
+            || !lifecycleId.Matches(record.SlotGeneration, record.SlotReuseEpoch))
         {
             return StoreStatus.InvalidLease;
         }
 
         ref var slot = ref slots.GetSlot(slotIndex);
-        if (slot.Generation != generation)
+        if (!lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
         {
             return StoreStatus.InvalidLease;
         }
@@ -48,7 +48,7 @@ internal static class LeaseRelease
         }
 
         return remaining == 0
-            ? reclaimer.ReclaimAfterFinalRelease(slotIndex, generation)
+            ? reclaimer.ReclaimAfterFinalRelease(slotIndex, lifecycleId)
             : StoreStatus.Success;
     }
 }

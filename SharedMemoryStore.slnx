@@ -18,6 +18,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj" />
     <Project Path="tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj" />
+    <Project Path="tests/SharedMemoryStore.LeaseOwnerTool/SharedMemoryStore.LeaseOwnerTool.csproj" />
     <Project Path="tests/SharedMemoryStore.UnitTests/SharedMemoryStore.UnitTests.csproj" />
   </Folder>
 </Solution>

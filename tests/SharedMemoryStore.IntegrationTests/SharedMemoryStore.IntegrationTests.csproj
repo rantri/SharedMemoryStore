@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SharedMemoryStore\SharedMemoryStore.csproj" />
+    <ProjectReference Include="..\SharedMemoryStore.LeaseOwnerTool\SharedMemoryStore.LeaseOwnerTool.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

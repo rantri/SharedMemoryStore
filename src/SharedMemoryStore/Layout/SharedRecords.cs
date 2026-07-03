@@ -41,6 +41,7 @@ internal struct SharedIndexEntryHeader
     public ulong KeyHash;
     public int SlotIndex;
     public int SlotGeneration;
+    public long SlotReuseEpoch;
 }
 
 [StructLayout(LayoutKind.Sequential, Pack = 8)]
@@ -48,6 +49,7 @@ internal struct SharedSlotMetadata
 {
     public int State;
     public int Generation;
+    public long ReuseEpoch;
     public int UsageCount;
     public int KeyLength;
     public int DescriptorLength;
@@ -67,6 +69,7 @@ internal struct SharedLeaseRecord
     public int LeaseRecordId;
     public int SlotIndex;
     public int SlotGeneration;
+    public long SlotReuseEpoch;
     public int OwnerProcessId;
     public int Reserved;
     public long AcquireSequence;

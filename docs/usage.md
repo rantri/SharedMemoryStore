@@ -141,6 +141,10 @@ The first release of an active lease returns `Success`. Releasing the same lease
 again returns `LeaseAlreadyReleased` or `InvalidLease` depending on the lease
 record state.
 
+Explicit lease recovery reports recovered, active, unsupported, and failed
+records. Current-process recovery never reclaims leases owned by another live
+process.
+
 ## Remove and Reuse
 
 Remove deletes the key from the public index and makes the slot reusable when no
@@ -153,6 +157,8 @@ var remove = store.TryRemove(key);
 If no readers hold a lease, expected status is `Success` and the slot can be
 reused immediately. If active leases exist, expected status is `RemovePending`.
 The final release advances the slot generation and allows reuse.
+The stored lifecycle identity also includes a reuse epoch so long-running
+generation rollover does not make stale leases or reservations valid again.
 
 ```csharp
 _ = store.TryPublish(key, [10]);

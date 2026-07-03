@@ -67,13 +67,19 @@ namespace SharedMemoryStore.Ingest
                     continue;
                 }
 
-                if (!index.TryRemoveSlot(i, slot.Generation))
+                var lifecycleId = SlotLifecycleId.FromSlot(slot);
+                if (!index.TryRemoveSlot(i, lifecycleId))
                 {
                     failed++;
                     continue;
                 }
 
-                slots.Reclaim(i);
+                if (slots.Reclaim(i) != StoreStatus.Success)
+                {
+                    failed++;
+                    continue;
+                }
+
                 recovered++;
             }
 

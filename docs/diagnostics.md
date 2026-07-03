@@ -23,6 +23,14 @@ metrics, traces, alerts, or support evidence.
 - `ActiveReservationCount`: slots currently reserved but not committed.
 - `AbortedReservationCount`: reservations aborted through this handle.
 - `FailedCommitCount`: incomplete reservation commit attempts.
+- `RecoveredLeaseCount`: stale or eligible leases recovered through this
+  handle.
+- `ActiveLeaseRecoveryCount`: active leases skipped during explicit recovery
+  scans.
+- `UnsupportedLeaseRecoveryCount`: lease owner checks that could not be
+  evaluated safely.
+- `FailedLeaseRecoveryCount`: lease records recovery could not mutate because
+  shared state was inconsistent.
 - `RecoveredReservationCount`: stale reservations recovered through this handle.
 - `ActiveReservationRecoveryCount`: reservations observed as still active during
   explicit recovery scans.
@@ -31,6 +39,16 @@ metrics, traces, alerts, or support evidence.
 - `FailedReservationRecoveryCount`: reservations recovery could not reclaim
   because slot or index state was inconsistent.
 - `CapacityPressureCount`: count of store-full and lease-table-full failures.
+- `IndexEntryCount`, `OccupiedIndexEntryCount`,
+  `TombstoneIndexEntryCount`, and `EmptyIndexEntryCount`: key-index occupancy
+  split by live entries, tombstones, and empty probe terminators.
+- `TombstonePressureRatio`: tombstones divided by configured index entries.
+- `UsableIndexCapacity`: empty plus tombstone entries available to future
+  inserts.
+- `LastObservedProbeLength` and `MaxObservedProbeLength`: bounded key-index
+  probe lengths observed by this handle.
+- `IndexCompactionCount`: synchronous internal key-index compactions completed
+  by this handle.
 - `LastFailureStatus`: last non-success operation status observed by the
   handle.
 - per-status failure counters for duplicate key, missing key, oversized inputs,
@@ -69,6 +87,12 @@ var fullFailures = snapshot.GetFailureCount(StoreStatus.StoreFull);
   aborted, disposed, or recovered a reservation outside the expected lifecycle.
 - Nonzero reservation recovery result counters identify whether recovery found
   live owners, unsupported owner-liveness checks, or inconsistent shared state.
+- Nonzero lease recovery result counters identify recovered leases, live-owner
+  skips, unsupported owner checks, and unsafe records.
+- Rising tombstone counts with low occupied counts indicate churn pressure
+  rather than live capacity pressure. Internal compaction is synchronous and
+  caller-triggered by normal mutation paths; the library does not start a
+  background maintenance worker.
 - `UnsupportedPlatformFailures` indicates a platform or recovery capability
   mismatch.
 - `CorruptStoreFailures` means the process should stop unsafe access and gather

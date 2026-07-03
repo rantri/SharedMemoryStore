@@ -77,10 +77,45 @@ public readonly record struct LeaseRecoveryOptions(bool RecoverCurrentProcessLea
 /// <summary>
 /// Summary returned by explicit stale lease recovery.
 /// </summary>
-/// <param name="ScannedRecordCount">The number of lease records inspected.</param>
-/// <param name="RecoveredLeaseCount">The number of active records recovered.</param>
-/// <param name="UnsupportedLeaseCount">The number of records that could not be recovered because platform support was unavailable.</param>
-public readonly record struct LeaseRecoveryReport(
-    int ScannedRecordCount,
-    int RecoveredLeaseCount,
-    int UnsupportedLeaseCount);
+public readonly record struct LeaseRecoveryReport
+{
+    /// <summary>
+    /// Initializes a recovery report using the original three-result shape.
+    /// </summary>
+    public LeaseRecoveryReport(int scannedRecordCount, int recoveredLeaseCount, int unsupportedLeaseCount)
+        : this(scannedRecordCount, recoveredLeaseCount, 0, unsupportedLeaseCount, 0)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a recovery report with all owner-safety decision counts.
+    /// </summary>
+    public LeaseRecoveryReport(
+        int scannedRecordCount,
+        int recoveredLeaseCount,
+        int activeLeaseCount,
+        int unsupportedLeaseCount,
+        int failedRecoveryCount)
+    {
+        ScannedRecordCount = scannedRecordCount;
+        RecoveredLeaseCount = recoveredLeaseCount;
+        ActiveLeaseCount = activeLeaseCount;
+        UnsupportedLeaseCount = unsupportedLeaseCount;
+        FailedRecoveryCount = failedRecoveryCount;
+    }
+
+    /// <summary>Gets the number of lease records inspected.</summary>
+    public int ScannedRecordCount { get; }
+
+    /// <summary>Gets the number of active records recovered.</summary>
+    public int RecoveredLeaseCount { get; }
+
+    /// <summary>Gets the number of active records skipped because their owner is still live or not eligible.</summary>
+    public int ActiveLeaseCount { get; }
+
+    /// <summary>Gets the number of records that could not be evaluated because platform support was unavailable.</summary>
+    public int UnsupportedLeaseCount { get; }
+
+    /// <summary>Gets the number of records rejected because shared state was inconsistent or unsafe to mutate.</summary>
+    public int FailedRecoveryCount { get; }
+}

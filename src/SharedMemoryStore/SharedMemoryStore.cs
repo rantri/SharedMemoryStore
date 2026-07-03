@@ -5,6 +5,7 @@ using SharedMemoryStore.Ingest;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.Layout;
 using SharedMemoryStore.Leasing;
+using SharedMemoryStore.Lifecycle;
 using SharedMemoryStore.Options;
 using SharedMemoryStore.Slots;
 
@@ -28,6 +29,8 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     private readonly StoreDiagnostics _diagnostics;
     private readonly bool _leaseRecoveryEnabled;
     private readonly ReservationMemoryManager _reservationMemory;
+    private readonly StoreLifecycleGate _lifecycle = new();
+    private long _indexCompactionCount;
     private bool _disposed;
 
     private SharedMemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
@@ -107,64 +110,68 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryPublish(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor = default)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
-            {
-                return Record(ready);
-            }
-
-            var validation = ValidateOperationInput(key, value, descriptor);
-            if (validation != StoreStatus.Success)
-            {
-                return Record(validation);
-            }
-
-            var hash = StoreKey.Hash(key);
-            if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
-            {
-                ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
-                if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
-                {
-                    return Record(StoreStatus.DuplicateKey);
-                }
-            }
-
-            if (!_slots.TryReserve(out var slotIndex))
-            {
-                return Record(StoreStatus.StoreFull);
-            }
-
-            ref var slot = ref _slots.GetSlot(slotIndex);
+            EnterStoreLock();
             try
             {
-                _writer.Write(ref slot, value, descriptor);
-                if (!_index.TryInsert(key, hash, slotIndex, slot.Generation))
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
                 {
-                    _slots.Abort(slotIndex);
-                    return Record(StoreStatus.DuplicateKey);
+                    return Record(ready);
                 }
 
-                var sequence = Interlocked.Increment(ref Header.Sequence);
-                _slots.Commit(slotIndex, hash, key.Length, descriptor.Length, value.Length, sequence);
-                return StoreStatus.Success;
+                var validation = ValidateOperationInput(key, value, descriptor);
+                if (validation != StoreStatus.Success)
+                {
+                    return Record(validation);
+                }
+
+                var hash = StoreKey.Hash(key);
+                if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
+                {
+                    ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
+                    if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
+                    {
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+                }
+
+                if (!_slots.TryReserve(out var slotIndex))
+                {
+                    return Record(StoreStatus.StoreFull);
+                }
+
+                ref var slot = ref _slots.GetSlot(slotIndex);
+                var lifecycleId = SlotLifecycleId.FromSlot(slot);
+                try
+                {
+                    _writer.Write(ref slot, value, descriptor);
+                    if (!_index.TryInsert(key, hash, slotIndex, lifecycleId))
+                    {
+                        _slots.Abort(slotIndex);
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+
+                    var sequence = Interlocked.Increment(ref Header.Sequence);
+                    _slots.Commit(slotIndex, hash, key.Length, descriptor.Length, value.Length, sequence);
+                    return StoreStatus.Success;
+                }
+                catch (Exception)
+                {
+                    _slots.Abort(slotIndex);
+                    return Record(StoreStatus.UnknownFailure);
+                }
             }
-            catch (Exception)
+            finally
             {
-                _slots.Abort(slotIndex);
-                return Record(StoreStatus.UnknownFailure);
+                ExitStoreLock();
             }
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -184,65 +191,69 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     {
         reservation = default;
 
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
-            {
-                return Record(ready);
-            }
-
-            var validation = ValidateReservationInput(key, payloadLength, descriptor);
-            if (validation != StoreStatus.Success)
-            {
-                return Record(validation);
-            }
-
-            var hash = StoreKey.Hash(key);
-            if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
-            {
-                ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
-                if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
-                {
-                    return Record(StoreStatus.DuplicateKey);
-                }
-            }
-
-            if (!_slots.TryReserve(out var slotIndex))
-            {
-                return Record(StoreStatus.StoreFull);
-            }
-
-            ref var slot = ref _slots.GetSlot(slotIndex);
+            EnterStoreLock();
             try
             {
-                _slots.PrepareReservation(slotIndex, hash, key.Length, descriptor.Length, payloadLength);
-                _writer.WriteDescriptor(ref slot, descriptor);
-                if (!_index.TryInsert(key, hash, slotIndex, slot.Generation))
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
                 {
-                    _slots.Abort(slotIndex);
-                    return Record(StoreStatus.DuplicateKey);
+                    return Record(ready);
                 }
 
-                reservation = new ValueReservation(this, slotIndex, slot.Generation, payloadLength);
-                return StoreStatus.Success;
+                var validation = ValidateReservationInput(key, payloadLength, descriptor);
+                if (validation != StoreStatus.Success)
+                {
+                    return Record(validation);
+                }
+
+                var hash = StoreKey.Hash(key);
+                if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
+                {
+                    ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
+                    if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
+                    {
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+                }
+
+                if (!_slots.TryReserve(out var slotIndex))
+                {
+                    return Record(StoreStatus.StoreFull);
+                }
+
+                ref var slot = ref _slots.GetSlot(slotIndex);
+                var lifecycleId = SlotLifecycleId.FromSlot(slot);
+                try
+                {
+                    _slots.PrepareReservation(slotIndex, hash, key.Length, descriptor.Length, payloadLength);
+                    _writer.WriteDescriptor(ref slot, descriptor);
+                    if (!_index.TryInsert(key, hash, slotIndex, lifecycleId))
+                    {
+                        _slots.Abort(slotIndex);
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+
+                    reservation = new ValueReservation(this, slotIndex, lifecycleId, payloadLength);
+                    return StoreStatus.Success;
+                }
+                catch (Exception)
+                {
+                    _index.TryRemoveSlot(slotIndex, lifecycleId);
+                    _slots.Abort(slotIndex);
+                    return Record(StoreStatus.UnknownFailure);
+                }
             }
-            catch (Exception)
+            finally
             {
-                _index.TryRemoveSlot(slotIndex, slot.Generation);
-                _slots.Abort(slotIndex);
-                return Record(StoreStatus.UnknownFailure);
+                ExitStoreLock();
             }
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -255,7 +266,7 @@ public sealed unsafe class SharedMemoryStore : IDisposable
         ReadOnlySpan<byte> descriptor,
         out long copiedBytes)
     {
-        if (_disposed)
+        if (_lifecycle.IsDisposed)
         {
             copiedBytes = 0;
             return Record(StoreStatus.StoreDisposed);
@@ -272,57 +283,62 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     {
         lease = default;
 
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
 
-            var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
-            if (keyStatus != StoreStatus.Success)
+                var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+                if (keyStatus != StoreStatus.Success)
+                {
+                    return Record(keyStatus);
+                }
+
+                var hash = StoreKey.Hash(key);
+                if (!_index.TryFind(key, hash, out var slotIndex, out var lifecycleId))
+                {
+                    return Record(StoreStatus.NotFound);
+                }
+
+                ref var slot = ref _slots.GetSlot(slotIndex);
+                if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished
+                    || !lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
+                {
+                    return Record(StoreStatus.NotFound);
+                }
+
+                var sequence = Interlocked.Increment(ref Header.Sequence);
+                if (!_leases.TryActivate(slotIndex, lifecycleId, sequence, out var leaseRecordId))
+                {
+                    return Record(StoreStatus.LeaseTableFull);
+                }
+
+                Interlocked.Increment(ref slot.UsageCount);
+                if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished
+                    || !lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
+                {
+                    _ = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, lifecycleId, leaseRecordId);
+                    return Record(StoreStatus.NotFound);
+                }
+
+                lease = new ValueLease(this, slotIndex, lifecycleId, leaseRecordId);
+                return StoreStatus.Success;
+            }
+            finally
             {
-                return Record(keyStatus);
+                ExitStoreLock();
             }
-
-            var hash = StoreKey.Hash(key);
-            if (!_index.TryFind(key, hash, out var slotIndex, out var generation))
-            {
-                return Record(StoreStatus.NotFound);
-            }
-
-            ref var slot = ref _slots.GetSlot(slotIndex);
-            if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished || slot.Generation != generation)
-            {
-                return Record(StoreStatus.NotFound);
-            }
-
-            var sequence = Interlocked.Increment(ref Header.Sequence);
-            if (!_leases.TryActivate(slotIndex, generation, sequence, out var leaseRecordId))
-            {
-                return Record(StoreStatus.LeaseTableFull);
-            }
-
-            Interlocked.Increment(ref slot.UsageCount);
-            if (Volatile.Read(ref slot.State) != LayoutConstants.SlotPublished || slot.Generation != generation)
-            {
-                _ = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, generation, leaseRecordId);
-                return Record(StoreStatus.NotFound);
-            }
-
-            lease = new ValueLease(this, slotIndex, generation, leaseRecordId);
-            return StoreStatus.Success;
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -331,38 +347,46 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRemove(ReadOnlySpan<byte> key)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
 
-            var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
-            if (keyStatus != StoreStatus.Success)
+                var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
+                if (keyStatus != StoreStatus.Success)
+                {
+                    return Record(keyStatus);
+                }
+
+                var hash = StoreKey.Hash(key);
+                if (!_index.TryFind(key, hash, out var slotIndex, out var lifecycleId))
+                {
+                    return Record(StoreStatus.NotFound);
+                }
+
+                var status = _reclaimer.RequestRemove(slotIndex, lifecycleId);
+                if (status == StoreStatus.Success)
+                {
+                    MaybeCompactIndex();
+                }
+
+                return status == StoreStatus.Success ? status : Record(status);
+            }
+            finally
             {
-                return Record(keyStatus);
+                ExitStoreLock();
             }
-
-            var hash = StoreKey.Hash(key);
-            if (!_index.TryFind(key, hash, out var slotIndex, out var generation))
-            {
-                return Record(StoreStatus.NotFound);
-            }
-
-            var status = _reclaimer.RequestRemove(slotIndex, generation);
-            return status == StoreStatus.Success ? status : Record(status);
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -371,28 +395,46 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRecoverLeases(in LeaseRecoveryOptions options, out LeaseRecoveryReport report)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             report = default;
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                report = default;
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    report = default;
+                    return Record(ready);
+                }
 
-            var status = LeaseRecovery.Recover(_leases, _slots, _reclaimer, _leaseRecoveryEnabled, options, out report);
-            return status == StoreStatus.Success ? status : Record(status);
-        }
-        finally
-        {
-            ExitStoreLock();
+                var status = LeaseRecovery.Recover(_leases, _slots, _reclaimer, _leaseRecoveryEnabled, options, out report);
+                if (status == StoreStatus.Success)
+                {
+                    if (report.RecoveredLeaseCount > 0)
+                    {
+                        MaybeCompactIndex();
+                    }
+
+                    _diagnostics.RecordLeaseRecoveryResults(
+                        report.RecoveredLeaseCount,
+                        report.ActiveLeaseCount,
+                        report.UnsupportedLeaseCount,
+                        report.FailedRecoveryCount);
+                    return status;
+                }
+
+                return Record(status);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
@@ -401,38 +443,46 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public StoreStatus TryRecoverReservations(in ReservationRecoveryOptions options, out ReservationRecoveryReport report)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             report = default;
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                report = default;
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    report = default;
+                    return Record(ready);
+                }
 
-            var status = ReservationRecovery.Recover(_layout, _slots, _index, options, out report);
-            if (status == StoreStatus.Success)
+                var status = ReservationRecovery.Recover(_layout, _slots, _index, options, out report);
+                if (status == StoreStatus.Success)
+                {
+                    if (report.RecoveredReservationCount > 0)
+                    {
+                        MaybeCompactIndex();
+                    }
+
+                    _diagnostics.RecordReservationRecoveryResults(
+                        report.RecoveredReservationCount,
+                        report.ActiveReservationCount,
+                        report.UnsupportedReservationCount,
+                        report.FailedRecoveryCount);
+                    return status;
+                }
+
+                return Record(status);
+            }
+            finally
             {
-                _diagnostics.RecordReservationRecoveryResults(
-                    report.RecoveredReservationCount,
-                    report.ActiveReservationCount,
-                    report.UnsupportedReservationCount,
-                    report.FailedRecoveryCount);
-                return status;
+                ExitStoreLock();
             }
-
-            return Record(status);
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -441,32 +491,33 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public DiagnosticsSnapshot GetDiagnostics()
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
-            return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0, 0);
+            return CreateDisposedSnapshot();
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            if (_disposed)
+            EnterStoreLock();
+            try
             {
-                return _diagnostics.CreateSnapshot(_layout.TotalBytes, _layout.SlotCount, 0, 0, 0, 0, 0);
+                var states = _slots.CountStates();
+                var indexState = _index.CountStates();
+                return _diagnostics.CreateSnapshot(
+                    _layout.TotalBytes,
+                    _layout.SlotCount,
+                    states.Free,
+                    states.Published,
+                    states.PendingRemoval,
+                    states.ActiveReservations,
+                    _leases.ActiveCount(),
+                    indexState,
+                    Volatile.Read(ref _indexCompactionCount));
             }
-
-            var states = _slots.CountStates();
-            return _diagnostics.CreateSnapshot(
-                _layout.TotalBytes,
-                _layout.SlotCount,
-                states.Free,
-                states.Published,
-                states.PendingRemoval,
-                states.ActiveReservations,
-                _leases.ActiveCount());
-        }
-        finally
-        {
-            ExitStoreLock();
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
@@ -475,88 +526,165 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed)
+        if (!_lifecycle.TryBeginDispose())
         {
             return;
         }
 
-        EnterStoreLock();
         try
         {
-            if (_disposed)
+            EnterStoreLock();
+            try
             {
-                return;
-            }
+                if (_disposed)
+                {
+                    return;
+                }
 
-            _disposed = true;
-            _region.Dispose();
+                _disposed = true;
+                _reservationMemory.Dispose();
+                _region.Dispose();
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
         finally
         {
-            ExitStoreLock();
-            _mutex.Dispose();
+            _lifecycle.CompleteDispose();
         }
     }
 
-    internal bool IsLeaseActive(int slotIndex, int generation, int leaseRecordId)
+    internal bool IsLeaseActive(int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return false;
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            return !_disposed && _leases.IsActive(leaseRecordId, slotIndex, generation);
+            EnterStoreLock();
+            try
+            {
+                return _leases.IsActive(leaseRecordId, slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
-        finally
+    }
+
+    internal int GetValueLength(int slotIndex, SlotLifecycleId lifecycleId)
+    {
+        if (!TryEnterOperation(out var operation))
         {
-            ExitStoreLock();
+            return 0;
+        }
+
+        using (operation)
+        {
+            EnterStoreLock();
+            try
+            {
+                return _reader.GetValueLength(slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
-    internal int GetValueLength(int slotIndex, int generation)
+    internal int GetDescriptorLength(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        return _disposed ? 0 : _reader.GetValueLength(slotIndex, generation);
+        if (!TryEnterOperation(out var operation))
+        {
+            return 0;
+        }
+
+        using (operation)
+        {
+            EnterStoreLock();
+            try
+            {
+                return _reader.GetDescriptorLength(slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
+        }
     }
 
-    internal int GetDescriptorLength(int slotIndex, int generation)
+    internal ReadOnlySpan<byte> GetValueSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        return _disposed ? 0 : _reader.GetDescriptorLength(slotIndex, generation);
+        if (!TryEnterOperation(out var operation))
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        using (operation)
+        {
+            EnterStoreLock();
+            try
+            {
+                return _reader.GetValueSpan(slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
+        }
     }
 
-    internal ReadOnlySpan<byte> GetValueSpan(int slotIndex, int generation)
+    internal ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        return _disposed ? ReadOnlySpan<byte>.Empty : _reader.GetValueSpan(slotIndex, generation);
+        if (!TryEnterOperation(out var operation))
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        using (operation)
+        {
+            EnterStoreLock();
+            try
+            {
+                return _reader.GetDescriptorSpan(slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
+        }
     }
 
-    internal ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, int generation)
+    internal StoreStatus ReleaseLease(int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
     {
-        return _disposed ? ReadOnlySpan<byte>.Empty : _reader.GetDescriptorSpan(slotIndex, generation);
-    }
-
-    internal StoreStatus ReleaseLease(int slotIndex, int generation, int leaseRecordId)
-    {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            if (_disposed)
+            EnterStoreLock();
+            try
             {
-                return Record(StoreStatus.StoreDisposed);
-            }
+                var status = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, lifecycleId, leaseRecordId);
+                if (status == StoreStatus.Success)
+                {
+                    MaybeCompactIndex();
+                }
 
-            var status = LeaseRelease.Release(_leases, _slots, _reclaimer, slotIndex, generation, leaseRecordId);
-            return status == StoreStatus.Success ? status : Record(status);
-        }
-        finally
-        {
-            ExitStoreLock();
+                return status == StoreStatus.Success ? status : Record(status);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
@@ -566,202 +694,243 @@ public sealed unsafe class SharedMemoryStore : IDisposable
 
     internal ref SharedSlotMetadata GetSlotForTesting(int slotIndex) => ref _slots.GetSlot(slotIndex);
 
-    internal bool IsReservationPending(int slotIndex, int generation)
+    internal ref SharedLeaseRecord GetLeaseRecordForTesting(int leaseRecordId) => ref _leases.GetRecord(leaseRecordId);
+
+    internal void SetSlotSearchCursorForTesting(int nextSearch) => _slots.SetNextSearchForTesting(nextSearch);
+
+    internal void SetLeaseSearchCursorForTesting(int nextSearch) => _leases.SetNextSearchForTesting(nextSearch);
+
+    internal void SetSlotLifecycleForTesting(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (_disposed)
+        ref var slot = ref _slots.GetSlot(slotIndex);
+        slot.Generation = lifecycleId.Generation;
+        slot.ReuseEpoch = lifecycleId.ReuseEpoch;
+    }
+
+    internal IndexStateCounts CountIndexStatesForTesting() => _index.CountStates();
+
+    internal bool IsReservationPending(int slotIndex, SlotLifecycleId lifecycleId)
+    {
+        if (!TryEnterOperation(out var operation))
         {
             return false;
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            return !_disposed && _slots.IsPendingReservation(slotIndex, generation);
-        }
-        finally
-        {
-            ExitStoreLock();
+            EnterStoreLock();
+            try
+            {
+                return _slots.IsPendingReservation(slotIndex, lifecycleId);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
-    internal int GetReservationBytesWritten(int slotIndex, int generation)
+    internal int GetReservationBytesWritten(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return 0;
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            return !_disposed && _slots.ValidatePendingReservation(slotIndex, generation, out var slot) == StoreStatus.Success
-                ? slot.Reserved
-                : 0;
-        }
-        finally
-        {
-            ExitStoreLock();
+            EnterStoreLock();
+            try
+            {
+                return _slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) == StoreStatus.Success
+                    ? slot.Reserved
+                    : 0;
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
-    internal Span<byte> GetReservationSpan(int slotIndex, int generation, int sizeHint)
+    internal Span<byte> GetReservationSpan(int slotIndex, SlotLifecycleId lifecycleId, int sizeHint)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Span<byte>.Empty;
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            if (_disposed || _slots.ValidatePendingReservation(slotIndex, generation, out var slot) != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Span<byte>.Empty;
-            }
+                if (_slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) != StoreStatus.Success)
+                {
+                    return Span<byte>.Empty;
+                }
 
-            var remaining = slot.ValueLength - slot.Reserved;
-            if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+                var remaining = slot.ValueLength - slot.Reserved;
+                if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+                {
+                    return Span<byte>.Empty;
+                }
+
+                return _reservationMemory.GetSpan(slotIndex, slot.Reserved, remaining);
+            }
+            finally
             {
-                return Span<byte>.Empty;
+                ExitStoreLock();
             }
-
-            return _reservationMemory.GetSpan(slotIndex, slot.Reserved, remaining);
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
-    internal Memory<byte> GetReservationMemory(int slotIndex, int generation, int sizeHint)
+    internal Memory<byte> GetReservationMemory(int slotIndex, SlotLifecycleId lifecycleId, int sizeHint)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Memory<byte>.Empty;
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            if (_disposed || _slots.ValidatePendingReservation(slotIndex, generation, out var slot) != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Memory<byte>.Empty;
-            }
+                if (_slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) != StoreStatus.Success)
+                {
+                    return Memory<byte>.Empty;
+                }
 
-            var remaining = slot.ValueLength - slot.Reserved;
-            if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+                var remaining = slot.ValueLength - slot.Reserved;
+                if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+                {
+                    return Memory<byte>.Empty;
+                }
+
+                return _reservationMemory.GetMemory(slotIndex, slot.Reserved, remaining);
+            }
+            finally
             {
-                return Memory<byte>.Empty;
+                ExitStoreLock();
             }
-
-            return _reservationMemory.GetMemory(slotIndex, slot.Reserved, remaining);
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
-    internal StoreStatus AdvanceReservation(int slotIndex, int generation, int byteCount)
+    internal StoreStatus AdvanceReservation(int slotIndex, SlotLifecycleId lifecycleId, int byteCount)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
 
-            var status = _slots.AdvanceReservation(slotIndex, generation, byteCount);
-            return status == StoreStatus.Success ? status : Record(status);
-        }
-        finally
-        {
-            ExitStoreLock();
+                var status = _slots.AdvanceReservation(slotIndex, lifecycleId, byteCount);
+                return status == StoreStatus.Success ? status : Record(status);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
         }
     }
 
-    internal StoreStatus CommitReservation(int slotIndex, int generation)
+    internal StoreStatus CommitReservation(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
 
-            var status = _slots.ValidatePendingReservation(slotIndex, generation, out var slot);
-            if (status != StoreStatus.Success)
+                var status = _slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot);
+                if (status != StoreStatus.Success)
+                {
+                    return Record(status);
+                }
+
+                if (slot.Reserved != slot.ValueLength)
+                {
+                    return Record(StoreStatus.ReservationIncomplete);
+                }
+
+                var sequence = Interlocked.Increment(ref Header.Sequence);
+                _slots.Commit(slotIndex, slot.KeyHash, slot.KeyLength, slot.DescriptorLength, slot.ValueLength, sequence);
+                return StoreStatus.Success;
+            }
+            finally
             {
-                return Record(status);
+                ExitStoreLock();
             }
-
-            if (slot.Reserved != slot.ValueLength)
-            {
-                return Record(StoreStatus.ReservationIncomplete);
-            }
-
-            var sequence = Interlocked.Increment(ref Header.Sequence);
-            _slots.Commit(slotIndex, slot.KeyHash, slot.KeyLength, slot.DescriptorLength, slot.ValueLength, sequence);
-            return StoreStatus.Success;
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
-    internal StoreStatus AbortReservation(int slotIndex, int generation, bool countAbort)
+    internal StoreStatus AbortReservation(int slotIndex, SlotLifecycleId lifecycleId, bool countAbort)
     {
-        if (_disposed)
+        if (!TryEnterOperation(out var operation))
         {
             return Record(StoreStatus.StoreDisposed);
         }
 
-        EnterStoreLock();
-        try
+        using (operation)
         {
-            var ready = EnsureReady();
-            if (ready != StoreStatus.Success)
+            EnterStoreLock();
+            try
             {
-                return Record(ready);
-            }
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
 
-            var status = _slots.ValidatePendingReservation(slotIndex, generation, out _);
-            if (status != StoreStatus.Success)
+                var status = _slots.ValidatePendingReservation(slotIndex, lifecycleId, out _);
+                if (status != StoreStatus.Success)
+                {
+                    return Record(status);
+                }
+
+                if (!_index.TryRemoveSlot(slotIndex, lifecycleId))
+                {
+                    return Record(StoreStatus.CorruptStore);
+                }
+
+                var reclaimStatus = _slots.Reclaim(slotIndex);
+                if (reclaimStatus != StoreStatus.Success)
+                {
+                    return Record(reclaimStatus);
+                }
+                if (countAbort)
+                {
+                    _diagnostics.RecordReservationAbort();
+                }
+
+                MaybeCompactIndex();
+                return StoreStatus.Success;
+            }
+            finally
             {
-                return Record(status);
+                ExitStoreLock();
             }
-
-            if (!_index.TryRemoveSlot(slotIndex, generation))
-            {
-                return Record(StoreStatus.CorruptStore);
-            }
-
-            _slots.Reclaim(slotIndex);
-            if (countAbort)
-            {
-                _diagnostics.RecordReservationAbort();
-            }
-
-            return StoreStatus.Success;
-        }
-        finally
-        {
-            ExitStoreLock();
         }
     }
 
@@ -871,6 +1040,25 @@ public sealed unsafe class SharedMemoryStore : IDisposable
             : StoreStatus.Success;
     }
 
+    private bool TryEnterOperation(out StoreLifecycleGate.Operation operation)
+    {
+        return _lifecycle.TryEnter(out operation);
+    }
+
+    private DiagnosticsSnapshot CreateDisposedSnapshot()
+    {
+        return _diagnostics.CreateSnapshot(
+            _layout.TotalBytes,
+            _layout.SlotCount,
+            0,
+            0,
+            0,
+            0,
+            0,
+            new IndexStateCounts(_layout.IndexEntryCount, 0, 0, 0, 0, 0),
+            Volatile.Read(ref _indexCompactionCount));
+    }
+
     private StoreStatus EnsureReady()
     {
         if (_disposed)
@@ -891,6 +1079,22 @@ public sealed unsafe class SharedMemoryStore : IDisposable
     {
         _diagnostics.Record(status);
         return status;
+    }
+
+    private void MaybeCompactIndex()
+    {
+        var state = _index.CountStates();
+        if (state.TombstoneCount == 0)
+        {
+            return;
+        }
+
+        var tombstonePressure = state.TombstonePressureRatio >= 0.35d || state.EmptyCount == 0;
+        var probePressure = state.MaxObservedProbeLength >= Math.Max(1, (state.EntryCount * 3) / 4);
+        if ((tombstonePressure || probePressure) && _index.TryCompact())
+        {
+            Interlocked.Increment(ref _indexCompactionCount);
+        }
     }
 
     private static bool ValidateSectionBounds(in StoreHeader header)

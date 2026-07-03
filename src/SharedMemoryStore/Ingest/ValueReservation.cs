@@ -1,3 +1,5 @@
+using SharedMemoryStore.Layout;
+
 namespace SharedMemoryStore;
 
 /// <summary>
@@ -7,25 +9,25 @@ public struct ValueReservation : IDisposable
 {
     private readonly SharedMemoryStore? _store;
     private readonly int _slotIndex;
-    private readonly int _generation;
+    private readonly SlotLifecycleId _lifecycleId;
     private readonly int _payloadLength;
 
-    internal ValueReservation(SharedMemoryStore store, int slotIndex, int generation, int payloadLength)
+    internal ValueReservation(SharedMemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int payloadLength)
     {
         _store = store;
         _slotIndex = slotIndex;
-        _generation = generation;
+        _lifecycleId = lifecycleId;
         _payloadLength = payloadLength;
     }
 
     /// <summary>Gets a value indicating whether this token still references a pending reservation.</summary>
-    public readonly bool IsValid => _store?.IsReservationPending(_slotIndex, _generation) == true;
+    public readonly bool IsValid => _store?.IsReservationPending(_slotIndex, _lifecycleId) == true;
 
     /// <summary>Gets the announced payload length, in bytes.</summary>
     public readonly int PayloadLength => IsValid ? _payloadLength : 0;
 
     /// <summary>Gets the number of payload bytes advanced by the producer.</summary>
-    public readonly int BytesWritten => _store?.GetReservationBytesWritten(_slotIndex, _generation) ?? 0;
+    public readonly int BytesWritten => _store?.GetReservationBytesWritten(_slotIndex, _lifecycleId) ?? 0;
 
     /// <summary>Gets the number of payload bytes that remain before the reservation can commit.</summary>
     public readonly int RemainingBytes => Math.Max(0, PayloadLength - BytesWritten);
@@ -38,7 +40,7 @@ public struct ValueReservation : IDisposable
     {
         return _store is null
             ? Span<byte>.Empty
-            : _store.GetReservationSpan(_slotIndex, _generation, sizeHint);
+            : _store.GetReservationSpan(_slotIndex, _lifecycleId, sizeHint);
     }
 
     /// <summary>
@@ -49,7 +51,7 @@ public struct ValueReservation : IDisposable
     {
         return _store is null
             ? Memory<byte>.Empty
-            : _store.GetReservationMemory(_slotIndex, _generation, sizeHint);
+            : _store.GetReservationMemory(_slotIndex, _lifecycleId, sizeHint);
     }
 
     /// <summary>
@@ -57,7 +59,7 @@ public struct ValueReservation : IDisposable
     /// </summary>
     public readonly StoreStatus Advance(int byteCount)
     {
-        return _store?.AdvanceReservation(_slotIndex, _generation, byteCount) ?? StoreStatus.InvalidReservation;
+        return _store?.AdvanceReservation(_slotIndex, _lifecycleId, byteCount) ?? StoreStatus.InvalidReservation;
     }
 
     /// <summary>
@@ -65,7 +67,7 @@ public struct ValueReservation : IDisposable
     /// </summary>
     public readonly StoreStatus Commit()
     {
-        return _store?.CommitReservation(_slotIndex, _generation) ?? StoreStatus.InvalidReservation;
+        return _store?.CommitReservation(_slotIndex, _lifecycleId) ?? StoreStatus.InvalidReservation;
     }
 
     /// <summary>
@@ -73,7 +75,7 @@ public struct ValueReservation : IDisposable
     /// </summary>
     public readonly StoreStatus Abort()
     {
-        return _store?.AbortReservation(_slotIndex, _generation, countAbort: true) ?? StoreStatus.InvalidReservation;
+        return _store?.AbortReservation(_slotIndex, _lifecycleId, countAbort: true) ?? StoreStatus.InvalidReservation;
     }
 
     /// <summary>
@@ -86,4 +88,8 @@ public struct ValueReservation : IDisposable
             _ = Abort();
         }
     }
+
+    internal readonly int SlotIndexForTesting => _slotIndex;
+
+    internal readonly SlotLifecycleId LifecycleIdForTesting => _lifecycleId;
 }

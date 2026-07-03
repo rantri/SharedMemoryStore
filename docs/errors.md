@@ -119,6 +119,14 @@ Cleanup failure:
 If a store handle is already disposed, operations return `StoreDisposed`.
 Release leases before disposal when release status matters.
 
+Disposal races:
+
+Public store methods and token methods racing with disposal complete normally
+when they entered first, or return `StoreDisposed`, an invalid token outcome, an
+already-completed token outcome, or an empty span/memory projection. Callers
+should not see internal mapped-memory, mutex, or object-disposal exceptions from
+documented public boundaries.
+
 Reservation lifecycle failure:
 
 ```csharp

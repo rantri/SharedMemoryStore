@@ -48,6 +48,9 @@ Before release, compare public docs with these contracts:
 - [Public API contract](../specs/001-frame-memory-store/contracts/public-api.md)
 - [Error taxonomy contract](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
 - [Shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
+- [Owner recovery hardening contract](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
+- [Disposal and rollover hardening contract](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
+- [Index health hardening contract](../specs/004-store-reliability-hardening/contracts/index-health-contract.md)
 
 Confirm that the docs do not claim current C++ or Python bindings, broad
 cross-platform support, unmeasured hardware performance, or application-specific
@@ -98,7 +101,7 @@ Validation run on 2026-07-02:
 
 - `scripts/validate-docs.ps1`: passed.
 - `dotnet build SharedMemoryStore.slnx -c Release`: passed.
-- `dotnet test SharedMemoryStore.slnx -c Release --no-build`: passed, 62
+- `dotnet test SharedMemoryStore.slnx -c Release --no-build`: passed, 85
   tests.
 - `dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release`: passed.
 - `scripts/validate-package-consumption.ps1`: passed and packed
@@ -106,8 +109,26 @@ Validation run on 2026-07-02:
 - `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation direct-allocation`:
   passed. Result: 100,000 frames, 0 total allocated bytes, 0.000 allocated
   bytes/frame, final status `Success`.
+- `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation tombstone-pressure`:
+  passed. Result: 512 churn operations, 128 index entries, 0 final tombstones,
+  544 synchronous compactions, early pressure detection before the 75% worst-case
+  probe threshold, missing lookup and insert timings within 2x of clean-index
+  baselines, and preservation of active leases, pending reservations, duplicate
+  detection, and visible values.
+- `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *TombstonePressure* --job Dry`:
+  passed BenchmarkDotNet discovery and dry execution.
 - `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation sustained-throughput`:
   passed. Environment: .NET 10.0.5, Windows NT 10.0.26200.0, 32 logical CPUs,
   1,300,000-byte payloads. Simple publish measured 22,782.13 publishes/s
   across 1,366,928 frames; direct ingest measured 30,620.36 frames/s across
   1,837,222 frames. Direct ingest was 1.344x simple publish, a 34.4% increase.
+
+## Reliability Hardening Notes
+
+The reliability hardening update corrects owner-scoped lease recovery, makes
+post-disposal outcomes deterministic at public boundaries, adds rollover-safe
+slot lifecycle identity, and exposes key-index tombstone health diagnostics with
+synchronous internal compaction. Package id and target framework remain
+unchanged. Runtime dependencies remain .NET BCL only. Shared-memory layout
+major version remains `1`; minor version advances to `2` because shared records
+now include reuse epochs.

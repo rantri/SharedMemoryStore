@@ -35,7 +35,8 @@ The initial public contract supports:
 - abort or explicitly recover incomplete reservations without exposing partial
   bytes to readers.
 - run owner-controlled stale lease recovery when enabled.
-- inspect caller-formatted diagnostics snapshots without library console output.
+- inspect caller-formatted diagnostics snapshots without library console output,
+  including lease recovery results and key-index tombstone health.
 
 The store does not parse frame headers, own application schemas, provide a
 distributed cache, persist data after process and mapping lifetime, or promise
@@ -97,6 +98,9 @@ Expected operational failures are returned as `StoreOpenStatus` or
 `StoreStatus` values. See [Errors and statuses](docs/errors.md) for duplicate
 keys, missing keys, full stores, oversized values, invalid leases, unsupported
 platforms, stale leases, cleanup failures, and version mismatches.
+Current-process lease recovery skips other live owner processes, disposal races
+return documented statuses or empty token views, and slot lifecycle identity is
+safe across generation rollover.
 
 ## Documentation
 

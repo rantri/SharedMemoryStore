@@ -11,9 +11,15 @@ chronological order.
   exact-byte `Advance`, atomic `Commit`, `Abort`, and disposal cleanup.
 - Segmented `ReadOnlySequence<byte>` publication through `TryPublishSegments`
   without a temporary full-payload array.
-- Explicit reservation recovery, appended reservation statuses, layout minor
-  version `1`, reservation diagnostics, contract tests, integration tests,
-  sample, and benchmarks.
+- Explicit reservation recovery, appended reservation statuses, reservation
+  diagnostics, contract tests, integration tests, sample, and benchmarks.
+- Owner-scoped lease recovery reporting for recovered, active, unsupported, and
+  failed records.
+- Deterministic disposal-race outcomes for public store methods and token
+  methods.
+- Rollover-safe slot lifecycle identity using generation plus reuse epoch.
+- Key-index tombstone health diagnostics and synchronous internal compaction
+  under mutation pressure.
 
 ### Compatibility
 
@@ -21,7 +27,7 @@ chronological order.
 - Runtime dependencies remain .NET BCL only.
 - Existing publish, acquire, lease, remove, diagnostics, and package workflows
   remain compatible.
-- Shared-memory layout major version remains `1`; minor version is now `1`.
+- Shared-memory layout major version remains `1`; minor version is now `2`.
 
 ## 0.1.0 - 2026-06-27
 

@@ -14,11 +14,23 @@ public readonly struct DiagnosticsSnapshot
         int activeLeaseCount,
         int activeReservationCount,
         long abortedReservationCount,
+        long recoveredLeaseCount,
+        long activeLeaseRecoveryCount,
+        long unsupportedLeaseRecoveryCount,
+        long failedLeaseRecoveryCount,
         long recoveredReservationCount,
         long activeReservationRecoveryCount,
         long unsupportedReservationRecoveryCount,
         long failedReservationRecoveryCount,
         long capacityPressureCount,
+        int indexEntryCount,
+        int occupiedIndexEntryCount,
+        int tombstoneIndexEntryCount,
+        int emptyIndexEntryCount,
+        int usableIndexCapacity,
+        int lastObservedProbeLength,
+        int maxObservedProbeLength,
+        long indexCompactionCount,
         StoreStatus lastFailureStatus,
         ReadOnlySpan<long> failureCounts)
     {
@@ -30,11 +42,23 @@ public readonly struct DiagnosticsSnapshot
         ActiveLeaseCount = activeLeaseCount;
         ActiveReservationCount = activeReservationCount;
         AbortedReservationCount = abortedReservationCount;
+        RecoveredLeaseCount = recoveredLeaseCount;
+        ActiveLeaseRecoveryCount = activeLeaseRecoveryCount;
+        UnsupportedLeaseRecoveryCount = unsupportedLeaseRecoveryCount;
+        FailedLeaseRecoveryCount = failedLeaseRecoveryCount;
         RecoveredReservationCount = recoveredReservationCount;
         ActiveReservationRecoveryCount = activeReservationRecoveryCount;
         UnsupportedReservationRecoveryCount = unsupportedReservationRecoveryCount;
         FailedReservationRecoveryCount = failedReservationRecoveryCount;
         CapacityPressureCount = capacityPressureCount;
+        IndexEntryCount = indexEntryCount;
+        OccupiedIndexEntryCount = occupiedIndexEntryCount;
+        TombstoneIndexEntryCount = tombstoneIndexEntryCount;
+        EmptyIndexEntryCount = emptyIndexEntryCount;
+        UsableIndexCapacity = usableIndexCapacity;
+        LastObservedProbeLength = lastObservedProbeLength;
+        MaxObservedProbeLength = maxObservedProbeLength;
+        IndexCompactionCount = indexCompactionCount;
         LastFailureStatus = lastFailureStatus;
         DuplicateKeyFailures = failureCounts[(int)StoreStatus.DuplicateKey];
         NotFoundFailures = failureCounts[(int)StoreStatus.NotFound];
@@ -85,6 +109,18 @@ public readonly struct DiagnosticsSnapshot
     /// <summary>Gets the number of failed reservation commit attempts through this store handle.</summary>
     public long FailedCommitCount { get; }
 
+    /// <summary>Gets the number of stale or eligible leases recovered through this store handle.</summary>
+    public long RecoveredLeaseCount { get; }
+
+    /// <summary>Gets the number of active leases skipped during explicit recovery scans.</summary>
+    public long ActiveLeaseRecoveryCount { get; }
+
+    /// <summary>Gets the number of lease records recovery could not evaluate safely on this platform.</summary>
+    public long UnsupportedLeaseRecoveryCount { get; }
+
+    /// <summary>Gets the number of lease records recovery could not reclaim because shared state was inconsistent.</summary>
+    public long FailedLeaseRecoveryCount { get; }
+
     /// <summary>Gets the number of stale reservations recovered through this store handle.</summary>
     public long RecoveredReservationCount { get; }
 
@@ -99,6 +135,33 @@ public readonly struct DiagnosticsSnapshot
 
     /// <summary>Gets the number of capacity-pressure failures observed by this store handle.</summary>
     public long CapacityPressureCount { get; }
+
+    /// <summary>Gets the configured key-index entry count.</summary>
+    public int IndexEntryCount { get; }
+
+    /// <summary>Gets the number of occupied key-index entries.</summary>
+    public int OccupiedIndexEntryCount { get; }
+
+    /// <summary>Gets the number of tombstone key-index entries.</summary>
+    public int TombstoneIndexEntryCount { get; }
+
+    /// <summary>Gets the number of empty key-index entries.</summary>
+    public int EmptyIndexEntryCount { get; }
+
+    /// <summary>Gets the ratio of tombstone entries to configured key-index entries.</summary>
+    public double TombstonePressureRatio => IndexEntryCount == 0 ? 0 : (double)TombstoneIndexEntryCount / IndexEntryCount;
+
+    /// <summary>Gets the number of key-index entries usable for future inserts before pressure management.</summary>
+    public int UsableIndexCapacity { get; }
+
+    /// <summary>Gets the most recent bounded key-index probe length observed by this handle.</summary>
+    public int LastObservedProbeLength { get; }
+
+    /// <summary>Gets the maximum bounded key-index probe length observed by this handle.</summary>
+    public int MaxObservedProbeLength { get; }
+
+    /// <summary>Gets the number of synchronous key-index compactions completed by this handle.</summary>
+    public long IndexCompactionCount { get; }
 
     /// <summary>Gets the last non-success status observed by this store handle.</summary>
     public StoreStatus LastFailureStatus { get; }

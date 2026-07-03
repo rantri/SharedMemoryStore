@@ -4,7 +4,7 @@ internal static class LayoutConstants
 {
     public const int Magic = 0x31534D53; // SMS1, little-endian.
     public const int LayoutMajorVersion = 1;
-    public const int LayoutMinorVersion = 1;
+    public const int LayoutMinorVersion = 2;
     public const int Alignment = 8;
 
     public const int StoreInitializing = 0;

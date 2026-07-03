@@ -25,7 +25,8 @@ internal sealed unsafe class ReusableSlotTable
         {
             ref var slot = ref GetSlot(i);
             slot.State = LayoutConstants.SlotFree;
-            slot.Generation = 1;
+            slot.Generation = SlotLifecycleId.Initial.Generation;
+            slot.ReuseEpoch = SlotLifecycleId.Initial.ReuseEpoch;
             slot.UsageCount = 0;
             slot.KeyLength = 0;
             slot.DescriptorLength = 0;
@@ -41,10 +42,10 @@ internal sealed unsafe class ReusableSlotTable
 
     public bool TryReserve(out int slotIndex)
     {
-        var start = unchecked(Interlocked.Increment(ref _nextSearch) & int.MaxValue);
+        var start = unchecked((uint)Interlocked.Increment(ref _nextSearch));
         for (var step = 0; step < _layout.SlotCount; step++)
         {
-            var candidate = Math.Abs(start + step) % _layout.SlotCount;
+            var candidate = (int)((start + (uint)step) % (uint)_layout.SlotCount);
             ref var slot = ref GetSlot(candidate);
             if (Volatile.Read(ref slot.State) == LayoutConstants.SlotFree)
             {
@@ -92,7 +93,7 @@ internal sealed unsafe class ReusableSlotTable
         slot.CommittedSequence = 0;
     }
 
-    public StoreStatus AdvanceReservation(int slotIndex, int generation, int byteCount)
+    public StoreStatus AdvanceReservation(int slotIndex, SlotLifecycleId lifecycleId, int byteCount)
     {
         if ((uint)slotIndex >= (uint)_layout.SlotCount)
         {
@@ -100,7 +101,7 @@ internal sealed unsafe class ReusableSlotTable
         }
 
         ref var slot = ref GetSlot(slotIndex);
-        if (slot.Generation != generation)
+        if (!lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
         {
             return StoreStatus.InvalidReservation;
         }
@@ -120,7 +121,7 @@ internal sealed unsafe class ReusableSlotTable
         return StoreStatus.Success;
     }
 
-    public StoreStatus ValidatePendingReservation(int slotIndex, int generation, out SharedSlotMetadata slot)
+    public StoreStatus ValidatePendingReservation(int slotIndex, SlotLifecycleId lifecycleId, out SharedSlotMetadata slot)
     {
         slot = default;
         if ((uint)slotIndex >= (uint)_layout.SlotCount)
@@ -130,7 +131,7 @@ internal sealed unsafe class ReusableSlotTable
 
         ref var current = ref GetSlot(slotIndex);
         slot = current;
-        if (current.Generation != generation)
+        if (!lifecycleId.Matches(current.Generation, current.ReuseEpoch))
         {
             return StoreStatus.InvalidReservation;
         }
@@ -140,7 +141,7 @@ internal sealed unsafe class ReusableSlotTable
             : StoreStatus.ReservationAlreadyCompleted;
     }
 
-    public bool IsPendingReservation(int slotIndex, int generation)
+    public bool IsPendingReservation(int slotIndex, SlotLifecycleId lifecycleId)
     {
         if ((uint)slotIndex >= (uint)_layout.SlotCount)
         {
@@ -149,7 +150,7 @@ internal sealed unsafe class ReusableSlotTable
 
         ref var slot = ref GetSlot(slotIndex);
         return Volatile.Read(ref slot.State) == LayoutConstants.SlotPublishing
-            && slot.Generation == generation;
+            && lifecycleId.Matches(slot.Generation, slot.ReuseEpoch);
     }
 
     public void Commit(int slotIndex, ulong keyHash, int keyLength, int descriptorLength, int valueLength, long sequence)
@@ -165,10 +166,15 @@ internal sealed unsafe class ReusableSlotTable
         Volatile.Write(ref slot.State, LayoutConstants.SlotPublished);
     }
 
-    public void Reclaim(int slotIndex)
+    public StoreStatus Reclaim(int slotIndex)
     {
         ref var slot = ref GetSlot(slotIndex);
         Volatile.Write(ref slot.State, LayoutConstants.SlotReclaiming);
+        if (!SlotLifecycleId.FromSlot(slot).TryAdvance(out var next))
+        {
+            return StoreStatus.CorruptStore;
+        }
+
         slot.KeyHash = 0;
         slot.KeyLength = 0;
         slot.ValueLength = 0;
@@ -177,12 +183,11 @@ internal sealed unsafe class ReusableSlotTable
         slot.UsageCount = 0;
         slot.Reserved = 0;
         slot.CommittedSequence = 0;
-        checked
-        {
-            slot.Generation++;
-        }
+        slot.Generation = next.Generation;
+        slot.ReuseEpoch = next.ReuseEpoch;
 
         Volatile.Write(ref slot.State, LayoutConstants.SlotFree);
+        return StoreStatus.Success;
     }
 
     public ref SharedSlotMetadata GetSlot(int slotIndex)
@@ -191,7 +196,7 @@ internal sealed unsafe class ReusableSlotTable
         return ref *(SharedSlotMetadata*)(_region.Pointer + _layout.SlotMetadataOffset + ((long)slotIndex * _slotSize));
     }
 
-    public bool IsPublishedGeneration(int slotIndex, int generation)
+    public bool IsPublishedGeneration(int slotIndex, SlotLifecycleId lifecycleId)
     {
         if ((uint)slotIndex >= (uint)_layout.SlotCount)
         {
@@ -201,7 +206,12 @@ internal sealed unsafe class ReusableSlotTable
         ref var slot = ref GetSlot(slotIndex);
         var state = Volatile.Read(ref slot.State);
         return state is LayoutConstants.SlotPublished or LayoutConstants.SlotRemoveRequested
-            && slot.Generation == generation;
+            && lifecycleId.Matches(slot.Generation, slot.ReuseEpoch);
+    }
+
+    internal void SetNextSearchForTesting(int nextSearch)
+    {
+        Volatile.Write(ref _nextSearch, nextSearch);
     }
 
     public (int Free, int Published, int PendingRemoval, int ActiveReservations) CountStates()
@@ -233,4 +243,6 @@ internal sealed unsafe class ReusableSlotTable
 
         return (free, published, pending, activeReservations);
     }
+
+    public int SlotCount => _layout.SlotCount;
 }

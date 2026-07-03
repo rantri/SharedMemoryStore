@@ -10,12 +10,17 @@ The detailed source is the
 
 Future implementations must use the same little-endian field encoding, 8-byte
 alignment, state-value assignments, key hashing, exact byte-key equality, slot
-generation, lease registry, reservation progress, and remove/reuse state
-machine.
+lifecycle identity, lease registry, reservation progress, and remove/reuse
+state machine.
 
 Layout compatibility follows semantic versioning. A major layout-version change
 requires migration notes and contract-test updates. Minor compatible additions
 must preserve existing field offsets and state semantics.
+
+Layout minor version `2` stores slot lifecycle identity as generation plus reuse
+epoch in slot metadata, index entries, and lease records. Older mappings with
+the prior record sizes are rejected as incompatible rather than interpreted with
+partial identity.
 
 ## Current Baseline
 
@@ -35,9 +40,9 @@ identifies the owner for explicit recovery. Commit must validate slot
 generation and exact progress before transitioning to `SlotPublished`.
 
 Future C++ and Python implementations must treat writable reservation memory as
-valid only while the slot remains pending and generation-matched. Scatter/gather
-committed values are out of scope for this layout; segmented publish copies into
-one contiguous slot value.
+valid only while the slot remains pending and full lifecycle identity matched.
+Scatter/gather committed values are out of scope for this layout; segmented
+publish copies into one contiguous slot value.
 
 ## Trusted Same-Host Boundary
 

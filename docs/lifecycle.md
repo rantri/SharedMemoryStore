@@ -51,6 +51,14 @@ Use recovery for controlled owner policy, process-liveness cleanup, or tests
 that intentionally recover current-process leases. Normal consumers should still
 release or dispose leases directly.
 
+Current-process lease recovery is owner-scoped. When
+`RecoverCurrentProcessLeases` is `true`, the store may recover leases owned by
+the current process and leases whose owner process is stale. It must still skip
+leases owned by another live process. Skipped live-owner records are reported as
+`ActiveLeaseCount`; unsupported liveness checks are reported as
+`UnsupportedLeaseCount`; inconsistent shared records are reported as
+`FailedRecoveryCount`.
+
 ## Reservation Ownership
 
 A reservation owns one slot generation while its state is `SlotPublishing`.
@@ -100,3 +108,11 @@ corruption-safe mode.
 - Avoid retaining span references after release or store disposal.
 - Record diagnostics before disposing when troubleshooting a failure.
 - Use `TryRecoverLeases` only when the owner policy permits recovery.
+
+## Long-Running Identity
+
+Reusable slots carry a generation and reuse epoch. Index entries, lease records,
+lease tokens, and reservation tokens compare the full identity before exposing
+memory or reclaiming storage. When a generation reaches its integer boundary,
+the generation returns to `1` and the reuse epoch advances, so old tokens do not
+become valid again after long-running reuse cycles.

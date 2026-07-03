@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Threading;
 using SharedMemoryStore.Layout;
 using SharedMemoryStore.Slots;
@@ -17,11 +16,13 @@ internal static class LeaseRecovery
     {
         var scanned = 0;
         var recovered = 0;
+        var active = 0;
         var unsupported = 0;
+        var failed = 0;
 
         if (!enabled || !OperatingSystem.IsWindows())
         {
-            report = new LeaseRecoveryReport(registry.RecordCount, 0, registry.RecordCount);
+            report = new LeaseRecoveryReport(registry.RecordCount, 0, 0, registry.RecordCount, 0);
             return StoreStatus.UnsupportedPlatform;
         }
 
@@ -34,15 +35,36 @@ internal static class LeaseRecovery
                 continue;
             }
 
-            if (!options.RecoverCurrentProcessLeases && IsProcessAlive(record.OwnerProcessId))
+            if ((uint)record.SlotIndex >= (uint)slots.SlotCount)
             {
+                failed++;
+                continue;
+            }
+
+            var owner = LeaseOwnerClassifier.Classify(record.OwnerProcessId);
+            switch (owner.Kind)
+            {
+                case LeaseOwnerKind.Unsupported:
+                    unsupported++;
+                    continue;
+                case LeaseOwnerKind.UnsafeRecord:
+                    failed++;
+                    continue;
+            }
+
+            if (!owner.IsRecoverable(options.RecoverCurrentProcessLeases))
+            {
+                active++;
                 continue;
             }
 
             ref var slot = ref slots.GetSlot(record.SlotIndex);
-            if (slot.Generation != record.SlotGeneration)
+            var lifecycleId = SlotLifecycleId.FromLease(record);
+            if (!lifecycleId.IsValid
+                || !lifecycleId.Matches(slot.Generation, slot.ReuseEpoch)
+                || Volatile.Read(ref slot.UsageCount) <= 0)
             {
-                unsupported++;
+                failed++;
                 continue;
             }
 
@@ -50,35 +72,18 @@ internal static class LeaseRecovery
             var remaining = Interlocked.Decrement(ref slot.UsageCount);
             if (remaining == 0)
             {
-                reclaimer.ReclaimAfterFinalRelease(record.SlotIndex, record.SlotGeneration);
+                var reclaimStatus = reclaimer.ReclaimAfterFinalRelease(record.SlotIndex, lifecycleId);
+                if (reclaimStatus != StoreStatus.Success)
+                {
+                    failed++;
+                    continue;
+                }
             }
 
             recovered++;
         }
 
-        report = new LeaseRecoveryReport(scanned, recovered, unsupported);
+        report = new LeaseRecoveryReport(scanned, recovered, active, unsupported, failed);
         return StoreStatus.Success;
-    }
-
-    private static bool IsProcessAlive(int processId)
-    {
-        if (processId <= 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
     }
 }

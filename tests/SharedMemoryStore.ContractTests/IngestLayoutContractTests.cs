@@ -8,7 +8,7 @@ public sealed class IngestLayoutContractTests
     public void LayoutVersionAndSlotStateValuesMatchIngestContract()
     {
         Assert.Equal(1, LayoutConstants.LayoutMajorVersion);
-        Assert.Equal(1, LayoutConstants.LayoutMinorVersion);
+        Assert.Equal(2, LayoutConstants.LayoutMinorVersion);
         Assert.Equal(0, LayoutConstants.SlotFree);
         Assert.Equal(1, LayoutConstants.SlotPublishing);
         Assert.Equal(2, LayoutConstants.SlotPublished);

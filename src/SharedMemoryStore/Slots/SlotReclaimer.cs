@@ -14,7 +14,7 @@ internal sealed class SlotReclaimer
         _index = index;
     }
 
-    public StoreStatus RequestRemove(int slotIndex, int generation)
+    public StoreStatus RequestRemove(int slotIndex, SlotLifecycleId lifecycleId)
     {
         ref var slot = ref _slots.GetSlot(slotIndex);
         var state = Volatile.Read(ref slot.State);
@@ -24,7 +24,7 @@ internal sealed class SlotReclaimer
             return StoreStatus.RemovePending;
         }
 
-        if (state != LayoutConstants.SlotPublished || slot.Generation != generation)
+        if (state != LayoutConstants.SlotPublished || !lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
         {
             return StoreStatus.NotFound;
         }
@@ -35,15 +35,14 @@ internal sealed class SlotReclaimer
             return StoreStatus.RemovePending;
         }
 
-        _index.TryRemoveSlot(slotIndex, generation);
-        _slots.Reclaim(slotIndex);
-        return StoreStatus.Success;
+        _index.TryRemoveSlot(slotIndex, lifecycleId);
+        return _slots.Reclaim(slotIndex);
     }
 
-    public StoreStatus ReclaimAfterFinalRelease(int slotIndex, int generation)
+    public StoreStatus ReclaimAfterFinalRelease(int slotIndex, SlotLifecycleId lifecycleId)
     {
         ref var slot = ref _slots.GetSlot(slotIndex);
-        if (slot.Generation != generation)
+        if (!lifecycleId.Matches(slot.Generation, slot.ReuseEpoch))
         {
             return StoreStatus.InvalidLease;
         }
@@ -51,8 +50,8 @@ internal sealed class SlotReclaimer
         if (Volatile.Read(ref slot.State) == LayoutConstants.SlotRemoveRequested
             && Volatile.Read(ref slot.UsageCount) == 0)
         {
-            _index.TryRemoveSlot(slotIndex, generation);
-            _slots.Reclaim(slotIndex);
+            _index.TryRemoveSlot(slotIndex, lifecycleId);
+            return _slots.Reclaim(slotIndex);
         }
 
         return StoreStatus.Success;

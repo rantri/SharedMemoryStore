@@ -15,9 +15,9 @@ internal sealed unsafe class SlotReader
         _slots = slots;
     }
 
-    public int GetValueLength(int slotIndex, int generation)
+    public int GetValueLength(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!_slots.IsPublishedGeneration(slotIndex, generation))
+        if (!_slots.IsPublishedGeneration(slotIndex, lifecycleId))
         {
             return 0;
         }
@@ -25,9 +25,9 @@ internal sealed unsafe class SlotReader
         return _slots.GetSlot(slotIndex).ValueLength;
     }
 
-    public int GetDescriptorLength(int slotIndex, int generation)
+    public int GetDescriptorLength(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!_slots.IsPublishedGeneration(slotIndex, generation))
+        if (!_slots.IsPublishedGeneration(slotIndex, lifecycleId))
         {
             return 0;
         }
@@ -35,9 +35,9 @@ internal sealed unsafe class SlotReader
         return _slots.GetSlot(slotIndex).DescriptorLength;
     }
 
-    public ReadOnlySpan<byte> GetValueSpan(int slotIndex, int generation)
+    public ReadOnlySpan<byte> GetValueSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!_slots.IsPublishedGeneration(slotIndex, generation))
+        if (!_slots.IsPublishedGeneration(slotIndex, lifecycleId))
         {
             return ReadOnlySpan<byte>.Empty;
         }
@@ -47,9 +47,9 @@ internal sealed unsafe class SlotReader
         return new ReadOnlySpan<byte>(_region.Pointer + slot.PayloadOffset, slot.ValueLength);
     }
 
-    public ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, int generation)
+    public ReadOnlySpan<byte> GetDescriptorSpan(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        if (!_slots.IsPublishedGeneration(slotIndex, generation))
+        if (!_slots.IsPublishedGeneration(slotIndex, lifecycleId))
         {
             return ReadOnlySpan<byte>.Empty;
         }

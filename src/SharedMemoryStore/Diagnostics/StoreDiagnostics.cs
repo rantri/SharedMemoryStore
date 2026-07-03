@@ -1,4 +1,5 @@
 using System.Threading;
+using SharedMemoryStore.Layout;
 
 namespace SharedMemoryStore.Diagnostics;
 
@@ -7,6 +8,10 @@ internal sealed class StoreDiagnostics
     private readonly long[] _failureCounts = new long[Enum.GetValues<StoreStatus>().Length];
     private long _capacityPressureCount;
     private long _abortedReservationCount;
+    private long _recoveredLeaseCount;
+    private long _activeLeaseRecoveryCount;
+    private long _unsupportedLeaseRecoveryCount;
+    private long _failedLeaseRecoveryCount;
     private long _recoveredReservationCount;
     private long _activeReservationRecoveryCount;
     private long _unsupportedReservationRecoveryCount;
@@ -34,31 +39,28 @@ internal sealed class StoreDiagnostics
         Interlocked.Increment(ref _abortedReservationCount);
     }
 
+    public void RecordLeaseRecoveryResults(
+        int recoveredCount,
+        int activeCount,
+        int unsupportedCount,
+        int failedCount)
+    {
+        AddPositive(ref _recoveredLeaseCount, recoveredCount);
+        AddPositive(ref _activeLeaseRecoveryCount, activeCount);
+        AddPositive(ref _unsupportedLeaseRecoveryCount, unsupportedCount);
+        AddPositive(ref _failedLeaseRecoveryCount, failedCount);
+    }
+
     public void RecordReservationRecoveryResults(
         int recoveredCount,
         int activeCount,
         int unsupportedCount,
         int failedCount)
     {
-        if (recoveredCount > 0)
-        {
-            Interlocked.Add(ref _recoveredReservationCount, recoveredCount);
-        }
-
-        if (activeCount > 0)
-        {
-            Interlocked.Add(ref _activeReservationRecoveryCount, activeCount);
-        }
-
-        if (unsupportedCount > 0)
-        {
-            Interlocked.Add(ref _unsupportedReservationRecoveryCount, unsupportedCount);
-        }
-
-        if (failedCount > 0)
-        {
-            Interlocked.Add(ref _failedReservationRecoveryCount, failedCount);
-        }
+        AddPositive(ref _recoveredReservationCount, recoveredCount);
+        AddPositive(ref _activeReservationRecoveryCount, activeCount);
+        AddPositive(ref _unsupportedReservationRecoveryCount, unsupportedCount);
+        AddPositive(ref _failedReservationRecoveryCount, failedCount);
     }
 
     public DiagnosticsSnapshot CreateSnapshot(
@@ -68,7 +70,9 @@ internal sealed class StoreDiagnostics
         int publishedSlotCount,
         int pendingRemovalCount,
         int activeReservationCount,
-        int activeLeaseCount)
+        int activeLeaseCount,
+        IndexStateCounts indexState,
+        long indexCompactionCount)
     {
         Span<long> counts = stackalloc long[_failureCounts.Length];
         for (var i = 0; i < counts.Length; i++)
@@ -85,12 +89,32 @@ internal sealed class StoreDiagnostics
             activeLeaseCount,
             activeReservationCount,
             Volatile.Read(ref _abortedReservationCount),
+            Volatile.Read(ref _recoveredLeaseCount),
+            Volatile.Read(ref _activeLeaseRecoveryCount),
+            Volatile.Read(ref _unsupportedLeaseRecoveryCount),
+            Volatile.Read(ref _failedLeaseRecoveryCount),
             Volatile.Read(ref _recoveredReservationCount),
             Volatile.Read(ref _activeReservationRecoveryCount),
             Volatile.Read(ref _unsupportedReservationRecoveryCount),
             Volatile.Read(ref _failedReservationRecoveryCount),
             Volatile.Read(ref _capacityPressureCount),
+            indexState.EntryCount,
+            indexState.OccupiedCount,
+            indexState.TombstoneCount,
+            indexState.EmptyCount,
+            indexState.UsableCapacity,
+            indexState.LastObservedProbeLength,
+            indexState.MaxObservedProbeLength,
+            indexCompactionCount,
             (StoreStatus)Volatile.Read(ref _lastFailureStatus),
             counts);
+    }
+
+    private static void AddPositive(ref long field, int value)
+    {
+        if (value > 0)
+        {
+            Interlocked.Add(ref field, value);
+        }
     }
 }

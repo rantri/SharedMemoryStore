@@ -28,17 +28,18 @@ internal sealed unsafe class LeaseRegistry
             record.LeaseRecordId = i;
             record.SlotIndex = -1;
             record.SlotGeneration = 0;
+            record.SlotReuseEpoch = 0;
             record.OwnerProcessId = 0;
             record.AcquireSequence = 0;
         }
     }
 
-    public bool TryActivate(int slotIndex, int generation, long sequence, out int leaseRecordId)
+    public bool TryActivate(int slotIndex, SlotLifecycleId lifecycleId, long sequence, out int leaseRecordId)
     {
-        var start = unchecked(Interlocked.Increment(ref _nextSearch) & int.MaxValue);
+        var start = unchecked((uint)Interlocked.Increment(ref _nextSearch));
         for (var step = 0; step < _layout.LeaseRecordCount; step++)
         {
-            var candidate = (start + step) % _layout.LeaseRecordCount;
+            var candidate = (int)((start + (uint)step) % (uint)_layout.LeaseRecordCount);
             ref var record = ref GetRecord(candidate);
             if (Volatile.Read(ref record.State) == LayoutConstants.LeaseActive)
             {
@@ -47,7 +48,8 @@ internal sealed unsafe class LeaseRegistry
 
             record.LeaseRecordId = candidate;
             record.SlotIndex = slotIndex;
-            record.SlotGeneration = generation;
+            record.SlotGeneration = lifecycleId.Generation;
+            record.SlotReuseEpoch = lifecycleId.ReuseEpoch;
             record.OwnerProcessId = Environment.ProcessId;
             record.AcquireSequence = sequence;
             Volatile.Write(ref record.State, LayoutConstants.LeaseActive);
@@ -59,7 +61,7 @@ internal sealed unsafe class LeaseRegistry
         return false;
     }
 
-    public bool IsActive(int leaseRecordId, int slotIndex, int generation)
+    public bool IsActive(int leaseRecordId, int slotIndex, SlotLifecycleId lifecycleId)
     {
         if ((uint)leaseRecordId >= (uint)_layout.LeaseRecordCount)
         {
@@ -69,7 +71,7 @@ internal sealed unsafe class LeaseRegistry
         ref var record = ref GetRecord(leaseRecordId);
         return Volatile.Read(ref record.State) == LayoutConstants.LeaseActive
             && record.SlotIndex == slotIndex
-            && record.SlotGeneration == generation;
+            && lifecycleId.Matches(record.SlotGeneration, record.SlotReuseEpoch);
     }
 
     public int ActiveCount()
@@ -93,4 +95,9 @@ internal sealed unsafe class LeaseRegistry
     }
 
     public int RecordCount => _layout.LeaseRecordCount;
+
+    internal void SetNextSearchForTesting(int nextSearch)
+    {
+        Volatile.Write(ref _nextSearch, nextSearch);
+    }
 }

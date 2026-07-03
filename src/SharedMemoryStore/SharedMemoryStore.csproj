@@ -17,7 +17,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Adds zero-copy reservation ingest, segmented publish, explicit reservation recovery, diagnostics, samples, benchmarks, and documentation.</PackageReleaseNotes>
+    <PackageReleaseNotes>Adds zero-copy ingest plus reliability hardening for owner-scoped lease recovery, disposal races, lifecycle rollover, and tombstone diagnostics.</PackageReleaseNotes>
     <AssemblyName>SharedMemoryStore</AssemblyName>
     <RootNamespace>SharedMemoryStore</RootNamespace>
   </PropertyGroup>

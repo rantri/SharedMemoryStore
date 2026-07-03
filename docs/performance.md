@@ -77,3 +77,21 @@ Use [Diagnostics](diagnostics.md) to track `StoreFull`, `LeaseTableFull`, and
 `CapacityPressureCount` signals. Capacity pressure is usually a configuration or
 consumer-lifecycle issue: increase slot count, increase lease record count,
 release leases sooner, or reduce removal pressure.
+
+## Tombstone Pressure
+
+The key index uses open addressing and tombstones to preserve probe chains after
+removal. High unique-key churn can make missing-key lookup and new-key insert
+paths probe longer even when live slot capacity is available. Diagnostic
+snapshots expose occupied, tombstone, empty, usable capacity, probe length, and
+compaction counters so consumers can distinguish churn pressure from live
+capacity pressure.
+
+The current internal threshold compacts synchronously under the store mutation
+lock when tombstones reach 35% of index entries, when no empty probe terminators
+remain, or when observed probe length reaches 75% of index capacity. The
+`TombstonePressureBenchmarks` benchmark records clean-index missing-lookup and
+new-insert baselines, managed-pressure timings, early pressure detection before
+the 75% worst-case probe threshold, and preservation checks for active leases,
+pending reservations, duplicate detection, and visible values without adding a
+public maintenance API or background worker.

@@ -27,6 +27,26 @@ if (args.Length == 2
     return;
 }
 
+if (args.Length == 2
+    && string.Equals(args[0], "--validation", StringComparison.Ordinal)
+    && string.Equals(args[1], "tombstone-pressure", StringComparison.Ordinal))
+{
+    var result = RunTombstonePressureValidation();
+    Console.WriteLine(BenchmarkEnvironment.Summary);
+    Console.WriteLine(
+        $"Tombstone pressure: operations={result.OperationCount:N0}; indexEntries={result.IndexEntryCount:N0}; tombstones={result.TombstoneCount:N0}; " +
+        $"cleanMissingTicks={result.CleanMissingLookupTicks:N0}; managedMissingTicks={result.ManagedMissingLookupTicks:N0}; " +
+        $"cleanInsertTicks={result.CleanInsertTicks:N0}; managedInsertTicks={result.ManagedInsertTicks:N0}; " +
+        $"maxProbe={result.MaxProbeLength:N0}; compactions={result.CompactionCount:N0}; earlyPressure={result.PressureDetectedBeforeSeventyFivePercentWorstCase}; " +
+        $"missingWithin2x={result.MissingLookupWithinTwoTimesClean}; insertWithin2x={result.InsertWithinTwoTimesClean}; preservation={result.PreservationPassed}; passed={result.Passed}");
+    if (!result.Passed)
+    {
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 
 static FrameThroughputValidationResult RunSimplePublishSustained()
@@ -69,4 +89,10 @@ static DirectIngestAllocationValidationResult RunDirectIngestAllocationValidatio
     {
         benchmark.Cleanup();
     }
+}
+
+static TombstonePressureBenchmarkResult RunTombstonePressureValidation()
+{
+    var benchmark = new TombstonePressureBenchmarks();
+    return benchmark.ManagedPressureChurn();
 }

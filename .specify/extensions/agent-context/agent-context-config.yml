@@ -1,5 +1,8 @@
-context_file: AGENTS.md
-context_files: []
-context_markers:
-  start: <!-- SPECKIT START -->
-  end: <!-- SPECKIT END -->
+{
+  "context_file": "AGENTS.md",
+  "context_files": [],
+  "context_markers": {
+    "start": "<!-- SPECKIT START -->",
+    "end": "<!-- SPECKIT END -->"
+  }
+}
