@@ -2,6 +2,7 @@ namespace FrameValue;
 
 internal readonly record struct FrameDescriptor(int Width, int Height, int PixelBytes, long TimestampTicks)
 {
+    // Sample-owned descriptor layout: width, height, payload byte count, timestamp ticks.
     public byte[] ToBytes()
     {
         var bytes = new byte[20];

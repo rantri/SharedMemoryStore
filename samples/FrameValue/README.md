@@ -1,16 +1,26 @@
 # Frame Value Sample
 
-This sample shows a consumer-owned frame layout on top of the opaque byte-value
-store. The core SharedMemoryStore package does not parse frames. The sample puts
-frame metadata in descriptor bytes and frame payload bytes in the value span.
+## Purpose and Audience
 
-See [Examples](../../docs/examples.md) and [Portability](../../docs/portability.md)
-for the contract background.
+This sample is for consumers who want to store frame-shaped data while keeping
+application-specific frame parsing outside the core package. It puts frame
+metadata in descriptor bytes and frame payload bytes in the value span.
+
+## Concepts Demonstrated
+
+- Consumer-owned descriptor layout through `FrameDescriptor`.
+- Opaque payload bytes.
+- Two simultaneous `ValueLease` readers.
+- `RemovePending` while readers protect a slot.
+- Slot reuse after readers release.
+- Frame-neutral behavior: the core store treats the frame and non-frame value
+  the same way.
 
 ## Prerequisites
 
 - .NET SDK compatible with `net10.0`.
 - Windows x64 for the current named memory-mapped-file validation target.
+- Repository checkout from the repository root.
 
 ## Run
 
@@ -18,7 +28,9 @@ for the contract background.
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 ```
 
-Expected output:
+## Expected Output
+
+Expected success shape:
 
 ```text
 Success
@@ -31,14 +43,38 @@ Success
 non-frame bytes: 3
 ```
 
-The `RemovePending` status is expected because two active readers still protect
-the frame value when removal is requested. After both leases are disposed, the
-sample publishes a non-frame value to show slot reuse and frame neutrality.
+`RemovePending` is expected because two active readers still protect the frame
+value when removal is requested. After both leases are disposed, the sample
+publishes a non-frame value to show storage reuse and frame neutrality.
 
-## Layout Rules
+## Expected Non-Success Statuses
 
-- Descriptor layout is owned by the consumer.
-- Payload layout is owned by the consumer.
-- The core store only enforces byte lengths, lease lifetime, removal, and reuse.
-- Future C++ or Python consumers must follow the shared-memory layout contract,
-  but no current bindings are provided by this sample.
+- `UnsupportedPlatform`: the current platform does not support the required
+  named memory-mapped-file behavior.
+- `ValueTooLarge` or `DescriptorTooLarge`: the sample frame or descriptor no
+  longer fits the configured capacities.
+- `LeaseTableFull`: the lease record capacity is too small for the reader
+  count.
+
+If open fails, the program prints `open failed: <status>` and exits with a
+nonzero code.
+
+## Cleanup
+
+The sample uses a unique store name for each run, disposes reader leases, and
+disposes the store handle before exiting. It does not require manual file
+cleanup.
+
+## Related Documentation
+
+- [samples.md](../../docs/samples.md)
+- [Concepts](../../docs/concepts.md)
+- [Examples](../../docs/examples.md)
+- [Lifecycle](../../docs/lifecycle.md)
+- [Portability](../../docs/portability.md)
+
+## Scope Boundaries and Non-Goals
+
+The descriptor format is a sample convention, not a package schema. The core
+package does not parse frames, validate pixel formats, persist frame data, or
+provide current C++ or Python bindings.

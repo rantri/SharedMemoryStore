@@ -27,33 +27,69 @@ $requiredGithubFiles = @(
 $requiredGuideFiles = @(
     "docs/index.md",
     "docs/getting-started.md",
+    "docs/concepts.md",
+    "docs/byte-encoding.md",
     "docs/usage.md",
+    "docs/examples.md",
     "docs/errors.md",
     "docs/diagnostics.md",
     "docs/lifecycle.md",
     "docs/integration.md",
-    "docs/packaging.md",
-    "docs/portability.md",
     "docs/performance.md",
-    "docs/examples.md",
+    "docs/portability.md",
+    "docs/samples.md",
+    "docs/architecture.md",
+    "docs/maintainers.md",
+    "docs/packaging.md",
     "docs/releases.md"
 )
 
-$requiredSampleFiles = @(
+$requiredSampleReadmes = @(
     "samples/BasicUsage/README.md",
     "samples/FrameValue/README.md",
-    "samples/HostedServiceIntegration/README.md",
-    "samples/ZeroCopyIngest/README.md"
+    "samples/ZeroCopyIngest/README.md",
+    "samples/HostedServiceIntegration/README.md"
+)
+
+$sampleSourceFiles = @(
+    "samples/BasicUsage/Program.cs",
+    "samples/BasicUsage/StoreByteEncoding.cs",
+    "samples/FrameValue/Program.cs",
+    "samples/FrameValue/FrameDescriptor.cs",
+    "samples/ZeroCopyIngest/Program.cs",
+    "samples/HostedServiceIntegration/Program.cs"
 )
 
 $contractFiles = @(
     "specs/001-frame-memory-store/contracts/public-api.md",
     "specs/001-frame-memory-store/contracts/error-taxonomy.md",
-    "specs/001-frame-memory-store/contracts/shared-memory-layout.md"
+    "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+    "specs/003-zero-copy-ingest/contracts/reservation-api.md",
+    "specs/003-zero-copy-ingest/contracts/ingest-layout.md",
+    "specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md",
+    "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
+    "specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md",
+    "specs/004-store-reliability-hardening/contracts/index-health-contract.md",
+    "specs/005-api-production-readiness/contracts/public-api-contract.md",
+    "specs/005-api-production-readiness/contracts/contention-configuration-contract.md",
+    "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md",
+    "specs/005-api-production-readiness/contracts/reservation-memory-contract.md",
+    "specs/006-improve-docs-samples/contracts/documentation-information-architecture.md",
+    "specs/006-improve-docs-samples/contracts/sample-contract.md",
+    "specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md",
+    "specs/006-improve-docs-samples/contracts/documentation-validation-contract.md"
 )
 
-$allRequiredFiles = $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleFiles
-$publicDocumentationFiles = $allRequiredFiles + @("samples/BasicUsage/Program.cs", "samples/FrameValue/Program.cs", "samples/ZeroCopyIngest/Program.cs")
+$featureTrackingFiles = @(
+    "specs/006-improve-docs-samples/documentation-inventory.md",
+    "specs/006-improve-docs-samples/documentation-coverage.md",
+    "specs/006-improve-docs-samples/sample-validation.md",
+    "specs/006-improve-docs-samples/public-reference-map.md",
+    "specs/006-improve-docs-samples/quickstart.md"
+)
+
+$allRequiredFiles = $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleReadmes + $contractFiles + $featureTrackingFiles
+$publicDocumentationFiles = $requiredRootFiles + $requiredGuideFiles + $requiredSampleReadmes + $sampleSourceFiles
 
 function Add-Failure {
     param([string]$Message)
@@ -96,6 +132,44 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param(
+        [string]$RelativePath,
+        [string]$Needle,
+        [string]$Reason
+    )
+
+    if (-not (Test-Path -LiteralPath (Join-Root $RelativePath) -PathType Leaf)) {
+        return
+    }
+
+    $content = Read-Text $RelativePath
+    if ($content.IndexOf($Needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Add-Failure "$relativePath contains stale or unsupported text '$Needle' ($Reason)"
+    }
+}
+
+function Assert-AnyContains {
+    param(
+        [string[]]$RelativePaths,
+        [string]$Needle,
+        [string]$Reason
+    )
+
+    foreach ($relativePath in $RelativePaths) {
+        if (-not (Test-Path -LiteralPath (Join-Root $relativePath) -PathType Leaf)) {
+            continue
+        }
+
+        $content = Read-Text $relativePath
+        if ($content.IndexOf($Needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return
+        }
+    }
+
+    Add-Failure "No public documentation file contains '$Needle' ($Reason)"
+}
+
 function Assert-NoPlaceholders {
     param([string[]]$RelativePaths)
 
@@ -103,7 +177,8 @@ function Assert-NoPlaceholders {
         "\bTODO\b",
         "\bTBD\b",
         "NEEDS CLARIFICATION",
-        "\[[A-Z][A-Z _-]+\](?!\()"
+        "\[[A-Z][A-Z _-]+\](?!\()",
+        "\{\{[^}]+\}\}"
     )
 
     foreach ($relativePath in $RelativePaths) {
@@ -209,6 +284,9 @@ function Assert-PackageMetadata {
     if ([string]::IsNullOrWhiteSpace($propertyGroup.PackageReleaseNotes)) {
         Add-Failure "PackageReleaseNotes must be populated."
     }
+    elseif ($propertyGroup.PackageReleaseNotes.IndexOf("documentation and samples", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        Add-Failure "PackageReleaseNotes must mention the documentation and samples excellence scope."
+    }
 
     $readmeItem = $project.Project.ItemGroup.None | Where-Object {
         $_.Include -eq "..\..\README.md" -and $_.Pack -eq "true" -and $_.PackagePath -eq "\"
@@ -222,34 +300,46 @@ function Assert-PackageMetadata {
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"
-    Assert-Contains "CHANGELOG.md" "1.0.0" "release notes alignment"
+    Assert-Contains "CHANGELOG.md" "documentation and samples" "documentation feature changelog alignment"
+    Assert-Contains "docs/releases.md" "documentation-only" "release documentation-only review"
     Assert-Contains "docs/packaging.md" "PackageId" "package documentation notes"
     Assert-Contains "docs/packaging.md" "PackageReleaseNotes" "package release notes documentation"
+    Assert-Contains "docs/packaging.md" "documentation and samples" "package release notes alignment"
 }
 
 function Assert-RequiredLinks {
     foreach ($path in @(
+        "docs/index.md",
         "docs/getting-started.md",
+        "docs/concepts.md",
+        "docs/byte-encoding.md",
         "docs/usage.md",
-        "specs/001-frame-memory-store/contracts/public-api.md",
         "docs/examples.md",
+        "docs/errors.md",
+        "docs/diagnostics.md",
         "docs/lifecycle.md",
+        "docs/integration.md",
+        "docs/performance.md",
+        "docs/portability.md",
+        "docs/samples.md",
+        "docs/architecture.md",
+        "docs/maintainers.md",
         "docs/packaging.md",
+        "docs/releases.md",
+        "samples/BasicUsage/README.md",
+        "samples/FrameValue/README.md",
+        "samples/ZeroCopyIngest/README.md",
+        "samples/HostedServiceIntegration/README.md",
+        "CONTRIBUTING.md",
         "SUPPORT.md",
         "SECURITY.md",
-        "CONTRIBUTING.md",
-        ".github/ISSUE_TEMPLATE/bug_report.yml",
-        ".github/ISSUE_TEMPLATE/documentation.yml",
-        ".github/ISSUE_TEMPLATE/feature_request.yml",
-        ".github/pull_request_template.md",
-        "LICENSE",
         "CHANGELOG.md",
-        "docs/releases.md"
+        "LICENSE"
     )) {
         Assert-Contains "README.md" $path "README entry-point reachability"
     }
 
-    foreach ($path in $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleFiles + $contractFiles) {
+    foreach ($path in $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleReadmes + $contractFiles) {
         if ($path -eq "docs/index.md") {
             continue
         }
@@ -263,23 +353,74 @@ function Assert-RequiredLinks {
         Assert-Contains "docs/index.md" $indexNeedle "documentation index reachability"
     }
 
+    foreach ($sampleReadme in $requiredSampleReadmes) {
+        Assert-Contains "docs/samples.md" $sampleReadme "sample ladder reachability"
+        Assert-Contains $sampleReadme "../../docs/samples.md" "sample README links to ladder"
+    }
+
     $contractCoverage = @{
-        "docs/lifecycle.md" = @("specs/001-frame-memory-store/contracts/public-api.md", "specs/001-frame-memory-store/contracts/shared-memory-layout.md", "specs/001-frame-memory-store/contracts/error-taxonomy.md")
-        "docs/errors.md" = @("specs/001-frame-memory-store/contracts/error-taxonomy.md")
-        "docs/diagnostics.md" = @("specs/001-frame-memory-store/contracts/public-api.md", "specs/001-frame-memory-store/contracts/error-taxonomy.md")
-        "docs/portability.md" = @("specs/001-frame-memory-store/contracts/shared-memory-layout.md")
-        "docs/performance.md" = @("specs/001-frame-memory-store/contracts/public-api.md", "specs/001-frame-memory-store/contracts/error-taxonomy.md")
-        "docs/examples.md" = @("specs/001-frame-memory-store/contracts/public-api.md", "specs/001-frame-memory-store/contracts/shared-memory-layout.md")
+        "docs/concepts.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+            "specs/003-zero-copy-ingest/contracts/reservation-api.md"
+        )
+        "docs/byte-encoding.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md"
+        )
+        "docs/usage.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/003-zero-copy-ingest/contracts/reservation-api.md",
+            "specs/005-api-production-readiness/contracts/contention-configuration-contract.md"
+        )
+        "docs/examples.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+            "specs/003-zero-copy-ingest/contracts/reservation-api.md"
+        )
+        "docs/errors.md" = @(
+            "specs/001-frame-memory-store/contracts/error-taxonomy.md",
+            "specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md"
+        )
+        "docs/diagnostics.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/004-store-reliability-hardening/contracts/index-health-contract.md",
+            "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md"
+        )
+        "docs/lifecycle.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+            "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
+            "specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md"
+        )
+        "docs/integration.md" = @(
+            "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md"
+        )
+        "docs/performance.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/004-store-reliability-hardening/contracts/index-health-contract.md"
+        )
+        "docs/portability.md" = @(
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+            "specs/003-zero-copy-ingest/contracts/ingest-layout.md"
+        )
+        "docs/architecture.md" = @(
+            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
+            "specs/003-zero-copy-ingest/contracts/ingest-layout.md",
+            "specs/004-store-reliability-hardening/contracts/index-health-contract.md"
+        )
+        "docs/maintainers.md" = @(
+            "specs/001-frame-memory-store/contracts/public-api.md",
+            "specs/003-zero-copy-ingest/contracts/reservation-api.md",
+            "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
+            "specs/005-api-production-readiness/contracts/public-api-contract.md"
+        )
     }
 
     foreach ($doc in $contractCoverage.Keys) {
         foreach ($contract in $contractCoverage[$doc]) {
             Assert-Contains $doc $contract "contract traceability"
         }
-    }
-
-    foreach ($path in @("CONTRIBUTING.md", "CODE_OF_CONDUCT.md", ".github/ISSUE_TEMPLATE/bug_report.yml", ".github/ISSUE_TEMPLATE/documentation.yml", ".github/ISSUE_TEMPLATE/feature_request.yml", ".github/pull_request_template.md")) {
-        Assert-FileExists $path
     }
 
     Assert-Contains "CONTRIBUTING.md" "CODE_OF_CONDUCT.md" "contributor conduct path"
@@ -290,18 +431,190 @@ function Assert-RequiredLinks {
     Assert-Contains "CONTRIBUTING.md" ".github/ISSUE_TEMPLATE/feature_request.yml" "feature issue template path"
     Assert-Contains "CONTRIBUTING.md" ".github/pull_request_template.md" "pull request guidance"
 
-    foreach ($path in @("SUPPORT.md", "SECURITY.md", "CHANGELOG.md", "docs/releases.md", "docs/packaging.md")) {
-        Assert-FileExists $path
-    }
-
     Assert-Contains "docs/releases.md" "PackageReleaseNotes" "release readiness"
     Assert-Contains "docs/releases.md" "SECURITY.md" "release security check"
     Assert-Contains "docs/releases.md" "SUPPORT.md" "release support check"
     Assert-Contains "docs/releases.md" "CHANGELOG.md" "release changelog check"
 }
 
+function Assert-SampleReadmeContracts {
+    $requiredSections = @(
+        "## Purpose and Audience",
+        "## Concepts Demonstrated",
+        "## Prerequisites",
+        "## Run",
+        "## Expected Output",
+        "## Expected Non-Success Statuses",
+        "## Cleanup",
+        "## Related Documentation",
+        "## Scope Boundaries and Non-Goals"
+    )
+
+    foreach ($sampleReadme in $requiredSampleReadmes) {
+        foreach ($section in $requiredSections) {
+            Assert-Contains $sampleReadme $section "required sample README contract section"
+        }
+
+        Assert-Contains $sampleReadme "dotnet run --project" "sample run command"
+        Assert-Contains $sampleReadme "net10.0" "sample prerequisite target framework"
+        Assert-Contains $sampleReadme "UnsupportedPlatform" "sample non-success platform guidance"
+        Assert-Contains $sampleReadme "../../docs/" "sample related documentation links"
+    }
+}
+
+function Assert-PublicReferenceDrift {
+    $docsForPublicNames = $requiredGuideFiles + $requiredSampleReadmes + @("README.md", "CONTRIBUTING.md")
+
+    $sourceChecks = @{
+        "src/SharedMemoryStore/MemoryStore.cs" = @(
+            "MemoryStore",
+            "TryCreateOrOpen",
+            "TryPublish",
+            "TryAcquire",
+            "TryRemove",
+            "TryReserve",
+            "TryPublishSegments",
+            "TryRecoverLeases",
+            "TryRecoverReservations",
+            "GetDiagnostics",
+            "TryGetDiagnostics"
+        )
+        "src/SharedMemoryStore/SharedMemoryStoreOptions.cs" = @(
+            "SharedMemoryStoreOptions",
+            "OpenMode",
+            "Name",
+            "TotalBytes",
+            "SlotCount",
+            "MaxValueBytes",
+            "MaxDescriptorBytes",
+            "MaxKeyBytes",
+            "LeaseRecordCount",
+            "EnableLeaseRecovery",
+            "CalculateRequiredBytes",
+            "Create",
+            "Validate",
+            "LeaseRecoveryOptions",
+            "LeaseRecoveryReport"
+        )
+        "src/SharedMemoryStore/StoreWaitOptions.cs" = @(
+            "StoreWaitOptions",
+            "Default",
+            "NoWait",
+            "Infinite",
+            "Timeout",
+            "CancellationToken"
+        )
+        "src/SharedMemoryStore/StoreStatus.cs" = @(
+            "StoreOpenStatus",
+            "StoreStatus",
+            "Success",
+            "AlreadyExists",
+            "NotFound",
+            "InvalidOptions",
+            "IncompatibleLayout",
+            "UnsupportedPlatform",
+            "InsufficientCapacity",
+            "AccessDenied",
+            "MappingFailed",
+            "StoreBusy",
+            "OperationCanceled",
+            "DuplicateKey",
+            "InvalidKey",
+            "KeyTooLarge",
+            "ValueTooLarge",
+            "DescriptorTooLarge",
+            "StoreFull",
+            "LeaseTableFull",
+            "InvalidLease",
+            "LeaseAlreadyReleased",
+            "RemovePending",
+            "StoreDisposed",
+            "CorruptStore",
+            "UnknownFailure",
+            "InvalidReservation",
+            "ReservationIncomplete",
+            "ReservationAlreadyCompleted",
+            "ReservationWriteOutOfRange"
+        )
+        "src/SharedMemoryStore/ValueLease.cs" = @(
+            "ValueLease",
+            "IsValid",
+            "ValueLength",
+            "DescriptorLength",
+            "ValueSpan",
+            "DescriptorSpan",
+            "Release"
+        )
+        "src/SharedMemoryStore/Ingest/ValueReservation.cs" = @(
+            "ValueReservation",
+            "IsValid",
+            "PayloadLength",
+            "BytesWritten",
+            "RemainingBytes",
+            "GetSpan",
+            "Advance",
+            "Commit",
+            "Abort"
+        )
+        "src/SharedMemoryStore/Diagnostics/DiagnosticsSnapshot.cs" = @(
+            "DiagnosticsSnapshot",
+            "TotalBytes",
+            "FreeSlotCount",
+            "PublishedSlotCount",
+            "PendingRemovalCount",
+            "ActiveLeaseCount",
+            "ActiveReservationCount",
+            "CapacityPressureCount",
+            "TombstonePressureRatio",
+            "GetFailureCount"
+        )
+    }
+
+    foreach ($sourcePath in $sourceChecks.Keys) {
+        foreach ($name in $sourceChecks[$sourcePath]) {
+            Assert-Contains $sourcePath $name "public reference exists in source"
+        }
+    }
+
+    foreach ($name in @(
+        "MemoryStore",
+        "SharedMemoryStoreOptions",
+        "StoreWaitOptions",
+        "StoreOpenStatus",
+        "StoreStatus",
+        "ValueLease",
+        "ValueReservation",
+        "DiagnosticsSnapshot",
+        "TryCreateOrOpen",
+        "TryPublish",
+        "TryAcquire",
+        "TryRemove",
+        "TryReserve",
+        "TryPublishSegments",
+        "TryRecoverLeases",
+        "TryRecoverReservations",
+        "GetDiagnostics",
+        "TryGetDiagnostics",
+        "GetFailureCount",
+        "StoreBusy",
+        "OperationCanceled",
+        "InvalidKey",
+        "ReservationWriteOutOfRange"
+    )) {
+        Assert-AnyContains $docsForPublicNames $name "public API/status documentation coverage"
+    }
+
+    foreach ($doc in @("README.md", "docs/getting-started.md", "docs/usage.md", "docs/examples.md", "docs/samples.md") + $requiredSampleReadmes) {
+        Assert-NotContains $doc "ValueReservation.GetMemory" "current reservation API uses GetSpan"
+        Assert-NotContains $doc "current C++ binding" "future language bindings are not delivered"
+        Assert-NotContains $doc "current Python binding" "future language bindings are not delivered"
+        Assert-NotContains $doc "distributed cache" "package is not a distributed cache"
+        Assert-NotContains $doc "persists after process" "package does not promise persistence"
+    }
+}
+
 Write-Host "Validating documentation inventory..."
-foreach ($relativePath in $allRequiredFiles + $contractFiles) {
+foreach ($relativePath in $allRequiredFiles) {
     Assert-FileExists $relativePath
 }
 
@@ -309,13 +622,19 @@ Write-Host "Scanning public documentation for unresolved placeholders..."
 Assert-NoPlaceholders $publicDocumentationFiles
 
 Write-Host "Validating relative Markdown links..."
-Assert-MarkdownLinksResolve ($requiredRootFiles + $requiredGuideFiles + $requiredSampleFiles)
+Assert-MarkdownLinksResolve ($requiredRootFiles + $requiredGuideFiles + $requiredSampleReadmes + $featureTrackingFiles)
 
 Write-Host "Checking package metadata and package-facing documentation alignment..."
 Assert-PackageMetadata
 
-Write-Host "Checking required reader, contributor, contract, and release links..."
+Write-Host "Checking required reader, contributor, contract, sample, and release links..."
 Assert-RequiredLinks
+
+Write-Host "Checking sample README contracts..."
+Assert-SampleReadmeContracts
+
+Write-Host "Checking public API, option, type, method, and status references..."
+Assert-PublicReferenceDrift
 
 if ($failures.Count -gt 0) {
     Write-Error ("Documentation validation failed:`n - " + ($failures -join "`n - "))

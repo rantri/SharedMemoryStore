@@ -17,7 +17,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Production API readiness: renames the primary store type to MemoryStore, removes retained writable reservation memory, adds bounded wait policies, strengthens validation/status outcomes, and keeps diagnostics aggregate-first.</PackageReleaseNotes>
+    <PackageReleaseNotes>Documentation and samples excellence: reorganizes the reader journey, expands concept, feature, sample, maintainer, validation, packaging, and release guidance, and preserves the 1.0.0 runtime API contract.</PackageReleaseNotes>
     <AssemblyName>SharedMemoryStore</AssemblyName>
     <RootNamespace>SharedMemoryStore</RootNamespace>
   </PropertyGroup>

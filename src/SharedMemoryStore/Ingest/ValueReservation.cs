@@ -33,7 +33,7 @@ public struct ValueReservation : IDisposable
     public readonly int RemainingBytes => Math.Max(0, PayloadLength - BytesWritten);
 
     /// <summary>
-    /// Gets a writable span over remaining store-owned payload bytes while the reservation is pending.
+    /// Gets an immediate writable span over remaining store-owned payload bytes while the reservation is pending.
     /// </summary>
     /// <param name="sizeHint">Minimum useful remaining size requested by the caller, or zero for any remaining bytes.</param>
     public readonly Span<byte> GetSpan(int sizeHint = 0)
@@ -92,7 +92,7 @@ public struct ValueReservation : IDisposable
     }
 
     /// <summary>
-    /// Aborts the reservation when it is still pending; completed reservations are left unchanged.
+    /// Aborts the reservation on a best-effort basis when it is still pending; completed reservations are left unchanged.
     /// </summary>
     public readonly void Dispose()
     {

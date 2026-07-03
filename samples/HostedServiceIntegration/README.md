@@ -1,29 +1,81 @@
 # Hosted Service Integration Sample
 
-This sample keeps service-style lifecycle and health behavior outside the core
-package. It opens `MemoryStore`, validates options, publishes a health value,
-requests diagnostics, runs explicit cleanup/recovery hooks, and disposes the
-store during shutdown.
+## Purpose and Audience
 
-The sample intentionally does not add hosting dependencies to the core package.
-Applications that use `Microsoft.Extensions.Hosting`, health checks, logging, or
-dependency injection should keep those dependencies in their application or in a
-separate optional adapter package.
+This sample is for application owners who need service-style lifecycle and
+health behavior around the core package. It shows an application-owned wrapper
+that opens `MemoryStore`, validates options, publishes a health value, reads
+diagnostics, runs explicit recovery hooks, and disposes the store during
+shutdown.
 
-Run:
+## Concepts Demonstrated
+
+- `SharedMemoryStoreOptions.Create` and option validation.
+- `MemoryStore.TryCreateOrOpen` inside an application lifecycle wrapper.
+- Health shape from `TryGetDiagnostics`.
+- Explicit `TryRecoverLeases` and `TryRecoverReservations`.
+- Shutdown cleanup through store disposal.
+- Keeping hosting, dependency injection, logging, and health dependencies
+  outside the core package.
+
+## Prerequisites
+
+- .NET SDK compatible with `net10.0`.
+- Windows x64 for the current named memory-mapped-file validation target.
+- Repository checkout from the repository root.
+
+## Run
 
 ```powershell
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
 ```
 
-Expected output includes `start: Success`, a healthy diagnostics result,
-successful recovery calls, and `stop: Success`.
+## Expected Output
 
-Validation on 2026-07-03:
+Expected success shape:
 
-```powershell
-dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
+```text
+start: Success
+publish: Success
+health: StoreHealth { IsHealthy = True, LastStatus = Success, FreeSlotCount = 3, BusyCount = 0 }
+recover leases: Success
+recover reservations: Success
+stop: Success
 ```
 
-Result: start, publish, health, lease recovery, reservation recovery, and stop
-all returned `Success`.
+The exact `FreeSlotCount` can change if the sample changes capacity or publish
+count, but health should report `IsHealthy = True` and recovery calls should
+return `Success` on the validated platform.
+
+## Expected Non-Success Statuses
+
+- `UnsupportedPlatform`: the current platform does not support the required
+  named memory-mapped-file behavior or owner-liveness checks.
+- `InvalidOptions`: application configuration failed validation.
+- `StoreBusy` or `OperationCanceled`: startup, health, recovery, or shutdown
+  did not acquire shared synchronization under the selected policy.
+- `StoreDisposed`: a caller used the wrapper after shutdown.
+
+If startup fails, the program prints `start: <status>` and exits with a nonzero
+code.
+
+## Cleanup
+
+The sample uses a unique store name for each run and calls `Stop`, which
+disposes the store handle. It also demonstrates explicit recovery calls before
+shutdown. It does not require manual file cleanup.
+
+## Related Documentation
+
+- [samples.md](../../docs/samples.md)
+- [Integration](../../docs/integration.md)
+- [Lifecycle](../../docs/lifecycle.md)
+- [Diagnostics](../../docs/diagnostics.md)
+- [Maintainers](../../docs/maintainers.md)
+
+## Scope Boundaries and Non-Goals
+
+This sample is not a framework adapter package. It intentionally does not add
+hosting, dependency injection, logging, options-framework, or health-check
+dependencies to the core package. Applications may adapt the wrapper shape to
+their own host.

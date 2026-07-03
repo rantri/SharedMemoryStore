@@ -17,11 +17,41 @@ if (start != StoreOpenStatus.Success)
     return 1;
 }
 
-Console.WriteLine($"publish: {lifecycle.PublishHealthValue([1], [2, 3, 4])}");
-Console.WriteLine($"health: {lifecycle.CheckHealth()}");
-Console.WriteLine($"recover leases: {lifecycle.RecoverLeases()}");
-Console.WriteLine($"recover reservations: {lifecycle.RecoverReservations()}");
-Console.WriteLine($"stop: {lifecycle.Stop()}");
+var publish = lifecycle.PublishHealthValue([1], [2, 3, 4]);
+Console.WriteLine($"publish: {publish}");
+if (publish != StoreStatus.Success)
+{
+    return 2;
+}
+
+var health = lifecycle.CheckHealth();
+Console.WriteLine($"health: {health}");
+if (!health.IsHealthy)
+{
+    return 3;
+}
+
+var leaseRecovery = lifecycle.RecoverLeases();
+Console.WriteLine($"recover leases: {leaseRecovery}");
+if (leaseRecovery != StoreStatus.Success)
+{
+    return 4;
+}
+
+var reservationRecovery = lifecycle.RecoverReservations();
+Console.WriteLine($"recover reservations: {reservationRecovery}");
+if (reservationRecovery != StoreStatus.Success)
+{
+    return 5;
+}
+
+var stop = lifecycle.Stop();
+Console.WriteLine($"stop: {stop}");
+if (stop != StoreStatus.Success)
+{
+    return 6;
+}
+
 return 0;
 
 internal sealed class StoreLifecycleAdapter : IDisposable

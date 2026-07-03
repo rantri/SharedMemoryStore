@@ -36,7 +36,7 @@ public readonly struct ValueLease : IDisposable
     public ReadOnlySpan<byte> DescriptorSpan => IsActive ? _store!.GetDescriptorSpan(_slotIndex, _lifecycleId) : ReadOnlySpan<byte>.Empty;
 
     /// <summary>
-    /// Releases the lease exactly once.
+    /// Releases the lease exactly once and returns the deterministic release status.
     /// </summary>
     public StoreStatus Release()
     {
@@ -52,7 +52,7 @@ public readonly struct ValueLease : IDisposable
     }
 
     /// <summary>
-    /// Releases the lease when it is still active.
+    /// Releases the lease on a best-effort basis when it is still active.
     /// </summary>
     public void Dispose()
     {

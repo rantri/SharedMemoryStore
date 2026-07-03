@@ -125,6 +125,11 @@ static async Task RunPipelinesAdapterExampleAsync(MemoryStore store)
     await pipe.Reader.CompleteAsync();
 
     Console.WriteLine($"pipeline publish: {status}");
+    if (status != StoreStatus.Success)
+    {
+        return;
+    }
+
     Console.WriteLine($"pipeline copied: {copiedBytes}");
     RunReaderExample(store, key, "pipeline reader");
 }
@@ -137,7 +142,13 @@ static void RunSegmentedBufferedExample(MemoryStore store)
     var sequence = SequenceFactory.Create(first, second);
     var descriptor = CreateDescriptor((int)sequence.Length, frameKind: 3);
 
-    Console.WriteLine($"segmented publish: {store.TryPublishSegments(key, sequence, descriptor, out var copied)}");
+    var publish = store.TryPublishSegments(key, sequence, descriptor, out var copied);
+    Console.WriteLine($"segmented publish: {publish}");
+    if (publish != StoreStatus.Success)
+    {
+        return;
+    }
+
     Console.WriteLine($"segmented copied: {copied}");
     RunReaderExample(store, key, "segmented reader");
 }
@@ -145,7 +156,13 @@ static void RunSegmentedBufferedExample(MemoryStore store)
 static void RunAbortExample(MemoryStore store)
 {
     var key = new byte[] { 2 };
-    Console.WriteLine($"abort reserve: {store.TryReserve(key, 4, default, out var reservation)}");
+    var reserve = store.TryReserve(key, 4, default, out var reservation);
+    Console.WriteLine($"abort reserve: {reserve}");
+    if (reserve != StoreStatus.Success)
+    {
+        return;
+    }
+
     reservation.GetSpan()[0] = 42;
     Console.WriteLine($"abort: {reservation.Abort()}");
     Console.WriteLine($"abort acquire: {store.TryAcquire(key, out _)}");

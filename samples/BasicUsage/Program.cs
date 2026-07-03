@@ -22,16 +22,52 @@ if (openStatus != StoreOpenStatus.Success || store is null)
 
 using (store)
 {
-    var key = new byte[] { 1, 2, 3 };
-    var descriptor = new byte[] { 9, 8 };
-    var payload = new byte[] { 4, 5, 6, 7 };
+    Span<byte> key = stackalloc byte[1 + StoreByteEncoding.Int32ByteCount];
+    key[0] = 1; // application-owned key namespace
+    StoreByteEncoding.WriteInt32LittleEndian(42, key[1..]);
 
-    Console.WriteLine(store.TryPublish(key, payload, descriptor));
-    Console.WriteLine(store.TryAcquire(key, out var lease));
+    Span<byte> descriptor = stackalloc byte[StoreByteEncoding.BasicDescriptorByteCount];
+    StoreByteEncoding.WriteBasicDescriptor(schemaVersion: 1, flags: 0, descriptor);
+
+    Span<byte> payload = stackalloc byte[] { 4, 5, 6, 7 };
+
+    var publish = store.TryPublish(key, payload, descriptor);
+    Console.WriteLine(publish);
+    if (publish != StoreStatus.Success)
+    {
+        return 2;
+    }
+
+    var acquire = store.TryAcquire(key, out var lease);
+    Console.WriteLine(acquire);
+    if (acquire != StoreStatus.Success)
+    {
+        return 3;
+    }
+
     Console.WriteLine($"value bytes: {BitConverter.ToString(lease.ValueSpan.ToArray())}");
-    Console.WriteLine(lease.Release());
-    Console.WriteLine(store.TryRemove(key));
-    Console.WriteLine(store.TryPublish(key, [10]));
+    var release = lease.Release();
+    Console.WriteLine(release);
+    if (release != StoreStatus.Success)
+    {
+        return 4;
+    }
+
+    var remove = store.TryRemove(key);
+    Console.WriteLine(remove);
+    if (remove != StoreStatus.Success)
+    {
+        return 5;
+    }
+
+    Span<byte> replacementPayload = stackalloc byte[] { 10 };
+    var reusePublish = store.TryPublish(key, replacementPayload);
+    Console.WriteLine(reusePublish);
+    if (reusePublish != StoreStatus.Success)
+    {
+        return 6;
+    }
+
     Console.WriteLine($"free slots: {store.GetDiagnostics().FreeSlotCount}");
 }
 

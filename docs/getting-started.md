@@ -86,12 +86,19 @@ Success
 
 ## Next Steps
 
+- Use [Concepts](concepts.md) for the package vocabulary before advanced
+  workflows.
+- Use [Byte encoding](byte-encoding.md) when replacing sample byte literals
+  with application string, integer, GUID, descriptor, or payload conventions.
 - Use [Usage](usage.md) for the full consumer workflow.
+- Use [Examples](examples.md) for basic values, frame-shaped values, direct
+  ingest, segmented payloads, waits, and diagnostics snippets.
 - Use [Errors](errors.md) when an operation returns a non-success status.
 - Use [Diagnostics](diagnostics.md) to inspect capacity pressure and failure
   counters.
 - Use [Lifecycle](lifecycle.md) to understand ownership, lease release, removal,
   stale recovery, and disposal.
+- Use [Samples](samples.md) for the complete runnable sample ladder.
 - Use [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) for a
   runnable repository sample.
 - Use [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)

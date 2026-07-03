@@ -29,11 +29,14 @@ Run the relevant checks before opening a pull request:
 
 ```powershell
 scripts/validate-docs.ps1
-scripts/validate-package-consumption.ps1
-dotnet test -c Release
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
+dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
+dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
+scripts/validate-package-consumption.ps1
+dotnet test SharedMemoryStore.slnx -c Release
+dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 
 Benchmarks are useful for performance-sensitive changes:
@@ -81,6 +84,12 @@ change:
 - [Shared-memory layout contract](specs/001-frame-memory-store/contracts/shared-memory-layout.md)
 
 Documentation-only changes still require `scripts/validate-docs.ps1`.
+They also require a release-impact review against
+[Maintainers](docs/maintainers.md), [Release preparation](docs/releases.md),
+[Packaging](docs/packaging.md), [CHANGELOG.md](CHANGELOG.md),
+[SUPPORT.md](SUPPORT.md), and [SECURITY.md](SECURITY.md) when wording touches
+public behavior, support scope, security process, package metadata, platform
+support, performance claims, diagnostics, samples, or release status.
 
 ## Compatibility Review
 

@@ -38,7 +38,7 @@ The initial public contract supports:
   including lease recovery results and key-index tombstone health.
 
 The store does not parse frame headers, own application schemas, provide a
-distributed cache, persist data after process and mapping lifetime, or promise
+cross-host cache, persist data beyond process and mapping lifetime, or promise
 cross-platform support beyond the documented Windows-first validation scope.
 
 ## First Use
@@ -105,8 +105,16 @@ safe across generation rollover.
 - [Documentation index](docs/index.md): complete table of contents by audience.
 - [Getting started](docs/getting-started.md): install, local package source,
   minimal workflow, and expected statuses.
+- [Concepts](docs/concepts.md): store, name, key, descriptor, payload, slot,
+  lease, reservation, wait policy, status, diagnostics, recovery, capacity,
+  lifecycle, portability, and package contract vocabulary.
+- [Byte encoding](docs/byte-encoding.md): canonical key, descriptor, and
+  payload byte layouts with allocation-conscious helper patterns.
 - [Usage guide](docs/usage.md): create/open, publish, reserve, segmented publish,
   acquire, release, remove, reuse, diagnostics, recovery, and dispose.
+- [Examples](docs/examples.md): basic values, frame-shaped values, direct
+  reservation ingest, segmented payloads, diagnostics, waits, and error
+  handling.
 - [Errors and statuses](docs/errors.md): deterministic status outcomes and
   troubleshooting.
 - [Diagnostics](docs/diagnostics.md): snapshot fields and consumer-owned
@@ -115,12 +123,16 @@ safe across generation rollover.
   recovery, abnormal termination, and cleanup.
 - [Integration](docs/integration.md): optional lifecycle, health, hosting, and
   narrow-interface boundaries outside the core package.
-- [Examples](docs/examples.md): basic workflow, error handling, and
-  frame-shaped values.
 - [Performance scope](docs/performance.md): measured scope and unmeasured
   claims.
 - [Portability](docs/portability.md): .NET 10 baseline, Windows-first
   validation, layout compatibility, and future C++/Python constraints.
+- [Samples](docs/samples.md): ordered runnable sample ladder from minimal usage
+  through frame values, zero-copy ingest, and optional hosted integration.
+- [Architecture](docs/architecture.md): maintainer internals, source areas,
+  invariants, storage, lifecycle, synchronization, recovery, and diagnostics.
+- [Maintainers](docs/maintainers.md): documentation update rules, validation
+  commands, contract boundaries, performance evidence, and release impact.
 - [Packaging](docs/packaging.md): package metadata, package README, release
   notes, and clean consumer validation.
 - [Release preparation](docs/releases.md): maintainer checks before publication.
@@ -133,6 +145,13 @@ Detailed behavior sources:
 - [Reservation API contract](specs/003-zero-copy-ingest/contracts/reservation-api.md)
 - [Ingest layout contract](specs/003-zero-copy-ingest/contracts/ingest-layout.md)
 - [Reservation diagnostics and errors](specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
+- [Owner recovery hardening contract](specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
+- [Disposal and rollover hardening contract](specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
+- [Index health hardening contract](specs/004-store-reliability-hardening/contracts/index-health-contract.md)
+- [Production public API contract](specs/005-api-production-readiness/contracts/public-api-contract.md)
+- [Contention configuration contract](specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
+- [Diagnostics integration contract](specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md)
+- [Reservation memory contract](specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
 
 Runnable samples:
 
@@ -165,8 +184,13 @@ Runnable samples:
 
 ```powershell
 scripts/validate-docs.ps1
+dotnet build SharedMemoryStore.slnx -c Release
+dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
+dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
+dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
+dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
 scripts/validate-package-consumption.ps1
-dotnet test -c Release
+dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 

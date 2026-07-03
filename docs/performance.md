@@ -1,30 +1,47 @@
 # Performance Scope
 
 SharedMemoryStore is designed to avoid per-operation managed heap allocation in
-hot paths after initialization and warm-up. That contract is part of the
-[public API contract](../specs/001-frame-memory-store/contracts/public-api.md).
-Expected failure timing is described in the
-[error taxonomy contract](../specs/001-frame-memory-store/contracts/error-taxonomy.md).
+hot paths after initialization and warm-up. That expectation is tied to the
+[public-api.md](../specs/001-frame-memory-store/contracts/public-api.md), status
+outcomes are tied to
+[error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md),
+and key-index health is tied to
+[index-health-contract.md](../specs/004-store-reliability-hardening/contracts/index-health-contract.md).
 
-## What Is Measured
+This page separates measured results, design expectations, benchmark method,
+capacity assumptions, platform assumptions, and unvalidated scenarios.
 
-The repository includes benchmark projects under `benchmarks/` for lifecycle,
-publish allocation, lease allocation, failure latency, frame throughput, direct
-ingest allocation, direct ingest throughput, segmented publish, remove and reuse,
-and reuse stress scenarios.
+## Measured Areas
+
+The repository includes benchmarks under
+[`benchmarks/SharedMemoryStore.Benchmarks/`](../benchmarks/SharedMemoryStore.Benchmarks/)
+for:
+
+- lifecycle open/create and disposal paths.
+- publish allocation and throughput.
+- lease allocation and acquire/release behavior.
+- failure latency.
+- frame throughput.
+- direct ingest allocation and throughput.
+- segmented publish.
+- remove and reuse.
+- reliability recovery and lifecycle stress.
+- key-index tombstone pressure.
 
 Benchmark results are environment-specific. Treat them as local validation data,
 not hardware guarantees.
 
-## What Is Not Guaranteed
+## Design Expectations
 
-The documentation does not promise:
+The current design expects:
 
-- a fixed throughput number on unmeasured hardware.
-- a latency percentile for every OS, CPU, storage, or virtualization setup.
-- a network-distributed cache behavior.
-- application-specific frame parsing performance.
-- stable benchmark results across prerelease API or layout changes.
+- fixed-capacity shared-memory storage from `SharedMemoryStoreOptions`.
+- immutable published payload bytes.
+- direct reservation writes into store-owned memory after capacity is reserved.
+- segmented publish to copy existing segments into one committed store value.
+- status-returning pressure and contention outcomes.
+- caller-owned diagnostics, retries, logging, and metrics.
+- no hidden background workers in the core package.
 
 ## Running Benchmarks
 
@@ -39,44 +56,33 @@ dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.B
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 ```
 
-Sustained throughput validation runs the direct-ingest and simple-publish
-60-second loops once each and prints the relative comparison for release notes:
+Sustained throughput validation:
 
 ```powershell
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation sustained-throughput
 ```
 
-The 100,000-frame allocation validation can also be run once without repeated
-BenchmarkDotNet measurement iterations:
+Direct allocation validation:
 
 ```powershell
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation direct-allocation
 ```
 
-Run benchmarks on an otherwise quiet machine and record OS, CPU, .NET SDK, and
-package version with the result. If a performance claim is added to public docs,
-include the measured scenario and update release notes when the claim changes.
+Record OS, CPU, .NET SDK, package version, payload bytes, descriptor bytes,
+slot count, lease-record count, producer count, reader count, segment count,
+copied bytes, final status, and benchmark command with any public performance
+claim.
 
-For ingest validation, record payload bytes, descriptor bytes, slot count,
-producer count, reader count, segment count, copied bytes, final commit or
-recovery status, and the benchmark environment summary.
+## Capacity Assumptions
 
-The `DirectIngestAllocationBenchmarks.ValidateOneHundredThousandFramesAllocation`
-result records `FrameCount`, `TotalAllocatedBytes`, `AllocatedBytesPerFrame`,
-`FinalStatus`, and `Passed`. For SC-001 readiness, `FrameCount` must equal
-`BenchmarkEnvironment.DirectIngestAllocationFrames`, `FinalStatus` must be
-`Success`, and `TotalAllocatedBytes` must be `0`.
+Capacity is fixed at create/open time. `SlotCount` must cover published values,
+pending removals, and pending reservations. `LeaseRecordCount` must cover
+concurrent active readers. `MaxKeyBytes`, `MaxDescriptorBytes`, and
+`MaxValueBytes` must cover encoded keys, descriptors, and payloads.
 
-The direct ingest throughput benchmark models the socket-style path by writing
-directly into reservation memory after capacity is reserved. It does not stage a
-producer-owned full-payload array before publication.
-
-## Capacity Pressure
-
-Use [Diagnostics](diagnostics.md) to track `StoreFull`, `LeaseTableFull`, and
-`CapacityPressureCount` signals. Capacity pressure is usually a configuration or
-consumer-lifecycle issue: increase slot count, increase lease record count,
-release leases sooner, or reduce removal pressure.
+Use [Diagnostics](diagnostics.md) to track `StoreFull`, `LeaseTableFull`,
+`CapacityPressureCount`, active leases, active reservations, pending removals,
+and key-index health.
 
 ## Tombstone Pressure
 
@@ -84,14 +90,40 @@ The key index uses open addressing and tombstones to preserve probe chains after
 removal. High unique-key churn can make missing-key lookup and new-key insert
 paths probe longer even when live slot capacity is available. Diagnostic
 snapshots expose occupied, tombstone, empty, usable capacity, probe length, and
-compaction counters so consumers can distinguish churn pressure from live
-capacity pressure.
+compaction counters.
 
 The current internal threshold compacts synchronously under the store mutation
 lock when tombstones reach 35% of index entries, when no empty probe terminators
-remain, or when observed probe length reaches 75% of index capacity. The
-`TombstonePressureBenchmarks` benchmark records clean-index missing-lookup and
-new-insert baselines, managed-pressure timings, early pressure detection before
-the 75% worst-case probe threshold, and preservation checks for active leases,
-pending reservations, duplicate detection, and visible values without adding a
-public maintenance API or background worker.
+remain, or when observed probe length reaches 75% of index capacity. This is a
+current implementation detail for maintainers, not a public maintenance API.
+
+## Platform Assumptions
+
+Current validation targets `.NET 10` and Windows x64 named memory-mapped files.
+Other platforms may return documented unsupported outcomes. See
+[Portability](portability.md) before publishing platform claims.
+
+## Not Claimed
+
+The documentation does not promise:
+
+- a fixed throughput number on unmeasured hardware.
+- a latency percentile for every OS, CPU, storage, virtualization, or container
+  setup.
+- cross-host cache behavior.
+- persistence after process and mapping lifetime.
+- application-specific frame parsing performance.
+- protection from malicious writers that already have mapping access.
+- current C++ or Python bindings.
+- stable benchmark results across future API or layout changes.
+
+## Release Review
+
+If a performance claim is added, changed, or removed, update:
+
+- this page.
+- [Release preparation](releases.md).
+- [Maintainers](maintainers.md).
+- [CHANGELOG.md](../CHANGELOG.md) when release-facing behavior or support
+  claims change.
+- benchmark result notes or validation evidence.

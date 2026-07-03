@@ -12,7 +12,7 @@ using SharedMemoryStore.Slots;
 namespace SharedMemoryStore;
 
 /// <summary>
-/// Disposable owner of one bounded named shared-memory value store.
+/// Disposable process-local handle for one bounded named shared-memory value store.
 /// </summary>
 public sealed unsafe class MemoryStore : IDisposable
 {
@@ -50,7 +50,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Creates or opens a named store using the supplied options.
+    /// Creates or opens a named store using the supplied options and the default bounded wait policy.
     /// </summary>
     public static StoreOpenStatus TryCreateOrOpen(in SharedMemoryStoreOptions options, out MemoryStore? store)
     {
@@ -58,7 +58,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Creates or opens a named store using the supplied options and wait policy.
+    /// Creates or opens a named store using the supplied options and caller-selected wait policy.
     /// </summary>
     public static StoreOpenStatus TryCreateOrOpen(
         in SharedMemoryStoreOptions options,
@@ -132,7 +132,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes immutable value bytes and optional descriptor bytes under an opaque byte key.
+    /// Publishes immutable payload bytes and optional descriptor bytes under an opaque byte key.
     /// </summary>
     public StoreStatus TryPublish(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor = default)
     {
@@ -140,7 +140,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes immutable value bytes using the supplied wait policy for shared synchronization.
+    /// Publishes immutable payload bytes using the supplied wait policy for shared synchronization.
     /// </summary>
     public StoreStatus TryPublish(
         ReadOnlySpan<byte> key,
@@ -217,8 +217,9 @@ public sealed unsafe class MemoryStore : IDisposable
     /// </summary>
     /// <remarks>
     /// The reservation remains invisible to readers until commit succeeds.
-    /// Callers must advance exactly <paramref name="payloadLength"/> bytes before commit. Disposing an active
-    /// reservation aborts it and descriptor bytes are immutable after reservation creation.
+    /// Callers write through immediate <see cref="ValueReservation.GetSpan(int)"/> views and must advance
+    /// exactly <paramref name="payloadLength"/> bytes before commit. Disposing an active reservation aborts it,
+    /// and descriptor bytes are immutable after reservation creation.
     /// </remarks>
     public StoreStatus TryReserve(
         ReadOnlySpan<byte> key,
@@ -307,7 +308,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes a segmented payload as one contiguous store value without allocating a temporary full-payload array.
+    /// Publishes a segmented payload as one contiguous store value without requiring a caller-owned full-payload array.
     /// </summary>
     public StoreStatus TryPublishSegments(
         ReadOnlySpan<byte> key,
@@ -630,7 +631,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Releases this store handle and invalidates future operations and lease span projections.
+    /// Releases this store handle and invalidates future operations, lease spans, and reservation spans.
     /// </summary>
     public void Dispose()
     {

@@ -40,7 +40,7 @@ public enum StoreOpenStatus
 }
 
 /// <summary>
-/// Describes the deterministic outcome of a store operation.
+/// Describes the deterministic outcome of a public store operation.
 /// </summary>
 public enum StoreStatus
 {

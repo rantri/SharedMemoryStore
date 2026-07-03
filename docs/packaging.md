@@ -1,10 +1,10 @@
 # Packaging
 
-The runtime package is built from `src/SharedMemoryStore/SharedMemoryStore.csproj`
-and targets `net10.0`. Runtime dependencies are limited to the .NET BCL. The
-zero-copy ingest feature adds public APIs without adding runtime dependencies.
+The runtime package is built from
+[`src/SharedMemoryStore/SharedMemoryStore.csproj`](../src/SharedMemoryStore/SharedMemoryStore.csproj)
+and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
 
-Current package metadata:
+## Current Package Metadata
 
 | Field | Value |
 |-------|-------|
@@ -15,18 +15,19 @@ Current package metadata:
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;library` |
 | `PackageLicenseExpression` | `MIT` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `Adds zero-copy reservation ingest, segmented publish, explicit reservation recovery, diagnostics, samples, benchmarks, and documentation.` |
+| `PackageReleaseNotes` | `Documentation and samples excellence: reorganizes the reader journey, expands concept, feature, sample, maintainer, validation, packaging, and release guidance, and preserves the 1.0.0 runtime API contract.` |
 | `RepositoryType` | `git` |
 
-The package project packs the root [readme](../README.md) at the package root so
-NuGet consumers see the same package purpose, status, first-use workflow,
-support path, security path, and contract links as repository visitors.
+The package project packs the root [README.md](../README.md) at the package
+root so NuGet consumers see the same package purpose, status, first-use
+workflow, support path, security path, and contract links as repository
+visitors.
 
 ## Build and Pack
 
 ```powershell
 dotnet restore
-dotnet build -c Release
+dotnet build SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 
@@ -36,19 +37,38 @@ dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifac
 scripts/validate-package-consumption.ps1
 ```
 
-The clean consumer validation packs the local project, creates a clean console
-application, installs `SharedMemoryStore` from the local package source, and
-exercises create/open, publish, reservation ingest, segmented publish, acquire,
-release, remove, reuse, recovery status paths, and dispose.
+The clean consumer validation packs the local project, creates a clean
+`net10.0` console application, installs `SharedMemoryStore` from the local
+package source, and exercises the documented first-use path plus advanced
+package-surface checks: publish/acquire/release/remove, direct reservation
+ingest, segmented publish, recovery status paths, and post-disposal status.
+
 This command is a maintainer validation path, not a requirement for ordinary
 package users.
 
-## Release Notes
+## Package README Alignment
 
-`PackageReleaseNotes` and [CHANGELOG.md](../CHANGELOG.md) must agree on package
-version, compatibility impact, public API or behavior changes, documentation-only
-changes, known limitations, and validated platform scope. See
-[Release preparation](releases.md) for the complete maintainer checklist.
+The package-facing README is the repository [README.md](../README.md). Keep it
+aligned with:
+
+- [Getting started](getting-started.md) for first-use package commands.
+- [Samples](samples.md) for runnable sample commands.
+- [Support](../SUPPORT.md) and [Security](../SECURITY.md) for reporting paths.
+- [Release preparation](releases.md) for release readiness.
+- [CHANGELOG.md](../CHANGELOG.md) for package history and compatibility impact.
+
+## Release Notes Alignment
+
+`PackageReleaseNotes`, [CHANGELOG.md](../CHANGELOG.md), and
+[Release preparation](releases.md) must agree on:
+
+- package version.
+- compatibility impact.
+- public API or behavior changes.
+- documentation-only changes.
+- known limitations.
+- validated platform scope.
+- migration notes for breaking changes.
 
 Documentation-only changes are patch-level for an already published package
 unless they change a public behavior, layout, lifecycle, support, security, or
@@ -56,7 +76,7 @@ compatibility promise.
 
 ## License and Source Metadata
 
-The package license expression is `MIT` and must match the [license file](../LICENSE).
-The project declares `RepositoryType` as `git`. A public repository URL should be
-added only when maintainers have finalized the hosted repository URL for
-publication.
+The package license expression is `MIT` and must match the
+[LICENSE](../LICENSE). The project declares `RepositoryType` as `git`. Add a
+public repository URL only when maintainers have finalized the hosted repository
+URL for publication.

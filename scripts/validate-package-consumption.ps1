@@ -40,6 +40,7 @@ Invoke-DotNet pack (Join-Path $root "src/SharedMemoryStore/SharedMemoryStore.csp
 Invoke-DotNet new console -f net10.0 -n SharedMemoryStore.ConsumerSmoke -o $consumerDir
 Invoke-DotNet add (Join-Path $consumerDir "SharedMemoryStore.ConsumerSmoke.csproj") package SharedMemoryStore --source $packageDir
 
+Write-Host "Validating documented first-use workflow and package-surface smoke checks..."
 $program = @'
 using SharedMemoryStore;
 using System.Buffers;
@@ -59,6 +60,7 @@ var options = new SharedMemoryStoreOptions
 };
 
 var open = MemoryStore.TryCreateOrOpen(options, out var store);
+Console.WriteLine($"open: {open}");
 if (open != StoreOpenStatus.Success || store is null)
 {
     return 1;
@@ -66,25 +68,45 @@ if (open != StoreOpenStatus.Success || store is null)
 
 using (store)
 {
-    if (store.TryPublish([1], [2, 3, 4], [9]) != StoreStatus.Success) return 2;
-    if (store.TryAcquire([1], out var lease) != StoreStatus.Success) return 3;
+    var publish = store.TryPublish([1], [2, 3, 4], [9]);
+    Console.WriteLine($"publish: {publish}");
+    if (publish != StoreStatus.Success) return 2;
+    var acquire = store.TryAcquire([1], out var lease);
+    Console.WriteLine($"acquire: {acquire}");
+    if (acquire != StoreStatus.Success) return 3;
     if (!new byte[] { 2, 3, 4 }.AsSpan().SequenceEqual(lease.ValueSpan)) return 4;
-    if (lease.Release() != StoreStatus.Success) return 5;
-    if (store.TryRemove([1]) != StoreStatus.Success) return 6;
+    Console.WriteLine($"value length: {lease.ValueLength}");
+    var release = lease.Release();
+    Console.WriteLine($"release: {release}");
+    if (release != StoreStatus.Success) return 5;
+    var remove = store.TryRemove([1]);
+    Console.WriteLine($"remove: {remove}");
+    if (remove != StoreStatus.Success) return 6;
     var frame = CreateLengthPrefixedFrame(new byte[] { 5, 6 });
-    if (await PublishLengthPrefixedFrameAsync(store, new byte[] { 1 }, frame, new byte[] { 8 }) != StoreStatus.Success) return 7;
-    if (ReadStoredFrame(store, new byte[] { 1 }, new byte[] { 5, 6 }) != StoreStatus.Success) return 8;
+    var directIngest = await PublishLengthPrefixedFrameAsync(store, new byte[] { 1 }, frame, new byte[] { 8 });
+    Console.WriteLine($"direct ingest: {directIngest}");
+    if (directIngest != StoreStatus.Success) return 7;
+    var readFrame = ReadStoredFrame(store, new byte[] { 1 }, new byte[] { 5, 6 });
+    Console.WriteLine($"direct read: {readFrame}");
+    if (readFrame != StoreStatus.Success) return 8;
     if (store.TryRemove([1]) != StoreStatus.Success) return 13;
 
     var segmented = new ReadOnlySequence<byte>(new byte[] { 7, 8, 9 });
-    if (store.TryPublishSegments([1], segmented, [3], out var copied) != StoreStatus.Success) return 14;
+    var segmentedPublish = store.TryPublishSegments([1], segmented, [3], out var copied);
+    Console.WriteLine($"segmented publish: {segmentedPublish}");
+    if (segmentedPublish != StoreStatus.Success) return 14;
+    Console.WriteLine($"segmented copied: {copied}");
     if (copied != 3) return 15;
     if (store.TryRemove([1]) != StoreStatus.Success) return 16;
-    if (store.TryRecoverReservations(new ReservationRecoveryOptions(false), out var report) != StoreStatus.Success) return 17;
+    var recovery = store.TryRecoverReservations(new ReservationRecoveryOptions(false), out var report);
+    Console.WriteLine($"reservation recovery: {recovery}");
+    if (recovery != StoreStatus.Success) return 17;
     if (report.ScannedReservationCount != 0) return 18;
 }
 
-if (store.TryPublish([1], [6]) != StoreStatus.StoreDisposed) return 19;
+var disposed = store.TryPublish([1], [6]);
+Console.WriteLine($"disposed publish: {disposed}");
+if (disposed != StoreStatus.StoreDisposed) return 19;
 
 return 0;
 

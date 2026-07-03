@@ -1,13 +1,15 @@
 # Release Preparation
 
 This guide is the maintainer checklist for preparing a package release. It is
-written for the current `1.0.0` package and should be updated when
-package metadata, public API behavior, compatibility scope, support policy, or
-security reporting changes.
+written for the current `1.0.0` package and should be updated when package
+metadata, public API behavior, compatibility scope, support policy, security
+reporting, documentation scope, or sample behavior changes.
 
 ## Package Metadata
 
-Verify `src/SharedMemoryStore/SharedMemoryStore.csproj` before publishing:
+Verify
+[`src/SharedMemoryStore/SharedMemoryStore.csproj`](../src/SharedMemoryStore/SharedMemoryStore.csproj)
+before publishing:
 
 - `PackageId` is `SharedMemoryStore`.
 - `Version` matches the release being prepared.
@@ -16,10 +18,12 @@ Verify `src/SharedMemoryStore/SharedMemoryStore.csproj` before publishing:
   for opaque binary values.
 - `PackageTags` include shared memory, memory mapped files, zero-copy, and
   library terms.
-- `PackageLicenseExpression` is `MIT` and matches the [license file](../LICENSE).
+- `PackageLicenseExpression` is `MIT` and matches the [LICENSE](../LICENSE).
 - `PackageReadmeFile` is `README.md` and the project packs the root README at
   the package root.
-- `PackageReleaseNotes` matches the release entry in [CHANGELOG.md](../CHANGELOG.md).
+- `PackageReleaseNotes` matches the release entry in
+  [CHANGELOG.md](../CHANGELOG.md) and the metadata table in
+  [Packaging](packaging.md).
 - `RepositoryType` remains `git`. Add an owner-approved repository URL before a
   public package publication if the repository host is finalized.
 
@@ -43,26 +47,47 @@ notes.
 
 ## Compatibility Review
 
-Before release, compare public docs with these contracts:
+Compare public docs with these contracts:
 
-- [Public API contract](../specs/001-frame-memory-store/contracts/public-api.md)
-- [Error taxonomy contract](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
-- [Shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
-- [Owner recovery hardening contract](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
-- [Disposal and rollover hardening contract](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
-- [Index health hardening contract](../specs/004-store-reliability-hardening/contracts/index-health-contract.md)
+- [public-api.md](../specs/001-frame-memory-store/contracts/public-api.md)
+- [error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
+- [shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
+- [reservation-api.md](../specs/003-zero-copy-ingest/contracts/reservation-api.md)
+- [ingest-layout.md](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
+- [diagnostics-and-errors.md](../specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
+- [owner-recovery-contract.md](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
+- [disposal-rollover-contract.md](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
+- [index-health-contract.md](../specs/004-store-reliability-hardening/contracts/index-health-contract.md)
+- [public-api-contract.md](../specs/005-api-production-readiness/contracts/public-api-contract.md)
+- [contention-configuration-contract.md](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
+- [diagnostics-integration-contract.md](../specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md)
+- [reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
 
-Confirm that the docs do not claim current C++ or Python bindings, broad
-cross-platform support, unmeasured hardware performance, or application-specific
-frame parsing by the core store.
+Confirm that docs do not claim current C++ or Python bindings, broad
+cross-platform support, unmeasured hardware performance, application-specific
+frame parsing by the core store, hidden background work, persistence, or
+cross-host cache behavior.
+
+## Documentation-Only Release Review
+
+Documentation-only changes still need release review:
+
+- Run `scripts/validate-docs.ps1`.
+- Confirm examples and sample outputs match current source.
+- Confirm package metadata, `PackageReleaseNotes`, README, packaging guide,
+  changelog, and release notes agree.
+- Confirm compatibility wording did not change public behavior promises.
+- Confirm known limitations, platform scope, performance claims, support scope,
+  and security reporting paths remain current.
+- Update [Maintainers](maintainers.md) if the maintenance rules changed.
 
 ## Support and Security
 
 - Review [SUPPORT.md](../SUPPORT.md) for current support scope and unsupported
   scenarios.
 - Review [SECURITY.md](../SECURITY.md) and confirm GitHub private vulnerability
-  reporting or another owner-approved private reporting path is available before
-  publication.
+  reporting or another owner-approved private reporting path is available
+  before publication.
 - Confirm issue templates and the pull request template still route questions,
   bugs, documentation issues, feature requests, and security disclosures to the
   right place.
@@ -73,27 +98,34 @@ Run these commands from a clean checkout:
 
 ```powershell
 scripts/validate-docs.ps1
-scripts/validate-package-consumption.ps1
-dotnet test -c Release
+dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
-dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *DirectIngest*
-dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
+dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
+scripts/validate-package-consumption.ps1
+dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 
 Expected result: documentation inventory, placeholder checks, internal links,
-package metadata alignment, samples, clean package consumption, tests, ingest
-benchmarks, and pack all pass.
+package metadata alignment, sample README contracts, public API/status drift
+checks, sample commands, clean package consumption, tests, and pack all pass.
 
-## Documentation-Only Changes
+Benchmark commands are required when release notes make performance claims:
 
-Documentation-only releases are patch-level for an already published package
-when they clarify existing behavior without changing a public compatibility
-promise. A documentation change is not documentation-only if it redefines public
-API behavior, shared-memory layout behavior, error outcomes, lifecycle
-ownership, security process, or support guarantees.
+```powershell
+dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *DirectIngest*
+dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
+```
+
+## 1.0.0 Documentation and Samples Excellence Notes
+
+The documentation and samples excellence update reorganizes the reader journey,
+adds concept, sample ladder, architecture, and maintainer guides, expands sample
+README contracts, strengthens validation, and aligns package-facing metadata and
+release guidance. Runtime behavior and the `1.0.0` public API contract remain
+unchanged.
 
 ## 1.0.0 Production API Readiness Notes
 
@@ -115,8 +147,7 @@ Validation run on 2026-07-02:
 
 - `scripts/validate-docs.ps1`: passed.
 - `dotnet build SharedMemoryStore.slnx -c Release`: passed.
-- `dotnet test SharedMemoryStore.slnx -c Release --no-build`: passed, 85
-  tests.
+- `dotnet test SharedMemoryStore.slnx -c Release --no-build`: passed, 85 tests.
 - `dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release`: passed.
 - `scripts/validate-package-consumption.ps1`: passed and packed
   `SharedMemoryStore.0.2.0.nupkg`.
@@ -133,9 +164,9 @@ Validation run on 2026-07-02:
   passed BenchmarkDotNet discovery and dry execution.
 - `dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation sustained-throughput`:
   passed. Environment: .NET 10.0.5, Windows NT 10.0.26200.0, 32 logical CPUs,
-  1,300,000-byte payloads. Simple publish measured 22,782.13 publishes/s
-  across 1,366,928 frames; direct ingest measured 30,620.36 frames/s across
-  1,837,222 frames. Direct ingest was 1.344x simple publish, a 34.4% increase.
+  1,300,000-byte payloads. Simple publish measured 22,782.13 publishes/s across
+  1,366,928 frames; direct ingest measured 30,620.36 frames/s across 1,837,222
+  frames. Direct ingest was 1.344x simple publish, a 34.4% increase.
 
 ## Reliability Hardening Notes
 
@@ -143,6 +174,6 @@ The reliability hardening update corrects owner-scoped lease recovery, makes
 post-disposal outcomes deterministic at public boundaries, adds rollover-safe
 slot lifecycle identity, and exposes key-index tombstone health diagnostics with
 synchronous internal compaction. Package id and target framework remain
-unchanged. Runtime dependencies remain .NET BCL only. Shared-memory layout
-major version remains `1`; minor version advances to `2` because shared records
-now include reuse epochs.
+unchanged. Runtime dependencies remain .NET BCL only. Shared-memory layout major
+version remains `1`; minor version advances to `2` because shared records now
+include reuse epochs.

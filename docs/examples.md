@@ -4,24 +4,22 @@ These examples show consumer-owned workflows built on the current
 [public API contract](../specs/001-frame-memory-store/contracts/public-api.md).
 Frame-shaped values follow the opaque-byte rules in the
 [shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md).
+Direct ingest examples follow the
+[reservation API contract](../specs/003-zero-copy-ingest/contracts/reservation-api.md).
 
-## Basic Workflow
+## Basic Values
 
 ```csharp
 using SharedMemoryStore;
 
-var options = new SharedMemoryStoreOptions
-{
-    Name = $"sms-basic-{Guid.NewGuid():N}",
-    OpenMode = OpenMode.CreateOrOpen,
-    SlotCount = 2,
-    MaxValueBytes = 64,
-    MaxDescriptorBytes = 16,
-    MaxKeyBytes = 16,
-    LeaseRecordCount = 4,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
-};
+var options = SharedMemoryStoreOptions.Create(
+    name: $"sms-basic-{Guid.NewGuid():N}",
+    slotCount: 2,
+    maxValueBytes: 64,
+    maxDescriptorBytes: 16,
+    maxKeyBytes: 16,
+    leaseRecordCount: 4,
+    enableLeaseRecovery: true);
 
 var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
@@ -52,10 +50,29 @@ if (status == StoreStatus.DuplicateKey)
     _ = store.TryRemove(key);
     status = store.TryPublish(key, [1]);
 }
+
+if (status == StoreStatus.StoreBusy)
+{
+    // Apply caller-owned retry or backoff policy.
+}
 ```
 
 Expected operational failures return `StoreStatus` values. Use
 [Errors and statuses](errors.md) for the full status list.
+
+## Diagnostics Snapshot
+
+```csharp
+var status = store.TryGetDiagnostics(out var snapshot);
+if (status == StoreStatus.Success)
+{
+    Console.WriteLine(snapshot.FreeSlotCount);
+    Console.WriteLine(snapshot.GetFailureCount(StoreStatus.StoreFull));
+}
+```
+
+Use this pattern in health checks and support capture paths. The package does
+not choose logging or metrics infrastructure for the application.
 
 ## Language-Neutral Values
 
@@ -68,6 +85,28 @@ Keys, descriptors, and values are opaque byte sequences:
 
 Strings are a consumer convention. If a consumer uses strings, encode them to
 bytes before calling the core store and decode them after reading.
+
+## Allocation-Conscious Keys
+
+For hot paths, write key bytes into a caller-owned span and pass the span to the
+store. Prefix keys when different logical domains could otherwise collide.
+
+```csharp
+using System.Buffers.Binary;
+
+const byte OrderKeyPrefix = 1;
+
+Span<byte> key = stackalloc byte[1 + 4];
+key[0] = OrderKeyPrefix;
+BinaryPrimitives.WriteInt32LittleEndian(key[1..], orderId);
+
+var status = store.TryAcquire(key, out var lease);
+```
+
+Use [Byte encoding](byte-encoding.md) for string, GUID, descriptor, and payload
+encoding guidance. The
+[Basic usage sample](../samples/BasicUsage/README.md) includes a small helper
+class that demonstrates this pattern without adding a public package API.
 
 ## Frame-Shaped Values
 
@@ -94,7 +133,7 @@ also publishes a non-frame value to show that the core lifecycle is identical.
 ## Direct Frame Ingest
 
 When a frame header gives the payload length before the bytes are read, reserve
-the store slot first and receive directly into the writable reservation memory:
+the store slot first and receive directly into writable reservation memory:
 
 ```csharp
 var status = store.TryReserve([1], payloadLength, descriptor, out var reservation);
@@ -132,11 +171,23 @@ The [zero-copy ingest sample](../samples/ZeroCopyIngest/README.md) demonstrates
 direct chunked writes, a runnable length-prefixed stream adapter, abort cleanup,
 reader acquire, remove, and segmented publication.
 
-## Pipelines Adapter
+## Segmented Payloads
+
+Already-buffered segments can be published without flattening:
+
+```csharp
+ReadOnlySequence<byte> payload = GetBufferedPayload();
+var status = store.TryPublishSegments([2], payload, descriptor, out var copiedBytes);
+```
+
+The committed value is still one immutable contiguous payload for readers. The
+input can be segmented; the public shared-memory value is not.
+
+## Pipeline Adapter
 
 `System.IO.Pipelines` remains an adapter layer over the store contract. Read the
 frame with the pipeline, slice the payload as a `ReadOnlySequence<byte>`, and
-publish that sequence without flattening it:
+publish that sequence:
 
 ```csharp
 var read = await pipe.Reader.ReadAsync();
@@ -149,16 +200,17 @@ if (reader.TryReadLittleEndian(out int payloadLength)
 }
 ```
 
-This copies the pipeline-owned segments into one committed store value. It does
-not make `System.IO.Pipelines` part of the runtime package contract.
+This does not make `System.IO.Pipelines` part of the runtime package contract.
 
-## Segmented Buffered Frames
-
-Already-buffered segments can be published without flattening:
+## Wait Policy
 
 ```csharp
-ReadOnlySequence<byte> frame = GetBufferedFrame();
-var status = store.TryPublishSegments([2], frame, descriptor, out var copiedBytes);
+var publish = store.TryPublish(key, payload, descriptor, StoreWaitOptions.NoWait);
+if (publish == StoreStatus.StoreBusy)
+{
+    // The caller decides whether to retry, drop work, or report back pressure.
+}
 ```
 
-The committed value is still one immutable contiguous payload for readers.
+Use the [Usage](usage.md) guide for when to choose `Default`, `NoWait`, or
+`Infinite`.

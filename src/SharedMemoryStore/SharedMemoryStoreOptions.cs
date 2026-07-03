@@ -19,7 +19,7 @@ public enum OpenMode
 }
 
 /// <summary>
-/// Configuration used when creating or opening a bounded shared-memory store.
+/// Configuration used when creating or opening a bounded named shared-memory store.
 /// </summary>
 public sealed class SharedMemoryStoreOptions
 {
@@ -118,13 +118,13 @@ public sealed class SharedMemoryStoreOptions
 }
 
 /// <summary>
-/// Options for explicit stale lease recovery.
+/// Options for explicit owner-controlled stale lease recovery.
 /// </summary>
 /// <param name="RecoverCurrentProcessLeases">When true, active lease records owned by the current process may be recovered for tests and controlled shutdown.</param>
 public readonly record struct LeaseRecoveryOptions(bool RecoverCurrentProcessLeases);
 
 /// <summary>
-/// Summary returned by explicit stale lease recovery.
+/// Summary returned by explicit owner-controlled stale lease recovery.
 /// </summary>
 public readonly record struct LeaseRecoveryReport
 {

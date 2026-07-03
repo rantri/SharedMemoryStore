@@ -5,6 +5,15 @@ chronological order.
 
 ## 1.0.0 - 2026-07-03
 
+### Documentation
+
+- Reorganized the documentation and samples journey from first use through
+  concepts, feature guides, runnable samples, production review, architecture,
+  maintainer guidance, packaging, and release validation.
+- Added documentation and samples validation expectations for required guide
+  inventory, sample README contracts, public API/status references, package
+  metadata, release notes, and clean package consumption.
+
 ### Changed
 
 - Renamed the primary concrete store type from `SharedMemoryStore` to
