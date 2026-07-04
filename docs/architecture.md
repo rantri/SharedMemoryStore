@@ -37,7 +37,7 @@ background cleanup. Those belong to consumers or optional adapters.
 | [`src/SharedMemoryStore/Leasing/`](../src/SharedMemoryStore/Leasing/) | Lease registry, release, owner classification, recovery | Public lease and recovery outcomes are contracts |
 | [`src/SharedMemoryStore/Diagnostics/`](../src/SharedMemoryStore/Diagnostics/) | Snapshot construction and failure counters | Snapshot fields and `GetFailureCount` behavior are public contracts |
 | [`src/SharedMemoryStore/Lifecycle/`](../src/SharedMemoryStore/Lifecycle/) | Store operation gate for disposal-safe public boundaries | Public post-disposal outcomes are contracts |
-| [`src/SharedMemoryStore/Interop/`](../src/SharedMemoryStore/Interop/) | Memory-mapped region creation/opening | Platform behavior is documented and may remain Windows-first |
+| [`src/SharedMemoryStore/Interop/`](../src/SharedMemoryStore/Interop/) | Platform resource names, memory-mapped region adapters, and shared synchronization adapters for Linux and Windows | Platform behavior is a documented compatibility contract |
 | [`src/SharedMemoryStore/Options/`](../src/SharedMemoryStore/Options/) | Option validation and detailed validation results | Public option names and validation status are contracts |
 
 ## Storage Model
@@ -106,9 +106,11 @@ before reclaiming the slot. Public memory lifetime rules are in the
 
 ## Synchronization and Waits
 
-Public operations synchronize through the named store lock and the process-local
-lifecycle gate. `StoreWaitOptions` controls how long an operation waits for
-shared synchronization. Busy and canceled waits return `StoreBusy` or
+Public operations synchronize through the platform store lock and the
+process-local lifecycle gate. Windows uses named synchronization. Linux uses a
+deterministic shared lock resource in the runtime shared-memory location.
+`StoreWaitOptions` controls how long an operation waits for shared
+synchronization. Busy and canceled waits return `StoreBusy` or
 `OperationCanceled`.
 
 Do not add hidden worker threads or implicit global state to avoid contention.
@@ -148,10 +150,11 @@ benchmark commands or measured validation notes. See
 
 ## Portability Model
 
-Current validation is `.NET 10` on Windows x64 named memory-mapped files. The
-layout is written so future C++ and Python implementations can conform, but no
-current bindings are delivered. Do not use architecture docs to imply broader
-platform support than [Portability](portability.md) claims.
+Current validation is `.NET 10` on Linux, Windows, and the supported same-host
+Docker profile. The layout is written so future C++ and Python implementations
+can conform, but no current bindings are delivered. Do not use architecture
+docs to imply cross-host, macOS, Windows-container, persistence, or distributed
+cache support beyond [Portability](portability.md).
 
 ## Review Invariants
 

@@ -13,11 +13,13 @@ related documentation, and non-goals. The README contract is defined in
 ## Prerequisites
 
 - .NET SDK compatible with `net10.0`.
-- PowerShell when running repository validation scripts.
-- Windows x64 for the current named memory-mapped-file validation target.
+- PowerShell 7 (`pwsh`) when running repository validation scripts.
+- Linux or Windows for ordinary host samples.
+- Docker Engine or Docker Desktop when running the Docker shared-memory sample.
 
-Unsupported platforms may return `UnsupportedPlatform` instead of the success
-paths shown in sample output.
+Unsupported platforms or isolated Docker profiles may return
+`UnsupportedPlatform`, `NotFound`, `AccessDenied`, or `MappingFailed` instead
+of the success paths shown in sample output.
 
 ## Learning Ladder
 
@@ -27,6 +29,7 @@ paths shown in sample output.
 | 2 | [samples/FrameValue/README.md](../samples/FrameValue/README.md) | You want to model frame-shaped values while keeping descriptor and payload parsing outside the core store. | `dotnet run --project samples/FrameValue/FrameValue.csproj -c Release` |
 | 3 | [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md) | You want direct reservation ingest, abort cleanup, segmented publish, and adapter examples. | `dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release` |
 | 4 | [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md) | You want an application-owned lifecycle and health wrapper without adding dependencies to the core package. | `dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release` |
+| 5 | [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md) | You want to validate same-host Docker containers sharing one store. | `pwsh ./scripts/validate-docker-shared-memory.ps1` |
 
 ## Basic Usage
 
@@ -96,6 +99,19 @@ Related guides:
 - [Maintainers](maintainers.md) for the rule that optional adapters must not
   become hidden core package dependencies.
 
+## Docker Shared Memory
+
+Run this when containerized producers and readers need to participate in the
+same host-local store. The sample includes a supported Compose profile that
+shares IPC and process-liveness capabilities, plus an isolated negative profile
+that must fail clearly instead of silently using a different store.
+
+Related guides:
+
+- [Portability](portability.md) for the same-host Docker support boundary.
+- [Lifecycle](lifecycle.md) for recovery and cleanup behavior.
+- [Diagnostics](diagnostics.md) for failure counters and recovery reports.
+
 ## Validation
 
 Build all samples through the solution:
@@ -109,13 +125,15 @@ Run the full validation path from
 release:
 
 ```powershell
-scripts/validate-docs.ps1
+pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-scripts/validate-package-consumption.ps1
+dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
+pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+pwsh ./scripts/validate-docker-shared-memory.ps1
 ```

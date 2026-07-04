@@ -25,6 +25,10 @@ public sealed class PackageContractTests
         Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", project);
         Assert.Contains("<PackageLicenseExpression>MIT</PackageLicenseExpression>", project);
         Assert.Contains("<PackageReadmeFile>README.md</PackageReadmeFile>", project);
+        Assert.Contains("linux", project, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("windows", project, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("docker", project, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("same-host Docker support", project, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -99,8 +99,9 @@ current implementation detail for maintainers, not a public maintenance API.
 
 ## Platform Assumptions
 
-Current validation targets `.NET 10` and Windows x64 named memory-mapped files.
-Other platforms may return documented unsupported outcomes. See
+Current validation targets `.NET 10` on Linux, Windows, and the supported
+same-host Docker profile. Unsupported platforms or restricted environments may
+return documented unsupported or environment failure outcomes. See
 [Portability](portability.md) before publishing platform claims.
 
 ## Not Claimed

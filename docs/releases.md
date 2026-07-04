@@ -64,8 +64,9 @@ Compare public docs with these contracts:
 - [reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
 
 Confirm that docs do not claim current C++ or Python bindings, broad
-cross-platform support, unmeasured hardware performance, application-specific
-frame parsing by the core store, hidden background work, persistence, or
+macOS or cross-host support, unmeasured hardware performance,
+application-specific frame parsing by the core store, hidden background work,
+persistence, Windows-container support, default-isolated Docker support, or
 cross-host cache behavior.
 
 ## Documentation-Only Release Review
@@ -97,20 +98,83 @@ Documentation-only changes still need release review:
 Run these commands from a clean checkout:
 
 ```powershell
-scripts/validate-docs.ps1
+pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-scripts/validate-package-consumption.ps1
+dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
+pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
+pwsh ./scripts/validate-docker-shared-memory.ps1
 ```
 
 Expected result: documentation inventory, placeholder checks, internal links,
 package metadata alignment, sample README contracts, public API/status drift
 checks, sample commands, clean package consumption, tests, and pack all pass.
+
+## Linux, Windows, and Docker Support Notes
+
+This release adds Linux and Windows as first-class runtime and development
+targets and adds a supported same-host Docker profile for Linux containers that
+share IPC, owner-liveness, permissions, and shared-memory capacity. The public
+API, status taxonomy, runtime dependencies, and shared-memory layout major
+version remain compatible.
+
+Release evidence to capture before publication:
+
+- Windows restore, build, test, sample, docs, package-consumption, and pack
+  validation.
+- Linux restore, build, test, sample, docs, package-consumption, and pack
+  validation.
+- Docker supported-profile validation through
+  `scripts/validate-docker-shared-memory.ps1`.
+- Docker isolated-profile validation that fails clearly without silent sharing.
+- Docker advanced, recovery, contention, disposal-race, and clean-consumer
+  validation profiles.
+- Compatibility review against
+  [compatibility-contract.md](../specs/007-linux-windows-support/contracts/compatibility-contract.md).
+
+Validation evidence captured on 2026-07-03 and 2026-07-04:
+
+- Windows host `pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker`:
+  passed restore, build, tests, host samples, Docker sample local mode, docs
+  validation, package consumption, and pack.
+- Linux host through WSL Ubuntu 24.04
+  `pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker` with isolated
+  `DOTNET_CLI_HOME`: passed restore, build, tests, host samples, Docker sample
+  local mode, docs validation, package consumption, and pack.
+- Linux-based Docker supported profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile Supported`:
+  passed cross-container create, open, acquire, active-lease protected remove,
+  release, republish, remove, reuse, diagnostics, and 10,000 churn cycles.
+- Linux-based Docker advanced profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile Advanced`:
+  passed reservation, segmented publish, recovery entry point, and diagnostics
+  workflows inside configured containers.
+- Linux-based Docker recovery profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile Recovery -SkipComposeBuild`:
+  passed abrupt-exit lease and reservation owner recovery with recovered counts.
+- Linux-based Docker contention profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile Contention -SkipComposeBuild`:
+  passed cancellation, no-wait busy, and bounded wait busy outcomes.
+- Linux-based Docker disposal-race profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile DisposalRace -SkipComposeBuild`:
+  passed documented lifecycle outcomes under disposal race workload.
+- Linux-based Docker clean-consumer profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile CleanConsumer`:
+  packed `SharedMemoryStore`, built a fresh container project from the package,
+  and passed first-use, reservation, segmented publish, diagnostics, recovery,
+  and disposal workflows.
+- Linux-based Docker isolated profile
+  `pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile Isolated -SkipComposeBuild`:
+  passed with `NotFound` for the isolated verifier.
+- Compatibility review: no public API additions, no public status additions, no
+  runtime dependency additions, and no shared-memory layout major-version
+  change were introduced by the platform adapter work.
 
 Benchmark commands are required when release notes make performance claims:
 

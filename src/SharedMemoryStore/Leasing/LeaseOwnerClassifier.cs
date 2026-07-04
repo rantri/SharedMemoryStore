@@ -34,7 +34,7 @@ internal static class LeaseOwnerClassifier
             return new LeaseOwnerClassification(LeaseOwnerKind.CurrentProcess, ownerProcessId);
         }
 
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
         {
             return new LeaseOwnerClassification(LeaseOwnerKind.Unsupported, ownerProcessId);
         }

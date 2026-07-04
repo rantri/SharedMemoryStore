@@ -22,7 +22,7 @@ by goal first, then provides the full file inventory for validation and review.
 7. [Errors](errors.md) and [Diagnostics](diagnostics.md): troubleshoot expected
    statuses and inspect caller-owned observability signals.
 8. [Samples](samples.md): run the sample ladder from basic usage to optional
-   hosted integration.
+   hosted integration and same-host Docker validation.
 9. [Lifecycle](lifecycle.md), [Performance](performance.md),
    [Portability](portability.md), [Packaging](packaging.md), and
    [Release preparation](releases.md): evaluate production use and release
@@ -40,7 +40,7 @@ by goal first, then provides the full file inventory for validation and review.
 | Learn every public feature | [Concepts](concepts.md) -> [Byte encoding](byte-encoding.md) -> [Usage](usage.md) -> [Examples](examples.md) -> [Samples](samples.md) |
 | Troubleshoot a status | [Errors](errors.md) -> [Diagnostics](diagnostics.md) -> [Lifecycle](lifecycle.md) |
 | Evaluate production use | [Lifecycle](lifecycle.md) -> [Performance](performance.md) -> [Portability](portability.md) -> [Packaging](packaging.md) -> [Release preparation](releases.md) |
-| Run samples | [Samples](samples.md) -> [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) -> [samples/FrameValue/README.md](../samples/FrameValue/README.md) -> [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md) -> [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md) |
+| Run samples | [Samples](samples.md) -> [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) -> [samples/FrameValue/README.md](../samples/FrameValue/README.md) -> [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md) -> [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md) -> [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md) |
 | Review internals | [Architecture](architecture.md) -> [Maintainers](maintainers.md) -> contract sources |
 | Prepare a contribution | [CONTRIBUTING.md](../CONTRIBUTING.md) -> [Maintainers](maintainers.md) -> [Release preparation](releases.md) |
 | Review future portability | [Concepts](concepts.md) -> [Portability](portability.md) -> [shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md) |
@@ -70,6 +70,7 @@ by goal first, then provides the full file inventory for validation and review.
 - [samples/FrameValue/README.md](../samples/FrameValue/README.md)
 - [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
 - [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md)
+- [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md)
 
 ## Repository Entry Points
 
@@ -108,6 +109,10 @@ by goal first, then provides the full file inventory for validation and review.
 - [specs/006-improve-docs-samples/contracts/sample-contract.md](../specs/006-improve-docs-samples/contracts/sample-contract.md)
 - [specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md](../specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md)
 - [specs/006-improve-docs-samples/contracts/documentation-validation-contract.md](../specs/006-improve-docs-samples/contracts/documentation-validation-contract.md)
+- [specs/007-linux-windows-support/contracts/platform-runtime-contract.md](../specs/007-linux-windows-support/contracts/platform-runtime-contract.md)
+- [specs/007-linux-windows-support/contracts/docker-container-sharing-contract.md](../specs/007-linux-windows-support/contracts/docker-container-sharing-contract.md)
+- [specs/007-linux-windows-support/contracts/development-validation-contract.md](../specs/007-linux-windows-support/contracts/development-validation-contract.md)
+- [specs/007-linux-windows-support/contracts/compatibility-contract.md](../specs/007-linux-windows-support/contracts/compatibility-contract.md)
 
 Runtime behavior claims in public documentation must trace to these contracts,
 current package metadata, tests, or a guide that links to the relevant contract.

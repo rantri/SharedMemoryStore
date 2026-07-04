@@ -1,0 +1,128 @@
+services:
+  writer:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["writer"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose
+      SMS_HOLD_SECONDS: "60"
+    ipc: shareable
+    shm_size: "128m"
+
+  verifier:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["verifier"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose
+      SMS_CHURN_CYCLES: "10000"
+    depends_on:
+      - writer
+    ipc: "service:writer"
+    pid: "service:writer"
+    shm_size: "128m"
+
+  advanced:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["advanced"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-advanced
+    depends_on:
+      - writer
+    ipc: "service:writer"
+    pid: "service:writer"
+    shm_size: "128m"
+
+  abrupt-lease-owner:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["abrupt-lease-owner"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-recovery
+    depends_on:
+      - recovery-keeper
+    ipc: "service:recovery-keeper"
+    pid: "service:recovery-keeper"
+    shm_size: "128m"
+
+  abrupt-reservation-owner:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["abrupt-reservation-owner"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-recovery
+    depends_on:
+      - recovery-keeper
+    ipc: "service:recovery-keeper"
+    pid: "service:recovery-keeper"
+    shm_size: "128m"
+
+  recovery-keeper:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["writer"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-recovery
+      SMS_HOLD_SECONDS: "60"
+    ipc: shareable
+    shm_size: "128m"
+
+  recovery-verifier:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["recovery-verifier"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-recovery
+    depends_on:
+      - recovery-keeper
+      - abrupt-lease-owner
+      - abrupt-reservation-owner
+    ipc: "service:recovery-keeper"
+    pid: "service:recovery-keeper"
+    shm_size: "128m"
+
+  contention-holder:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["contention-holder"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-contention
+      SMS_HOLD_SECONDS: "30"
+    depends_on:
+      - writer
+    ipc: "service:writer"
+    pid: "service:writer"
+    shm_size: "128m"
+
+  contention-verifier:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["contention-verifier"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-contention
+    depends_on:
+      - writer
+      - contention-holder
+    ipc: "service:writer"
+    pid: "service:writer"
+    shm_size: "128m"
+
+  disposal-race:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["disposal-race"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-disposal
+    ipc: shareable
+    shm_size: "128m"

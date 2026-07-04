@@ -13,9 +13,11 @@ Package identity:
 - License: MIT, see the [license file](LICENSE)
 - Runtime dependencies: .NET BCL only
 
-The `1.0.0` package establishes the production public API contract. Windows x64
-named memory-mapped files are the first validated runtime target. C++ and
-Python are future portability audiences, not current bindings.
+The `1.0.0` package establishes the production public API contract. Linux and
+Windows are supported runtime and development targets. Same-host Linux Docker
+containers are supported when they share the required IPC, owner-liveness,
+permission, and shared-memory capacity capabilities. C++ and Python are future
+portability audiences, not current bindings.
 
 ## What It Provides
 
@@ -38,8 +40,8 @@ The initial public contract supports:
   including lease recovery results and key-index tombstone health.
 
 The store does not parse frame headers, own application schemas, provide a
-cross-host cache, persist data beyond process and mapping lifetime, or promise
-cross-platform support beyond the documented Windows-first validation scope.
+cross-host cache, persist data beyond process and mapping lifetime, or turn
+Docker into distributed storage.
 
 ## First Use
 
@@ -125,10 +127,12 @@ safe across generation rollover.
   narrow-interface boundaries outside the core package.
 - [Performance scope](docs/performance.md): measured scope and unmeasured
   claims.
-- [Portability](docs/portability.md): .NET 10 baseline, Windows-first
-  validation, layout compatibility, and future C++/Python constraints.
+- [Portability](docs/portability.md): .NET 10 baseline, Linux, Windows, and
+  same-host Docker support, layout compatibility, and future C++/Python
+  constraints.
 - [Samples](docs/samples.md): ordered runnable sample ladder from minimal usage
-  through frame values, zero-copy ingest, and optional hosted integration.
+  through frame values, zero-copy ingest, optional hosted integration, and
+  same-host Docker validation.
 - [Architecture](docs/architecture.md): maintainer internals, source areas,
   invariants, storage, lifecycle, synchronization, recovery, and diagnostics.
 - [Maintainers](docs/maintainers.md): documentation update rules, validation
@@ -159,6 +163,7 @@ Runnable samples:
 - [Frame value sample](samples/FrameValue/README.md)
 - [Zero-copy ingest sample](samples/ZeroCopyIngest/README.md)
 - [Hosted service integration sample](samples/HostedServiceIntegration/README.md)
+- [Docker shared-memory sample](samples/DockerSharedMemory/README.md)
 
 ## Project Policies
 
@@ -183,15 +188,18 @@ Runnable samples:
 ## Local Validation
 
 ```powershell
-scripts/validate-docs.ps1
+pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-scripts/validate-package-consumption.ps1
+dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
+pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
+pwsh ./scripts/validate-docker-shared-memory.ps1
 ```
 
 Documentation changes must keep package metadata, README content, release notes,

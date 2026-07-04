@@ -3,17 +3,23 @@ using System.IO.MemoryMappedFiles;
 
 namespace SharedMemoryStore.Interop;
 
-internal sealed unsafe class MemoryMappedStoreRegion : IDisposable
+internal sealed unsafe class MemoryMappedStoreRegion : ISharedStoreRegion
 {
     private readonly MemoryMappedFile _mapping;
     private readonly MemoryMappedViewAccessor _accessor;
+    private readonly Action? _disposeCallback;
     private byte* _pointer;
     private bool _disposed;
 
-    private MemoryMappedStoreRegion(MemoryMappedFile mapping, MemoryMappedViewAccessor accessor, long capacity)
+    private MemoryMappedStoreRegion(
+        MemoryMappedFile mapping,
+        MemoryMappedViewAccessor accessor,
+        long capacity,
+        Action? disposeCallback)
     {
         _mapping = mapping;
         _accessor = accessor;
+        _disposeCallback = disposeCallback;
         Capacity = capacity;
         _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref _pointer);
     }
@@ -29,52 +35,18 @@ internal sealed unsafe class MemoryMappedStoreRegion : IDisposable
         }
     }
 
+    public static MemoryMappedStoreRegion Create(
+        MemoryMappedFile mapping,
+        MemoryMappedViewAccessor accessor,
+        long capacity,
+        Action? disposeCallback = null)
+    {
+        return new MemoryMappedStoreRegion(mapping, accessor, capacity, disposeCallback);
+    }
+
     public static StoreOpenStatus TryOpen(SharedMemoryStoreOptions options, out MemoryMappedStoreRegion? region)
     {
-        region = null;
-
-        if (!OperatingSystem.IsWindows())
-        {
-            return StoreOpenStatus.UnsupportedPlatform;
-        }
-
-        try
-        {
-            var mapping = options.OpenMode switch
-            {
-                OpenMode.CreateNew => MemoryMappedFile.CreateNew(options.Name, options.TotalBytes, MemoryMappedFileAccess.ReadWrite),
-                OpenMode.OpenExisting => MemoryMappedFile.OpenExisting(options.Name, MemoryMappedFileRights.ReadWrite),
-                _ => MemoryMappedFile.CreateOrOpen(options.Name, options.TotalBytes, MemoryMappedFileAccess.ReadWrite)
-            };
-
-            var accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
-            region = new MemoryMappedStoreRegion(mapping, accessor, options.TotalBytes);
-            return StoreOpenStatus.Success;
-        }
-        catch (FileNotFoundException) when (options.OpenMode == OpenMode.OpenExisting)
-        {
-            return StoreOpenStatus.NotFound;
-        }
-        catch (IOException) when (options.OpenMode == OpenMode.CreateNew)
-        {
-            return StoreOpenStatus.AlreadyExists;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return StoreOpenStatus.AccessDenied;
-        }
-        catch (PlatformNotSupportedException)
-        {
-            return StoreOpenStatus.UnsupportedPlatform;
-        }
-        catch (ArgumentException)
-        {
-            return StoreOpenStatus.InvalidOptions;
-        }
-        catch (Exception)
-        {
-            return StoreOpenStatus.MappingFailed;
-        }
+        return SharedStorePlatform.TryOpenRegion(options, out region);
     }
 
     public void Dispose()
@@ -93,5 +65,6 @@ internal sealed unsafe class MemoryMappedStoreRegion : IDisposable
 
         _accessor.Dispose();
         _mapping.Dispose();
+        _disposeCallback?.Invoke();
     }
 }

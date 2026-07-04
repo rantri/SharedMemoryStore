@@ -17,8 +17,8 @@ namespace SharedMemoryStore;
 public sealed unsafe class MemoryStore : IDisposable
 {
     private readonly object _gate = new();
-    private readonly Mutex _mutex;
     private readonly MemoryMappedStoreRegion _region;
+    private readonly ISharedStoreSynchronization _synchronization;
     private readonly StoreLayout _layout;
     private readonly SharedKeyIndex _index;
     private readonly ReusableSlotTable _slots;
@@ -33,10 +33,14 @@ public sealed unsafe class MemoryStore : IDisposable
     private long _indexCompactionCount;
     private bool _disposed;
 
-    private MemoryStore(MemoryMappedStoreRegion region, StoreLayout layout, string storeName, bool leaseRecoveryEnabled)
+    private MemoryStore(
+        MemoryMappedStoreRegion region,
+        ISharedStoreSynchronization synchronization,
+        StoreLayout layout,
+        bool leaseRecoveryEnabled)
     {
-        _mutex = new Mutex(false, BuildMutexName(storeName));
         _region = region;
+        _synchronization = synchronization;
         _layout = layout;
         _leaseRecoveryEnabled = leaseRecoveryEnabled;
         _index = new SharedKeyIndex(region, layout);
@@ -83,8 +87,8 @@ public sealed unsafe class MemoryStore : IDisposable
             return validation;
         }
 
-        var mappingStatus = MemoryMappedStoreRegion.TryOpen(options, out var region);
-        if (mappingStatus != StoreOpenStatus.Success || region is null)
+        var mappingStatus = SharedStorePlatform.TryOpen(options, out var region, out var synchronization);
+        if (mappingStatus != StoreOpenStatus.Success || region is null || synchronization is null)
         {
             return mappingStatus;
         }
@@ -92,16 +96,18 @@ public sealed unsafe class MemoryStore : IDisposable
         MemoryStore candidate;
         try
         {
-            candidate = new MemoryStore(region, layout, options.Name, options.EnableLeaseRecovery);
+            candidate = new MemoryStore(region, synchronization, layout, options.EnableLeaseRecovery);
         }
         catch (UnauthorizedAccessException)
         {
             region.Dispose();
+            synchronization.Dispose();
             return StoreOpenStatus.AccessDenied;
         }
         catch (Exception)
         {
             region.Dispose();
+            synchronization.Dispose();
             return StoreOpenStatus.MappingFailed;
         }
 
@@ -662,7 +668,7 @@ public sealed unsafe class MemoryStore : IDisposable
         finally
         {
             _lifecycle.CompleteDispose();
-            _mutex.Dispose();
+            _synchronization.Dispose();
         }
     }
 
@@ -1173,59 +1179,23 @@ public sealed unsafe class MemoryStore : IDisposable
             return false;
         }
 
-        bool acquired;
-        try
-        {
-            acquired = WaitForStoreMutex(waitOptions);
-        }
-        catch (AbandonedMutexException)
-        {
-            // The previous owner ended without releasing the mutex; shared state is validated after acquisition.
-            acquired = true;
-        }
-
-        if (!acquired)
-        {
-            status = waitOptions.CancellationToken.IsCancellationRequested
-                ? StoreStatus.OperationCanceled
-                : StoreStatus.StoreBusy;
-            return false;
-        }
-
         Monitor.Enter(_gate);
         if (_lifecycle.IsDisposingOrDisposed || _disposed)
         {
             Monitor.Exit(_gate);
-            _mutex.ReleaseMutex();
             status = StoreStatus.StoreDisposed;
+            return false;
+        }
+
+        status = _synchronization.TryEnter(waitOptions);
+        if (status != StoreStatus.Success)
+        {
+            Monitor.Exit(_gate);
             return false;
         }
 
         status = StoreStatus.Success;
         return true;
-    }
-
-    private bool WaitForStoreMutex(StoreWaitOptions waitOptions)
-    {
-        if (!waitOptions.CancellationToken.CanBeCanceled)
-        {
-            return waitOptions.IsInfinite
-                ? _mutex.WaitOne(System.Threading.Timeout.InfiniteTimeSpan)
-                : _mutex.WaitOne(waitOptions.Timeout);
-        }
-
-        var waitHandles = new WaitHandle[] { _mutex, waitOptions.CancellationToken.WaitHandle };
-        var signaled = waitOptions.IsInfinite
-            ? WaitHandle.WaitAny(waitHandles)
-            : WaitHandle.WaitAny(waitHandles, waitOptions.Timeout);
-
-        return signaled switch
-        {
-            0 => true,
-            1 => false,
-            WaitHandle.WaitTimeout => false,
-            _ => false
-        };
     }
 
     private static StoreOpenStatus ToOpenStatus(StoreStatus status)
@@ -1236,6 +1206,8 @@ public sealed unsafe class MemoryStore : IDisposable
             StoreStatus.StoreBusy => StoreOpenStatus.StoreBusy,
             StoreStatus.OperationCanceled => StoreOpenStatus.OperationCanceled,
             StoreStatus.StoreDisposed => StoreOpenStatus.StoreBusy,
+            StoreStatus.AccessDenied => StoreOpenStatus.AccessDenied,
+            StoreStatus.UnsupportedPlatform => StoreOpenStatus.UnsupportedPlatform,
             _ => StoreOpenStatus.MappingFailed
         };
     }
@@ -1243,7 +1215,7 @@ public sealed unsafe class MemoryStore : IDisposable
     private void DisposeUninitialized()
     {
         DisposeCore();
-        _mutex.Dispose();
+        _synchronization.Dispose();
         _lifecycle.CompleteDispose();
     }
 
@@ -1325,35 +1297,9 @@ public sealed unsafe class MemoryStore : IDisposable
             && header.PayloadStorageOffset + header.PayloadStorageLength <= header.TotalBytes;
     }
 
-    private void EnterStoreLock()
-    {
-        try
-        {
-            _mutex.WaitOne();
-        }
-        catch (AbandonedMutexException)
-        {
-            // The previous owner ended without releasing the mutex; the shared state remains validated separately.
-        }
-
-        Monitor.Enter(_gate);
-    }
-
     private void ExitStoreLock()
     {
+        _synchronization.Exit();
         Monitor.Exit(_gate);
-        _mutex.ReleaseMutex();
-    }
-
-    private static string BuildMutexName(string storeName)
-    {
-        return @"Local\SharedMemoryStore-" + string.Create(storeName.Length, storeName, static (destination, source) =>
-        {
-            for (var i = 0; i < source.Length; i++)
-            {
-                var value = source[i];
-                destination[i] = char.IsLetterOrDigit(value) || value is '-' or '_' ? value : '_';
-            }
-        });
     }
 }

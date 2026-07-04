@@ -99,6 +99,10 @@ remain active until an owner explicitly runs recovery. Platforms without
 reliable owner-liveness checks report unsupported counts rather than unsafe
 cleanup.
 
+Linux, Windows, and supported same-host Docker profiles use the same recovery
+categories. Docker deployments that hide process liveness must be treated as
+unsupported or unsafe for recovery rather than reclaiming storage aggressively.
+
 If a process terminates while holding a reservation, the pending key remains
 invisible to readers and occupies capacity until an owner aborts or recovers it.
 
@@ -135,3 +139,5 @@ do not become valid again after long-running reuse cycles.
   reservation commit, abort, and reader visibility.
 - [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md):
   startup, diagnostics, explicit recovery, and shutdown cleanup.
+- [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md):
+  same-host container sharing, diagnostics, and recovery validation.

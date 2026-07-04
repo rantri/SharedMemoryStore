@@ -13,8 +13,9 @@ questions, use [SUPPORT.md](SUPPORT.md). For private vulnerability reports, use
 Prerequisites:
 
 - .NET SDK compatible with `net10.0`.
-- PowerShell.
-- Windows x64 for the current runtime validation target.
+- PowerShell 7 (`pwsh`) for repository scripts.
+- Linux or Windows for ordinary runtime and development validation.
+- Docker Engine or Docker Desktop when validating same-host container sharing.
 
 Restore and build:
 
@@ -28,15 +29,18 @@ dotnet build -c Release
 Run the relevant checks before opening a pull request:
 
 ```powershell
-scripts/validate-docs.ps1
+pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-scripts/validate-package-consumption.ps1
+dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
+pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
+pwsh ./scripts/validate-docker-shared-memory.ps1
 ```
 
 Benchmarks are useful for performance-sensitive changes:
@@ -78,6 +82,7 @@ change:
 - [Lifecycle](docs/lifecycle.md)
 - [Diagnostics](docs/diagnostics.md)
 - [Portability](docs/portability.md)
+- [Samples](docs/samples.md)
 - [Packaging](docs/packaging.md)
 - [Public API contract](specs/001-frame-memory-store/contracts/public-api.md)
 - [Error taxonomy contract](specs/001-frame-memory-store/contracts/error-taxonomy.md)

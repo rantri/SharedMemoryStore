@@ -1,0 +1,21 @@
+services:
+  writer:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["writer"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-isolated
+      SMS_HOLD_SECONDS: "60"
+    shm_size: "128m"
+
+  isolated-verifier:
+    build:
+      context: ../..
+      dockerfile: samples/DockerSharedMemory/Dockerfile
+    command: ["isolated-profile"]
+    environment:
+      SMS_STORE_NAME: sms-docker-compose-isolated
+    depends_on:
+      - writer
+    shm_size: "128m"

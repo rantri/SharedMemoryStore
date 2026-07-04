@@ -51,7 +51,7 @@ diagnostics, or release status changes.
 | Reservation memory or ingest behavior | `docs/usage.md`, `docs/examples.md`, `docs/lifecycle.md`, `samples/ZeroCopyIngest/README.md`, reservation contracts |
 | Diagnostics fields or failure accounting | `docs/diagnostics.md`, `docs/integration.md`, `docs/architecture.md`, diagnostics contracts, validation script |
 | Performance claim | `docs/performance.md`, benchmark command/result notes, `docs/releases.md`, `CHANGELOG.md` if release-affecting |
-| Platform or portability scope | `docs/portability.md`, `SUPPORT.md`, sample READMEs, release notes |
+| Platform or portability scope | `docs/portability.md`, `SUPPORT.md`, sample READMEs, Docker sample docs, release notes |
 | Package metadata or release notes | `src/SharedMemoryStore/SharedMemoryStore.csproj`, `README.md`, `docs/packaging.md`, `docs/releases.md`, `CHANGELOG.md` |
 | Sample command or output | sample source, sample README, `docs/samples.md`, `specs/006-improve-docs-samples/sample-validation.md` |
 | Documentation-only clarification | affected doc, `docs/index.md` if navigation changes, `scripts/validate-docs.ps1`, release-impact review |
@@ -61,15 +61,18 @@ diagnostics, or release status changes.
 Run the full validation path before release:
 
 ```powershell
-scripts/validate-docs.ps1
+pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
 dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
 dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-scripts/validate-package-consumption.ps1
+dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
+pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
+pwsh ./scripts/validate-docker-shared-memory.ps1
 ```
 
 Use
@@ -139,6 +142,9 @@ Before publishing:
 - update coverage notes in
   [documentation-coverage.md](../specs/006-improve-docs-samples/documentation-coverage.md)
   when reader journeys or workflow coverage changes.
+- capture Linux, Windows, Docker, unsupported-profile, and compatibility
+  validation evidence in [Release preparation](releases.md) before publishing a
+  platform-support release.
 
 ## Boundaries To Preserve
 
@@ -150,5 +156,6 @@ Do not introduce or imply:
 - persistence after process and mapping lifetime.
 - network-distributed cache semantics.
 - protection from malicious same-host writers that already have mapping access.
-- broad Linux, macOS, container, or cross-host support beyond validated scope.
+- macOS, Windows-container, default-isolated Docker, or cross-host support
+  beyond validated scope.
 - delivered C++ or Python bindings before a feature explicitly adds them.

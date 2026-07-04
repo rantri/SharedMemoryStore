@@ -110,7 +110,7 @@ public sealed class LeaseRecoveryOwnershipTests
 
     private static bool LeaseRecoveryUnsupported()
     {
-        return !OperatingSystem.IsWindows();
+        return !OperatingSystem.IsWindows() && !OperatingSystem.IsLinux();
     }
 
     private static Process StartLiveProcess()

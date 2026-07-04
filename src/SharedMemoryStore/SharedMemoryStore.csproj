@@ -13,11 +13,11 @@
     <Authors>SharedMemoryStore contributors</Authors>
     <Company>SharedMemoryStore</Company>
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
-    <PackageTags>shared-memory;memory-mapped-file;zero-copy;library</PackageTags>
+    <PackageTags>shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Documentation and samples excellence: reorganizes the reader journey, expands concept, feature, sample, maintainer, validation, packaging, and release guidance, and preserves the 1.0.0 runtime API contract.</PackageReleaseNotes>
+    <PackageReleaseNotes>Linux, Windows, and same-host Docker support: adds platform resource adapters, Docker validation, portable development workflows, and updated platform documentation while preserving the 1.0.0 public API contract.</PackageReleaseNotes>
     <AssemblyName>SharedMemoryStore</AssemblyName>
     <RootNamespace>SharedMemoryStore</RootNamespace>
   </PropertyGroup>

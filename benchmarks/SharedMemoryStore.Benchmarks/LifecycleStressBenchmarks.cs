@@ -103,6 +103,12 @@ public class LifecycleStressBenchmarks
             useAfterReleaseWasDetected,
             firstFailure == (int)StoreStatus.Success && leakedActiveLeases == 0 && !underflowDetected && !useAfterReleaseWasDetected);
     }
+
+    [Benchmark]
+    public LifecycleStressValidationResult CrossPlatformReuseChurnLifecycle()
+    {
+        return ProducerFourReaderLifecycle();
+    }
 }
 
 public readonly record struct LifecycleStressValidationResult(

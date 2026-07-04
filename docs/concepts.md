@@ -169,11 +169,11 @@ rules and abnormal termination behavior.
 
 ## Portability
 
-The current package is C# on `.NET 10` with Windows x64 named memory-mapped
-files as the first validated runtime target. C++ and Python are future
-portability audiences, not current bindings. Future implementations must follow
-the documented layout and lifecycle contracts rather than redefining behavior
-per language. See [Portability](portability.md).
+The current package is C# on `.NET 10` with Linux and Windows host support and
+same-host Docker support for configured Linux containers. C++ and Python are
+future portability audiences, not current bindings. Future implementations must
+follow the documented layout and lifecycle contracts rather than redefining
+behavior per language. See [Portability](portability.md).
 
 ## Package Contract
 

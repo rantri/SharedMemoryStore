@@ -20,7 +20,13 @@ internal static class LeaseRecovery
         var unsupported = 0;
         var failed = 0;
 
-        if (!enabled || !OperatingSystem.IsWindows())
+        if (!enabled)
+        {
+            report = new LeaseRecoveryReport(registry.RecordCount, 0, 0, registry.RecordCount, 0);
+            return StoreStatus.UnsupportedPlatform;
+        }
+
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux())
         {
             report = new LeaseRecoveryReport(registry.RecordCount, 0, 0, registry.RecordCount, 0);
             return StoreStatus.UnsupportedPlatform;

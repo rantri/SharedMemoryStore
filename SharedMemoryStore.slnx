@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/BasicUsage/BasicUsage.csproj" />
+    <Project Path="samples/DockerSharedMemory/DockerSharedMemory.csproj" />
     <Project Path="samples/FrameValue/FrameValue.csproj" />
     <Project Path="samples/HostedServiceIntegration/HostedServiceIntegration.csproj" />
     <Project Path="samples/ZeroCopyIngest/ZeroCopyIngest.csproj" />

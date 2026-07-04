@@ -12,10 +12,10 @@ and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
 | `Version` | `1.0.0` |
 | `TargetFramework` | `net10.0` |
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
-| `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;library` |
+| `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library` |
 | `PackageLicenseExpression` | `MIT` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `Documentation and samples excellence: reorganizes the reader journey, expands concept, feature, sample, maintainer, validation, packaging, and release guidance, and preserves the 1.0.0 runtime API contract.` |
+| `PackageReleaseNotes` | `Linux, Windows, and same-host Docker support: adds platform resource adapters, Docker validation, portable development workflows, and updated platform documentation while preserving the 1.0.0 public API contract.` |
 | `RepositoryType` | `git` |
 
 The package project packs the root [README.md](../README.md) at the package
@@ -42,6 +42,7 @@ The clean consumer validation packs the local project, creates a clean
 package source, and exercises the documented first-use path plus advanced
 package-surface checks: publish/acquire/release/remove, direct reservation
 ingest, segmented publish, recovery status paths, and post-disposal status.
+It is expected to run with `pwsh` on Linux and Windows.
 
 This command is a maintainer validation path, not a requirement for ordinary
 package users.

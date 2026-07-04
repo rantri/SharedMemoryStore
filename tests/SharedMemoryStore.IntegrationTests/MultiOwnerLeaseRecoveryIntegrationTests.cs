@@ -10,7 +10,7 @@ public sealed class MultiOwnerLeaseRecoveryIntegrationTests
     [Trait("Category", "Integration")]
     public void CurrentProcessRecoverySkipsOtherLiveOwnerAcrossTenThousandCycles()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!IsSupportedRecoveryHost())
         {
             return;
         }
@@ -50,7 +50,7 @@ public sealed class MultiOwnerLeaseRecoveryIntegrationTests
     [Trait("Category", "Integration")]
     public void StaleOwnerRecoveryRecoversTenThousandActualChildOwnedLeases()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!IsSupportedRecoveryHost())
         {
             return;
         }
@@ -74,4 +74,6 @@ public sealed class MultiOwnerLeaseRecoveryIntegrationTests
         Assert.Equal(0, report.FailedRecoveryCount);
         Assert.Equal(0, report.UnsupportedLeaseCount);
     }
+
+    private static bool IsSupportedRecoveryHost() => OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
 }

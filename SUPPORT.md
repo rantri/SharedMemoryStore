@@ -33,7 +33,9 @@ Useful reports include:
 The current prerelease does not claim support for:
 
 - C++ or Python bindings.
-- broad Linux, macOS, or container runtime validation.
+- macOS runtime support.
+- Windows containers, default-isolated Docker containers, or cross-host
+  container sharing.
 - network-distributed storage.
 - persistence beyond memory-mapped region lifetime.
 - application-specific frame parsing by the core store.

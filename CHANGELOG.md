@@ -5,6 +5,15 @@ chronological order.
 
 ## 1.0.0 - 2026-07-03
 
+### Added
+
+- Added Linux and Windows as first-class runtime and development targets.
+- Added same-host Docker container sharing support for Linux containers
+  configured with shared IPC, owner-liveness, compatible permissions, and
+  sufficient shared-memory capacity.
+- Added platform resource adapters, deterministic Linux resource naming,
+  portable validation scripts, and the Docker shared-memory sample.
+
 ### Documentation
 
 - Reorganized the documentation and samples journey from first use through
@@ -13,6 +22,8 @@ chronological order.
 - Added documentation and samples validation expectations for required guide
   inventory, sample README contracts, public API/status references, package
   metadata, release notes, and clean package consumption.
+- Replaced older platform wording with Linux, Windows, and supported same-host
+  Docker guidance.
 
 ### Changed
 
@@ -36,6 +47,8 @@ chronological order.
   `0.2.0` surface.
 - Runtime dependencies remain .NET BCL only; the core package does not take
   Microsoft.Extensions hosting dependencies.
+- The public API and shared-memory layout major version remain compatible for
+  the Linux, Windows, and same-host Docker support update.
 
 ## 0.2.0 - 2026-07-02
 
@@ -80,7 +93,8 @@ chronological order.
 ### Compatibility
 
 - Package targets `net10.0`.
-- Windows x64 named memory-mapped files are the first validated runtime target.
+- The initial validation baseline focused on Windows x64 named memory-mapped
+  files.
 - C++ and Python are future portability audiences; current bindings are not
   included.
 - This entry documents a prerelease `0.1.0` baseline and does not imply stable
@@ -88,7 +102,7 @@ chronological order.
 
 ### Known Limitations
 
-- Runtime support is Windows-first.
+- Runtime support initially focused on Windows.
 - The core store treats values and descriptors as opaque bytes and does not
   parse application-specific frame layouts.
 - Public repository URL metadata is left to release preparation because no

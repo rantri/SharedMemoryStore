@@ -48,7 +48,8 @@ $requiredSampleReadmes = @(
     "samples/BasicUsage/README.md",
     "samples/FrameValue/README.md",
     "samples/ZeroCopyIngest/README.md",
-    "samples/HostedServiceIntegration/README.md"
+    "samples/HostedServiceIntegration/README.md",
+    "samples/DockerSharedMemory/README.md"
 )
 
 $sampleSourceFiles = @(
@@ -57,7 +58,8 @@ $sampleSourceFiles = @(
     "samples/FrameValue/Program.cs",
     "samples/FrameValue/FrameDescriptor.cs",
     "samples/ZeroCopyIngest/Program.cs",
-    "samples/HostedServiceIntegration/Program.cs"
+    "samples/HostedServiceIntegration/Program.cs",
+    "samples/DockerSharedMemory/Program.cs"
 )
 
 $contractFiles = @(
@@ -275,7 +277,7 @@ function Assert-PackageMetadata {
         }
     }
 
-    foreach ($tag in @("shared-memory", "memory-mapped-file", "zero-copy", "library")) {
+    foreach ($tag in @("shared-memory", "memory-mapped-file", "zero-copy", "linux", "windows", "docker", "library")) {
         if (-not ($propertyGroup.PackageTags -like "*$tag*")) {
             Add-Failure "PackageTags missing '$tag'."
         }
@@ -284,8 +286,8 @@ function Assert-PackageMetadata {
     if ([string]::IsNullOrWhiteSpace($propertyGroup.PackageReleaseNotes)) {
         Add-Failure "PackageReleaseNotes must be populated."
     }
-    elseif ($propertyGroup.PackageReleaseNotes.IndexOf("documentation and samples", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-        Add-Failure "PackageReleaseNotes must mention the documentation and samples excellence scope."
+    elseif ($propertyGroup.PackageReleaseNotes.IndexOf("Linux, Windows, and same-host Docker support", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        Add-Failure "PackageReleaseNotes must mention Linux, Windows, and same-host Docker support."
     }
 
     $readmeItem = $project.Project.ItemGroup.None | Where-Object {
@@ -300,11 +302,11 @@ function Assert-PackageMetadata {
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"
-    Assert-Contains "CHANGELOG.md" "documentation and samples" "documentation feature changelog alignment"
-    Assert-Contains "docs/releases.md" "documentation-only" "release documentation-only review"
+    Assert-Contains "CHANGELOG.md" "same-host Docker" "platform support changelog alignment"
+    Assert-Contains "docs/releases.md" "Linux, Windows, and Docker Support Notes" "platform release review"
     Assert-Contains "docs/packaging.md" "PackageId" "package documentation notes"
     Assert-Contains "docs/packaging.md" "PackageReleaseNotes" "package release notes documentation"
-    Assert-Contains "docs/packaging.md" "documentation and samples" "package release notes alignment"
+    Assert-Contains "docs/packaging.md" "Linux, Windows, and same-host Docker support" "package release notes alignment"
 }
 
 function Assert-RequiredLinks {
@@ -330,6 +332,7 @@ function Assert-RequiredLinks {
         "samples/FrameValue/README.md",
         "samples/ZeroCopyIngest/README.md",
         "samples/HostedServiceIntegration/README.md",
+        "samples/DockerSharedMemory/README.md",
         "CONTRIBUTING.md",
         "SUPPORT.md",
         "SECURITY.md",

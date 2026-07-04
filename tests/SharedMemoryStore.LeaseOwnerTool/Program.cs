@@ -2,6 +2,15 @@ using System.Globalization;
 using SharedMemoryStore;
 using Store = SharedMemoryStore.MemoryStore;
 
+if (args.Length == 1 && string.Equals(args[0], "probe", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("READY "
+        + Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
+        + " "
+        + (OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsLinux() ? "linux" : "unsupported"));
+    return 0;
+}
+
 if (args.Length < 8)
 {
     return 64;

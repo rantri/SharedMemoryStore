@@ -83,8 +83,10 @@ var busyFailures = snapshot.GetFailureCount(StoreStatus.StoreBusy);
 - Rising tombstone counts with low occupied counts indicate key churn pressure.
   Internal compaction is synchronous and caller-triggered by mutation paths; the
   library does not start a background maintenance worker.
-- `GetFailureCount(StoreStatus.UnsupportedPlatform)` indicates a platform or
-  recovery capability mismatch.
+- `GetFailureCount(StoreStatus.UnsupportedPlatform)` indicates an unsupported
+  OS, restricted host, isolated Docker profile, or recovery capability mismatch.
+  On Linux, Windows, and supported same-host Docker profiles, equivalent
+  workloads should report the same diagnostic categories.
 - `GetFailureCount(StoreStatus.CorruptStore)` means the process should stop
   unsafe access and gather evidence for maintainers.
 

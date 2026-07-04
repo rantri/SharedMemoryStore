@@ -19,7 +19,7 @@ metadata in descriptor bytes and frame payload bytes in the value span.
 ## Prerequisites
 
 - .NET SDK compatible with `net10.0`.
-- Windows x64 for the current named memory-mapped-file validation target.
+- Linux or Windows for ordinary runtime validation.
 - Repository checkout from the repository root.
 
 ## Run

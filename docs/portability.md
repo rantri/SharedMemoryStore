@@ -1,7 +1,10 @@
 # Portability
 
-The current package targets `.NET 10` and validates named memory-mapped files on
-Windows x64 first. The shared-memory layout is the interoperability contract for
+The current package targets `.NET 10` and supports ordinary same-host runtime
+and development workflows on Linux and Windows. Same-host Linux Docker
+containers are supported when deployment configuration exposes the required
+shared-memory, synchronization, owner-liveness, permission, and capacity
+capabilities. The shared-memory layout is the interoperability contract for
 future C++ and Python implementations, but those bindings are not currently
 implemented.
 
@@ -15,7 +18,10 @@ Detailed sources:
 
 - Runtime package: `SharedMemoryStore` `1.0.0`.
 - Target framework: `net10.0`.
-- First validated platform: Windows x64 named memory-mapped files.
+- Supported host platforms: Linux and Windows.
+- Supported container profile: Linux-based same-host Docker containers with
+  shared IPC and compatible owner-liveness, permissions, and shared-memory
+  capacity.
 - Current language implementation: C#.
 - Future audience: C++ and Python implementations or bindings that conform to
   the documented layout and lifecycle contracts.
@@ -61,11 +67,22 @@ reader visibility, but it does not defend against a malicious in-boundary writer
 that intentionally corrupts mapped bytes, forges metadata, or ignores the public
 API. Future implementations or bindings must document the same trust boundary.
 
+## Platform Resource Model
+
+Windows uses named operating-system memory mappings and named synchronization.
+Linux uses deterministic files in a shared runtime memory location such as
+`/dev/shm`, with names derived from the public store name and a collision
+prevention hash. Docker containers participate in the Linux model only when
+their IPC and process-liveness configuration lets all participants see the same
+resources and classify owners safely.
+
 ## Unsupported Scenarios
 
 - Current public docs do not claim C++ or Python bindings exist.
-- Broad Linux, macOS, container, or cross-host shared-memory support is not
-  claimed by this package version.
+- macOS is not currently supported.
+- Cross-host shared memory, distributed-cache behavior, persistence across host
+  restart, Windows containers, and default-isolated Docker containers are not
+  supported by this package version.
 - Platforms without reliable named mapping or owner-liveness checks return
   deterministic unsupported statuses for affected operations.
 - Application-specific schemas, including frame metadata, are not parsed by the

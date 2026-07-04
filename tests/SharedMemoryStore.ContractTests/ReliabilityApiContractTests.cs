@@ -35,9 +35,10 @@ public sealed class ReliabilityApiContractTests
 
         var status = store.TryRecoverLeases(new LeaseRecoveryOptions(RecoverCurrentProcessLeases: false), out var report);
 
-        Assert.Equal(OperatingSystem.IsWindows() ? StoreStatus.Success : StoreStatus.UnsupportedPlatform, status);
+        var recoverySupported = OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
+        Assert.Equal(recoverySupported ? StoreStatus.Success : StoreStatus.UnsupportedPlatform, status);
         var diagnostics = store.GetDiagnostics();
-        if (OperatingSystem.IsWindows())
+        if (recoverySupported)
         {
             Assert.Equal(1, report.ActiveLeaseCount);
             Assert.Equal(1, diagnostics.ActiveLeaseRecoveryCount);

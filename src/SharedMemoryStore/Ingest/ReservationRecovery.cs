@@ -1,6 +1,6 @@
-using System.Diagnostics;
 using System.Threading;
 using SharedMemoryStore.Layout;
+using SharedMemoryStore.Leasing;
 using SharedMemoryStore.Slots;
 
 namespace SharedMemoryStore
@@ -53,15 +53,18 @@ namespace SharedMemoryStore.Ingest
                 }
 
                 scanned++;
-                var owner = slot.PublisherProcessId;
-                var canRecover = CanRecoverOwner(owner, options.RecoverCurrentProcessReservations, out var isUnsupported);
-                if (isUnsupported)
+                var owner = LeaseOwnerClassifier.Classify(slot.PublisherProcessId);
+                switch (owner.Kind)
                 {
-                    unsupported++;
-                    continue;
+                    case LeaseOwnerKind.Unsupported:
+                        unsupported++;
+                        continue;
+                    case LeaseOwnerKind.UnsafeRecord:
+                        failed++;
+                        continue;
                 }
 
-                if (!canRecover)
+                if (!owner.IsRecoverable(options.RecoverCurrentProcessReservations))
                 {
                     active++;
                     continue;
@@ -85,44 +88,6 @@ namespace SharedMemoryStore.Ingest
 
             report = new ReservationRecoveryReport(scanned, recovered, active, unsupported, failed);
             return StoreStatus.Success;
-        }
-
-        private static bool CanRecoverOwner(int ownerProcessId, bool recoverCurrentProcessReservations, out bool unsupported)
-        {
-            unsupported = false;
-            if (ownerProcessId <= 0)
-            {
-                return true;
-            }
-
-            if (ownerProcessId == Environment.ProcessId)
-            {
-                return recoverCurrentProcessReservations;
-            }
-
-            try
-            {
-                using var process = Process.GetProcessById(ownerProcessId);
-                return process.HasExited;
-            }
-            catch (ArgumentException)
-            {
-                return true;
-            }
-            catch (PlatformNotSupportedException)
-            {
-                unsupported = true;
-                return false;
-            }
-            catch (InvalidOperationException)
-            {
-                return true;
-            }
-            catch
-            {
-                unsupported = true;
-                return false;
-            }
         }
     }
 }

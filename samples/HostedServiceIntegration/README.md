@@ -21,7 +21,7 @@ shutdown.
 ## Prerequisites
 
 - .NET SDK compatible with `net10.0`.
-- Windows x64 for the current named memory-mapped-file validation target.
+- Linux or Windows for ordinary runtime validation.
 - Repository checkout from the repository root.
 
 ## Run

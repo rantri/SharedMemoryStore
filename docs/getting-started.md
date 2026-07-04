@@ -6,8 +6,10 @@ create/open, publish, acquire, release, remove, and dispose workflow.
 ## Prerequisites
 
 - .NET SDK compatible with `net10.0`.
-- PowerShell for repository validation scripts.
-- Windows x64 for the current named memory-mapped-file validation target.
+- PowerShell 7 (`pwsh`) for repository validation scripts.
+- Linux or Windows for ordinary runtime and development workflows.
+- Docker Engine or Docker Desktop only when validating same-host container
+  sharing.
 
 The package version is `1.0.0`. If it has not been published to a package
 feed, build a local package source from the repository.
@@ -103,3 +105,5 @@ Success
   runnable repository sample.
 - Use [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
   for direct reservation and segmented publish workflows.
+- Use [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md)
+  when validating same-host Docker container participation.

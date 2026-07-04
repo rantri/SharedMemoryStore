@@ -10,7 +10,11 @@ public sealed class PackageConsumptionIntegrationTests
     {
         var root = FindRepositoryRoot();
         var script = Path.Combine(root, "scripts", "validate-package-consumption.ps1");
-        var startInfo = new ProcessStartInfo("powershell", "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"")
+        var shell = OperatingSystem.IsWindows() ? "powershell" : "pwsh";
+        var arguments = OperatingSystem.IsWindows()
+            ? "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\""
+            : "-NoProfile -File \"" + script + "\"";
+        var startInfo = new ProcessStartInfo(shell, arguments)
         {
             WorkingDirectory = root,
             RedirectStandardOutput = true,
