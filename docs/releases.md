@@ -198,7 +198,8 @@ The `1.0.0` release is the production public API contract step. Migration from
 
 - Replace `SharedMemoryStore.SharedMemoryStore` with `MemoryStore`.
 - Replace retained reservation `GetMemory` writes with immediate `GetSpan`
-  writes followed by `Advance`.
+  writes followed by `Advance`, or use `DangerousGetMemory` only for trusted
+  direct-I/O adapters that need `Memory<byte>`.
 - Handle `InvalidKey`, `StoreBusy`, and `OperationCanceled` outcomes.
 - Replace diagnostics convenience members with
   `GetFailureCount(StoreStatus.SomeStatus)`.

@@ -65,8 +65,9 @@ Related guides:
 
 Run this when payload length is known before all bytes arrive. The sample
 demonstrates chunked writes into `ValueReservation.GetSpan()`, exact
-`Advance()` progress, `Commit()`, `Abort()`, reader acquisition, cleanup, a
-pipeline adapter, and `TryPublishSegments`.
+`Advance()` progress, trusted stream reads through
+`ValueReservation.DangerousGetMemory()`, `Commit()`, `Abort()`, reader
+acquisition, cleanup, a pipeline adapter, and `TryPublishSegments`.
 
 Focused commands:
 

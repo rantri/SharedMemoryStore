@@ -34,6 +34,53 @@ public sealed class ReservationAllocationTests
     }
 
     [Fact]
+    public void DirectStreamReservationDoesNotAllocatePayloadBufferAfterWarmup()
+    {
+        using var store = StoreTestNames.CreateStore(StoreTestNames.Options(slotCount: 2, maxValueBytes: 8));
+        var key = new byte[] { 2 };
+        var value = new byte[] { 1, 2, 3, 4 };
+        using var source = new MemoryStream(value, writable: false);
+
+        AllocationAssert.NoAllocAfterWarmup(() =>
+        {
+            source.Position = 0;
+            var status = store.TryReserve(key, value.Length, default, out var reservation);
+            if (status != StoreStatus.Success)
+            {
+                return status;
+            }
+
+            while (reservation.RemainingBytes > 0)
+            {
+                var readLength = Math.Min(2, reservation.RemainingBytes);
+                var target = reservation.DangerousGetMemory(readLength);
+                if (target.IsEmpty)
+                {
+                    _ = reservation.Abort();
+                    return StoreStatus.InvalidReservation;
+                }
+
+                var received = source.Read(target.Span[..readLength]);
+                if (received == 0)
+                {
+                    _ = reservation.Abort();
+                    return StoreStatus.ReservationIncomplete;
+                }
+
+                status = reservation.Advance(received);
+                if (status != StoreStatus.Success)
+                {
+                    _ = reservation.Abort();
+                    return status;
+                }
+            }
+
+            status = reservation.Commit();
+            return status == StoreStatus.Success ? store.TryRemove(key) : status;
+        });
+    }
+
+    [Fact]
     public void SegmentedPublishDoesNotAllocateTemporaryPayloadAfterWarmup()
     {
         using var store = StoreTestNames.CreateStore(StoreTestNames.Options(slotCount: 2, maxValueBytes: 16));

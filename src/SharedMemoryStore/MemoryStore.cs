@@ -223,8 +223,9 @@ public sealed unsafe class MemoryStore : IDisposable
     /// </summary>
     /// <remarks>
     /// The reservation remains invisible to readers until commit succeeds.
-    /// Callers write through immediate <see cref="ValueReservation.GetSpan(int)"/> views and must advance
-    /// exactly <paramref name="payloadLength"/> bytes before commit. Disposing an active reservation aborts it,
+    /// Callers write through immediate <see cref="ValueReservation.GetSpan(int)"/> views or advanced
+    /// <see cref="ValueReservation.DangerousGetMemory(int)"/> direct-I/O views and must advance exactly
+    /// <paramref name="payloadLength"/> bytes before commit. Disposing an active reservation aborts it,
     /// and descriptor bytes are immutable after reservation creation.
     /// </remarks>
     public StoreStatus TryReserve(
@@ -893,6 +894,37 @@ public sealed unsafe class MemoryStore : IDisposable
                 }
 
                 return _reservationMemory.GetSpan(slotIndex, slot.Reserved, remaining);
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
+        }
+    }
+
+    internal Memory<byte> GetReservationMemory(int slotIndex, SlotLifecycleId lifecycleId, int sizeHint)
+    {
+        if (!TryEnterOperation(StoreWaitOptions.Default, out var operation, out _))
+        {
+            return Memory<byte>.Empty;
+        }
+
+        using (operation)
+        {
+            try
+            {
+                if (_slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot) != StoreStatus.Success)
+                {
+                    return Memory<byte>.Empty;
+                }
+
+                var remaining = slot.ValueLength - slot.Reserved;
+                if (remaining <= 0 || sizeHint < 0 || sizeHint > remaining)
+                {
+                    return Memory<byte>.Empty;
+                }
+
+                return _reservationMemory.GetMemory(slotIndex, slot.Reserved, remaining);
             }
             finally
             {

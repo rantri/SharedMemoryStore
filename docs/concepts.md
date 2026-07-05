@@ -91,7 +91,8 @@ remains open.
 
 A `ValueReservation` is a producer token for direct ingest into store-owned
 payload memory. The producer announces the final payload length and descriptor,
-writes into `GetSpan()`, records progress with `Advance(int)`, and publishes
+writes into `GetSpan()` or trusted direct-I/O memory from
+`DangerousGetMemory()`, records progress with `Advance(int)`, and publishes
 atomically with `Commit()`. Readers cannot acquire the key until commit
 succeeds.
 

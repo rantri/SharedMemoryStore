@@ -142,16 +142,14 @@ if (status == StoreStatus.Success)
     while (reservation.RemainingBytes > 0)
     {
         var receiveLength = Math.Min(4096, reservation.RemainingBytes);
-        var buffer = new byte[receiveLength];
-        var received = await socket.ReceiveAsync(buffer.AsMemory());
+        var target = reservation.DangerousGetMemory(receiveLength).Slice(0, receiveLength);
+        var received = await socket.ReceiveAsync(target, SocketFlags.None);
         if (received == 0)
         {
             _ = reservation.Abort();
             break;
         }
 
-        var target = reservation.GetSpan(received);
-        buffer.AsSpan(0, received).CopyTo(target);
         status = reservation.Advance(received);
         if (status != StoreStatus.Success)
         {
@@ -166,6 +164,11 @@ if (status == StoreStatus.Success)
     }
 }
 ```
+
+`DangerousGetMemory` exists for trusted direct-I/O adapters that require
+`Memory<byte>`. Do not retain or use the returned memory after commit, abort,
+recovery, disposal, store disposal, or slot reuse. Use `GetSpan` for ordinary
+immediate writes.
 
 The [zero-copy ingest sample](../samples/ZeroCopyIngest/README.md) demonstrates
 direct chunked writes, a runnable length-prefixed stream adapter, abort cleanup,

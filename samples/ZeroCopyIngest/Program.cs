@@ -74,16 +74,14 @@ static async Task<byte[]> RunLengthPrefixedStreamIngestAsync(MemoryStore store)
     while (reservation.RemainingBytes > 0)
     {
         var readLength = Math.Min(4, reservation.RemainingBytes);
-        var buffer = new byte[readLength];
-        var received = await stream.ReadAsync(buffer);
+        var target = reservation.DangerousGetMemory(readLength).Slice(0, readLength);
+        var received = await stream.ReadAsync(target);
         if (received == 0)
         {
             Console.WriteLine($"stream abort: {reservation.Abort()}");
             return key;
         }
 
-        var target = reservation.GetSpan(received);
-        buffer.AsSpan(0, received).CopyTo(target);
         var advance = reservation.Advance(received);
         if (advance != StoreStatus.Success)
         {

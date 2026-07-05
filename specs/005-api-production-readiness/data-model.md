@@ -39,7 +39,9 @@ Temporary mutable access to bytes reserved for one pending value.
   disposal, recovery, store disposal, or slot reuse.
 - Commit succeeds only when `BytesWritten == PayloadLength`.
 - Advance fails when it would exceed `PayloadLength`.
-- General public API does not return retained writable `Memory<byte>`.
+- General public API does not return retained writable `Memory<byte>` through a
+  plain `GetMemory` member; trusted direct-I/O adapters use the explicitly
+  advanced `DangerousGetMemory` path.
 
 **State transitions**:
 - Active -> Committed when all announced bytes are advanced and commit succeeds.

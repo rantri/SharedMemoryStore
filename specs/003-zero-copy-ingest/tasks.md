@@ -76,7 +76,7 @@ length, fills store-owned memory directly, advances exact progress, and commits
 one complete immutable value visible to readers.
 
 **Independent Test**: Reserve storage for a length-delimited frame, fill through
-`GetSpan` or `GetMemory`, advance exactly the payload length, commit, and verify
+`GetSpan` or `DangerousGetMemory`, advance exactly the payload length, commit, and verify
 the acquired value and descriptor match while no pending bytes were visible.
 
 ### Tests for User Story 1

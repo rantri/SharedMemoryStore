@@ -29,6 +29,9 @@ public sealed class ReservationApiContractTests
         Assert.NotNull(typeof(ValueReservation).GetProperty(nameof(ValueReservation.RemainingBytes)));
         Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.GetSpan), BindingFlags.Public | BindingFlags.Instance));
         Assert.Null(typeof(ValueReservation).GetMethod("GetMemory", BindingFlags.Public | BindingFlags.Instance));
+        var directIoMemory = typeof(ValueReservation).GetMethod(nameof(ValueReservation.DangerousGetMemory), BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(directIoMemory);
+        Assert.Equal(typeof(Memory<byte>), directIoMemory.ReturnType);
         Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Advance));
         Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Commit));
         Assert.Contains(typeof(ValueReservation).GetMethods(BindingFlags.Public | BindingFlags.Instance), method => method.Name == nameof(ValueReservation.Abort));

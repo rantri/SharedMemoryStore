@@ -49,7 +49,8 @@ dotnet test tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.Integrati
 
 Expected outcome:
 - producer reserves by key, payload length, and descriptor.
-- producer fills store-owned memory through `GetSpan` or `GetMemory`.
+- producer fills store-owned memory through `GetSpan` or, for trusted direct
+  I/O adapters, `DangerousGetMemory`.
 - `Advance` tracks exact bytes written.
 - commit publishes one immutable value visible by key.
 - readers observe descriptor and payload bytes matching the written frame.

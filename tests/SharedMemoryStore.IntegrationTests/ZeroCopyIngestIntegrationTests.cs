@@ -46,6 +46,33 @@ public sealed class ZeroCopyIngestIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task DirectStreamReadIntoReservationMemoryCommitsCompleteImmutableValue()
+    {
+        var payload = new byte[] { 11, 12, 13, 14, 15, 16 };
+        await using var stream = new MemoryStream(payload, writable: false);
+        using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options(
+            slotCount: 2,
+            maxValueBytes: payload.Length));
+
+        Assert.Equal(StoreStatus.Success, store.TryReserve([5], payload.Length, default, out var reservation));
+
+        while (reservation.RemainingBytes > 0)
+        {
+            var readLength = Math.Min(3, reservation.RemainingBytes);
+            var target = reservation.DangerousGetMemory(readLength).Slice(0, readLength);
+            var received = await stream.ReadAsync(target);
+            Assert.True(received > 0);
+            Assert.Equal(StoreStatus.Success, reservation.Advance(received));
+        }
+
+        Assert.Equal(StoreStatus.Success, reservation.Commit());
+        Assert.Equal(StoreStatus.Success, store.TryAcquire([5], out var lease));
+        Assert.Equal(payload, lease.ValueSpan.ToArray());
+        lease.Dispose();
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public void MixedPublishAndIngestAcquireRemoveReuseWorkflowsRemainCompatible()
     {
         using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options(slotCount: 2));

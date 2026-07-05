@@ -41,7 +41,7 @@ public struct ValueReservation : IDisposable
     public int BytesWritten { get; }
     public int RemainingBytes { get; }
     public Span<byte> GetSpan(int sizeHint = 0);
-    public Memory<byte> GetMemory(int sizeHint = 0);
+    public Memory<byte> DangerousGetMemory(int sizeHint = 0);
     public StoreStatus Advance(int byteCount);
     public StoreStatus Commit();
     public StoreStatus Abort();
@@ -71,7 +71,8 @@ and compatibility contract belongs to the span, memory, and sequence APIs above.
    returns a `ValueReservation`.
 3. While pending, `TryAcquire` for the key returns `NotFound`; duplicate publish
    or reserve attempts return `DuplicateKey`.
-4. The producer writes into `GetSpan` or `GetMemory` and calls `Advance` with the
+4. The producer writes into `GetSpan` or, for trusted direct-I/O adapters that
+   require `Memory<byte>`, `DangerousGetMemory`, and calls `Advance` with the
    number of bytes actually written.
 5. `Commit` succeeds only when `BytesWritten == PayloadLength`; it publishes the
    slot atomically and makes the value acquirable by key.
@@ -82,7 +83,11 @@ and compatibility contract belongs to the span, memory, and sequence APIs above.
 
 ## Writable Memory Rules
 
-- `GetSpan` and `GetMemory` expose the remaining unwritten payload region.
+- `GetSpan` exposes the remaining unwritten payload region for immediate
+  writes.
+- `DangerousGetMemory` exposes the remaining unwritten payload region for
+  trusted stream or socket adapters that require retained-capable
+  `Memory<byte>`.
 - The returned view length must never exceed `RemainingBytes`.
 - A positive `sizeHint` larger than `RemainingBytes` returns an empty view or a
   deterministic out-of-range status through the next `Advance`; it must not
@@ -91,7 +96,8 @@ and compatibility contract belongs to the span, memory, and sequence APIs above.
   open.
 - Only the reserving producer may mutate the writable region.
 - Consumers must not retain or use writable views after commit, abort, dispose,
-  recovery, or store disposal.
+  recovery, store disposal, or slot reuse. This is especially important for
+  `DangerousGetMemory` because `Memory<byte>` is retained-capable by design.
 
 ## Commit and Abort Rules
 

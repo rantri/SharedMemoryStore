@@ -18,6 +18,7 @@
 
 - `ValueReservation.GetMemory(int)` is removed from the public API.
 - `ValueReservation.GetSpan(int)` remains the immediate write path while the reservation is active.
+- `ValueReservation.DangerousGetMemory(int)` is the advanced trusted direct-I/O path for adapters that need `Memory<byte>` without per-frame payload allocation.
 - `Advance`, `Commit`, and `Abort` add wait-policy overloads.
 
 ## Wait Policy Additions
@@ -37,6 +38,6 @@
 ## Migration Notes
 
 1. Replace aliases such as `using Store = SharedMemoryStore.SharedMemoryStore;` with direct `MemoryStore` usage or `using Store = SharedMemoryStore.MemoryStore;`.
-2. Replace reservation memory usage with immediate `GetSpan` writes followed by `Advance`.
+2. Replace general reservation memory usage with immediate `GetSpan` writes followed by `Advance`; use `DangerousGetMemory` only for trusted direct-I/O adapters that need `Memory<byte>`.
 3. Replace diagnostics convenience property reads with `snapshot.GetFailureCount(StoreStatus.SomeStatus)`.
 4. Handle `InvalidKey`, `StoreBusy`, and `OperationCanceled` outcomes where appropriate.

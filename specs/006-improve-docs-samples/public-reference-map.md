@@ -48,7 +48,7 @@ to the documentation surfaces that mention them.
 | `SharedMemoryStoreOptions.Create` | `SharedMemoryStoreOptions.cs` | Integration, HostedServiceIntegration |
 | `SharedMemoryStoreOptions.Validate` | `SharedMemoryStoreOptions.cs` | Usage, integration, maintainers |
 | `ValueLease.Release` and `ValueLease.Dispose` | `ValueLease.cs` | Usage, lifecycle, samples |
-| `ValueReservation.GetSpan`, `Advance`, `Commit`, `Abort`, `Dispose` | `ValueReservation.cs` | Usage, examples, lifecycle, ZeroCopyIngest |
+| `ValueReservation.GetSpan`, `DangerousGetMemory`, `Advance`, `Commit`, `Abort`, `Dispose` | `ValueReservation.cs` | Usage, examples, lifecycle, ZeroCopyIngest |
 | `DiagnosticsSnapshot.GetFailureCount` | `DiagnosticsSnapshot.cs` | Diagnostics, errors, maintainers |
 
 ## Status Names

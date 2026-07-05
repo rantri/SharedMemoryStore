@@ -44,7 +44,7 @@ Required outcomes after disposal completes:
 | `ValueLease.Release` | `StoreStatus.StoreDisposed` for a token tied to the disposed handle, or `InvalidLease` for a default token |
 | `ValueReservation.IsValid` | `false` |
 | `ValueReservation.GetSpan` | empty span |
-| `ValueReservation.GetMemory` | empty memory |
+| `ValueReservation.DangerousGetMemory` | empty memory |
 | `ValueReservation.Advance` | `StoreStatus.StoreDisposed` for a token tied to the disposed handle, or `InvalidReservation` for a default token |
 | `ValueReservation.Commit` | `StoreStatus.StoreDisposed` for a token tied to the disposed handle, or `InvalidReservation` for a default token |
 | `ValueReservation.Abort` | `StoreStatus.StoreDisposed` for a token tied to the disposed handle, or `InvalidReservation` for a default token |

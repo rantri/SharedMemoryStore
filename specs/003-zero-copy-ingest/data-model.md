@@ -65,11 +65,15 @@ Store-owned payload bytes exposed to the producer before commit.
 **Validation Rules**:
 - writable views are valid only while the reservation is pending and the store
   handle remains open.
-- `GetSpan(sizeHint)` and `GetMemory(sizeHint)` return at least the requested
-  remaining size when possible and never beyond `RemainingBytes`.
+- `GetSpan(sizeHint)` returns at least the requested remaining size when
+  possible and never beyond `RemainingBytes`.
+- `DangerousGetMemory(sizeHint)` returns retained-capable writable memory for
+  trusted direct-I/O adapters under the same pending-reservation and remaining
+  byte rules.
 - `Advance(byteCount)` rejects negative counts and counts greater than
   `RemainingBytes`.
-- callers must not mutate the region after commit, abort, dispose, or recovery.
+- callers must not mutate the region after commit, abort, dispose, recovery,
+  store disposal, or slot reuse.
 
 ## FrameDescriptor
 

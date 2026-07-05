@@ -555,6 +555,7 @@ function Assert-PublicReferenceDrift {
             "BytesWritten",
             "RemainingBytes",
             "GetSpan",
+            "DangerousGetMemory",
             "Advance",
             "Commit",
             "Abort"
@@ -587,6 +588,7 @@ function Assert-PublicReferenceDrift {
         "StoreStatus",
         "ValueLease",
         "ValueReservation",
+        "DangerousGetMemory",
         "DiagnosticsSnapshot",
         "TryCreateOrOpen",
         "TryPublish",

@@ -4,10 +4,11 @@ public sealed class ReservationMemoryContractTests
 {
     [Fact]
     [Trait("Category", ProductionReadinessTestCategories.ReservationMemoryLifetime)]
-    public void ValueReservationDoesNotExposeRetainedWritableMemory()
+    public void ValueReservationDoesNotExposeGeneralRetainedWritableMemory()
     {
         Assert.Null(typeof(ValueReservation).GetMethod("GetMemory"));
         Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.GetSpan)));
+        Assert.NotNull(typeof(ValueReservation).GetMethod(nameof(ValueReservation.DangerousGetMemory)));
     }
 
     [Fact]
@@ -23,6 +24,7 @@ public sealed class ReservationMemoryContractTests
 
         Assert.False(reservation.IsValid);
         Assert.True(reservation.GetSpan().IsEmpty);
+        Assert.True(reservation.DangerousGetMemory().IsEmpty);
         Assert.Equal(StoreStatus.ReservationAlreadyCompleted, reservation.Advance(0));
     }
 }

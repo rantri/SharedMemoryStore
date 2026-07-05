@@ -96,8 +96,9 @@ Maintainers must preserve these invariants:
 
 `ValueReservation` is a struct token for pending direct ingest. A reservation
 announces payload length and descriptor bytes before payload writes. The
-producer writes to `GetSpan()`, records exact progress with `Advance()`, and
-publishes only through `Commit()` after exact completion.
+producer writes to `GetSpan()` or trusted direct-I/O memory from
+`DangerousGetMemory()`, records exact progress with `Advance()`, and publishes
+only through `Commit()` after exact completion.
 
 Pending reservations are invisible to readers but occupy capacity and block
 duplicate keys. Abort, dispose, and recovery remove the pending index entry

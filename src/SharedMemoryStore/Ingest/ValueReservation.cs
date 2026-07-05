@@ -44,6 +44,22 @@ public struct ValueReservation : IDisposable
     }
 
     /// <summary>
+    /// Gets advanced writable memory over remaining store-owned payload bytes while the reservation is pending.
+    /// </summary>
+    /// <remarks>
+    /// This method is intended for trusted direct I/O adapters that require <see cref="Memory{T}"/>,
+    /// such as socket or stream reads into the store. The returned memory is retained-capable and must
+    /// not be used after commit, abort, recovery, disposal, store disposal, or slot reuse.
+    /// </remarks>
+    /// <param name="sizeHint">Minimum useful remaining size requested by the caller, or zero for any remaining bytes.</param>
+    public readonly Memory<byte> DangerousGetMemory(int sizeHint = 0)
+    {
+        return _store is null
+            ? Memory<byte>.Empty
+            : _store.GetReservationMemory(_slotIndex, _lifecycleId, sizeHint);
+    }
+
+    /// <summary>
     /// Advances the exact number of payload bytes written into the current writable view.
     /// </summary>
     public readonly StoreStatus Advance(int byteCount)

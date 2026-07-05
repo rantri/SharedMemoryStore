@@ -16,6 +16,7 @@ public struct ValueReservation : IDisposable
     public int RemainingBytes { get; }
 
     public Span<byte> GetSpan(int sizeHint = 0);
+    public Memory<byte> DangerousGetMemory(int sizeHint = 0);
     public StoreStatus Advance(int byteCount);
     public StoreStatus Commit();
     public StoreStatus Abort();
@@ -23,7 +24,9 @@ public struct ValueReservation : IDisposable
 ```
 
 The production public API must not expose general retained writable
-`Memory<byte>` for reservation payload storage.
+`Memory<byte>` for reservation payload storage through a plain `GetMemory`
+member. Retained-capable memory is allowed only through the explicitly
+advanced/trusted `DangerousGetMemory` member.
 
 ## Lifetime Rules
 
@@ -37,6 +40,14 @@ The production public API must not expose general retained writable
 - `Dispose` aborts only if the reservation is still active.
 - After commit, abort, dispose, recovery, store disposal, or slot reuse, retained
   safe public write access must not mutate current store contents.
+
+## Advanced Direct-I/O Memory Rule
+
+`DangerousGetMemory` exists for trusted same-host stream or socket adapters that
+need `Memory<byte>` to receive directly into store-owned payload bytes. It is
+excluded from basic examples and must be documented as caller-owned lifetime
+risk. Consumers must not retain or use returned memory after commit, abort,
+dispose, recovery, store disposal, or slot reuse.
 
 ## Outcomes
 
@@ -58,9 +69,10 @@ reuse the slot for at least 10,000 cycles and verify:
 - Stale reservation tokens cannot advance, commit, or abort a reused slot.
 - Basic examples do not use advanced or trusted writable-memory APIs.
 
-## Future Advanced API Rule
+## General Memory API Rule
 
-If a future release adds retained writable memory again, it must be a separate
-advanced/trusted API. It must be excluded from quickstarts, documented as
-caller-owned lifetime risk, and tested against commit, abort, dispose, recovery,
-store disposal, and slot reuse.
+The package must not reintroduce a plain public `ValueReservation.GetMemory`
+member. Any retained-capable write view must remain a separate
+advanced/trusted API, excluded from quickstarts, documented as caller-owned
+lifetime risk, and tested against commit, abort, dispose, recovery, store
+disposal, and slot reuse.

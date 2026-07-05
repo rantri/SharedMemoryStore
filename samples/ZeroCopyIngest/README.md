@@ -11,6 +11,7 @@ buffered payloads.
 
 - `MemoryStore.TryReserve` and `ValueReservation`.
 - Chunked writes through `GetSpan`.
+- Trusted direct stream reads through `DangerousGetMemory`.
 - Exact `Advance` progress and atomic `Commit`.
 - `Abort` cleanup for incomplete frames.
 - `TryPublishSegments` with `ReadOnlySequence<byte>`.
@@ -109,4 +110,7 @@ aborted, and the store handle is disposed before exit.
 
 The core store remains frame-neutral. Descriptor and payload bytes are opaque to
 the library. The pipeline mode is an adapter example and does not make
-`System.IO.Pipelines` a runtime package dependency.
+`System.IO.Pipelines` a runtime package dependency. `DangerousGetMemory` is an
+advanced trusted adapter hook for direct I/O APIs that require `Memory<byte>`;
+do not retain or use that memory after the reservation completes, is recovered,
+or the store is disposed.

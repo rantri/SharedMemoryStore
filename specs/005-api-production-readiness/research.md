@@ -44,7 +44,7 @@ store-owned memory, it must be added as a separate advanced contract with clear
 caller-owned lifetime risk and tests.
 
 **Alternatives considered**:
-- Keep `ValueReservation.GetMemory()` and document the hazard: rejected because
+- Keep plain `ValueReservation.GetMemory()` and document the hazard: rejected because
   basic examples could still retain a mutable handle that corrupts future data.
 - Return `Memory<byte>` from a validating `MemoryManager`: rejected because
   validating every later `Span` or `Pin` against reservation lifecycle is subtle

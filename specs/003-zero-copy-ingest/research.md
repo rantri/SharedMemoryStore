@@ -18,12 +18,13 @@ adding a variable-size allocator or changing reader leases.
 - Make socket or pipeline readers part of the core store: rejected because the
   core contract must remain language-neutral and protocol-neutral.
 
-## Decision: Expose store-owned memory through reservation span and memory views
+## Decision: Expose store-owned memory through immediate spans and advanced direct-I/O memory views
 
 **Rationale**: Direct socket-style receive needs writable memory that belongs to
 the mapped store, while tests and synchronous writers benefit from spans. The
-reservation token should expose `GetSpan` and `GetMemory` over the remaining
-payload region. Any backing object needed to represent unmanaged mapped memory
+reservation token should expose `GetSpan` over the remaining payload region and
+`DangerousGetMemory` for trusted direct-I/O adapters that require
+`Memory<byte>`. Any backing object needed to represent unmanaged mapped memory
 as `Memory<byte>` is allocated per slot during create/open, so steady-state
 reservation and receive loops do not allocate per frame.
 

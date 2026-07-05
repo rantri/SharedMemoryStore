@@ -52,8 +52,9 @@ Repeated release returns deterministic statuses.
 A reservation owns one slot generation while its state is pending publication.
 During that period the key is present for duplicate detection, but `TryAcquire`
 returns `NotFound`. The producer may write only into the remaining payload
-region returned by `GetSpan()` and must call `Advance()` with the exact number
-of bytes written.
+region returned by `GetSpan()` or, for trusted direct-I/O adapters,
+`DangerousGetMemory()`, and must call `Advance()` with the exact number of bytes
+written.
 
 `Commit()` publishes the value only when progress equals the announced payload
 length. `Abort()` removes the pending key before reclaiming the slot. Disposing
@@ -117,6 +118,8 @@ the store toward safe error outcomes such as `CorruptStore`.
 - Commit, abort, dispose, or recover every pending `ValueReservation`.
 - Avoid retaining span references after release, abort, commit, recovery, or
   store disposal.
+- Avoid retaining `DangerousGetMemory()` results beyond the direct I/O operation
+  that is filling the active reservation.
 - Record diagnostics before disposal when troubleshooting a failure.
 - Use `TryRecoverLeases` and `TryRecoverReservations` only when owner policy
   permits recovery.

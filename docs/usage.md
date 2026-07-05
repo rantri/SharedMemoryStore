@@ -194,7 +194,10 @@ payload length returns `ReservationWriteOutOfRange`. `Abort()` and active
 reservation disposal remove the pending key without exposing partial bytes.
 
 Writable spans are valid only while the reservation is pending and the store
-handle remains open. The public API does not expose retained writable memory.
+handle remains open. Use `DangerousGetMemory` only for trusted direct-I/O
+adapters, such as stream or socket reads that require `Memory<byte>`. The
+returned memory is retained-capable, so callers must not retain or use it after
+commit, abort, recovery, disposal, store disposal, or slot reuse.
 
 ## Segmented Publish
 

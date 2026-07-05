@@ -4,7 +4,7 @@
 |-------------|--------------------|
 | FR-001, FR-002 | Production API contract tests and package-consumption smoke compile `MemoryStore` without aliasing the old type. |
 | FR-003, LC-001, LC-002 | API change inventory, release notes, README, and docs release guidance list breaking migration impact. |
-| FR-004, FR-005, FR-006, LC-003 | Reservation contract and lifetime tests verify `GetMemory` is absent and completed/stale reservations cannot be used through current public APIs. |
+| FR-004, FR-005, FR-006, LC-003 | Reservation contract and lifetime tests verify plain `GetMemory` is absent, `DangerousGetMemory` is advanced/trusted, and completed/stale reservations cannot be used through current safe public APIs. |
 | FR-007, FR-008, FR-009, LC-004 | Store wait policy unit, contract, and integration tests cover default, no-wait, busy, cancellation, and diagnostics outcomes. |
 | FR-010, FR-011, FR-012, LC-005 | Options validation unit and contract tests cover `Create`, `Validate`, invalid modes, derived sizes, and capacity errors. |
 | FR-013, FR-014 | Key validation tests cover empty-key `InvalidKey` and oversized-key `KeyTooLarge` across public entry points. |

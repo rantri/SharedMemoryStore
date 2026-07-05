@@ -14,14 +14,17 @@ public sealed class ReservationMemoryLifetimeTests
         Assert.Equal(StoreStatus.Success, commitReservation.Advance(2));
         Assert.Equal(StoreStatus.Success, commitReservation.Commit());
         Assert.True(commitReservation.GetSpan().IsEmpty);
+        Assert.True(commitReservation.DangerousGetMemory().IsEmpty);
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([2], 1, default, out var abortReservation));
         Assert.Equal(StoreStatus.Success, abortReservation.Abort());
         Assert.True(abortReservation.GetSpan().IsEmpty);
+        Assert.True(abortReservation.DangerousGetMemory().IsEmpty);
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([3], 1, default, out var disposeReservation));
         disposeReservation.Dispose();
         Assert.True(disposeReservation.GetSpan().IsEmpty);
+        Assert.True(disposeReservation.DangerousGetMemory().IsEmpty);
     }
 
     [Fact]
@@ -33,6 +36,7 @@ public sealed class ReservationMemoryLifetimeTests
         store.Dispose();
 
         Assert.True(reservation.GetSpan().IsEmpty);
+        Assert.True(reservation.DangerousGetMemory().IsEmpty);
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Advance(1));
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Commit());
         Assert.Equal(StoreStatus.StoreDisposed, reservation.Abort());
@@ -57,6 +61,7 @@ public sealed class ReservationMemoryLifetimeTests
         }
 
         Assert.True(stale.GetSpan().IsEmpty);
+        Assert.True(stale.DangerousGetMemory().IsEmpty);
         Assert.Equal(StoreStatus.InvalidReservation, stale.Advance(1));
     }
 }
