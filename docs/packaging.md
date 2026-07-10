@@ -11,14 +11,14 @@ and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
 | Field | Value |
 |-------|-------|
 | `PackageId` | `SharedMemoryStore` |
-| `Version` | `1.0.1` |
+| `Version` | `1.0.2` |
 | `TargetFramework` | `net10.0` |
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library` |
 | `PackageLicenseExpression` | `MIT` |
 | `PackageProjectUrl` | `https://github.com/rantri/SharedMemoryStore` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `Linux, Windows, and same-host Docker support hardening remains the managed 1.0.1 package scope. The repository also adds independently versioned native C++ and Python sibling distributions over layout 1.2 and C ABI 1.0; they are not included in the NuGet package, whose public API and runtime dependency surface remain unchanged.` |
+| `PackageReleaseNotes` | `NuGet SharedMemoryStore 1.0.2 preserves Linux, Windows, and same-host Docker support, corrects Linux layout-mismatch reporting, and rejects unsupported managed processes early while preserving the public API, status values, BCL-only runtime surface, layout 1.2, and resource naming 1. Repository source adds independently versioned native C++ and Python 0.1.0 sibling distributions using C ABI 1.0, validated with .NET on Windows and Linux; v1.0.2 neither includes them in NuGet nor publishes them to PyPI or a native package registry.` |
 | `RepositoryType` | `git` |
 | `RepositoryUrl` | `https://github.com/rantri/SharedMemoryStore` |
 | `SymbolPackageFormat` | `snupkg` |
@@ -95,7 +95,7 @@ pwsh ./scripts/validate-python.ps1 -Configuration Release
 
 | Distribution | Version | ABI requirement | Creates/reads | Resource naming |
 |--------------|---------|-----------------|---------------|-----------------|
-| NuGet `SharedMemoryStore` | `1.0.1` | Not applicable | layout `1.2` | `1` |
+| NuGet `SharedMemoryStore` | `1.0.2` | Not applicable | layout `1.2` | `1` |
 | CMake `SharedMemoryStore` | `0.1.0` | provides C ABI `1.0` | layout `1.2` | `1` |
 | Python `shared-memory-store` | `0.1.0` | requires C ABI `1.0` | layout `1.2` | `1` |
 

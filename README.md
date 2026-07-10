@@ -8,7 +8,7 @@ payloads through a broker process.
 
 Distribution identities:
 
-- NuGet: `SharedMemoryStore` `1.0.1`, targeting `net10.0` with .NET BCL
+- NuGet: `SharedMemoryStore` `1.0.2`, targeting `net10.0` with .NET BCL
   runtime dependencies only.
 - CMake: `SharedMemoryStore` `0.1.0`, exposing a C++20 RAII API and fixed-width
   C ABI `1.0` over the native shared library.
@@ -248,5 +248,5 @@ pwsh ./scripts/validate-interoperability.ps1 -Configuration Release -Stress
 
 Documentation changes must keep package metadata, README content, release notes,
 support policy, security policy, compatibility metadata, and contract links
-aligned across managed `1.0.1`, native `0.1.0`, Python `0.1.0`, ABI `1.0`, and
+aligned across managed `1.0.2`, native `0.1.0`, Python `0.1.0`, ABI `1.0`, and
 layout `1.2`.

@@ -10,7 +10,7 @@
     {
       "name": "SharedMemoryStore",
       "ecosystem": "NuGet",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "creates_layouts": ["1.2"],
       "reads_layouts": ["1.2"],
       "resource_naming": 1,

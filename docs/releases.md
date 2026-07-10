@@ -2,7 +2,7 @@
 
 This guide is the maintainer checklist for preparing independently versioned
 managed, native, and Python releases. The current source identities are NuGet
-`SharedMemoryStore` `1.0.1`, CMake `SharedMemoryStore` `0.1.0`, Python
+`SharedMemoryStore` `1.0.2`, CMake `SharedMemoryStore` `0.1.0`, Python
 `shared-memory-store` `0.1.0`, C ABI `1.0`, mapped layout `1.2`, and resource
 naming `1`. Update this guide when any distribution, ABI, protocol, support,
 security, documentation, or sample contract changes.
@@ -273,7 +273,7 @@ dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.B
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 ```
 
-## Native and Python 0.1.0 Preparation Notes (Unreleased)
+## Native and Python 0.1.0 Publication Preparation Notes
 
 The repository now contains the implementation and packaging inputs for:
 
@@ -287,7 +287,7 @@ The repository now contains the implementation and packaging inputs for:
   conformance fixtures, test-only JSON-lines agents, and the ordered 3x3 core
   exchange harness.
 
-These sibling distributions do not change the managed `1.0.1` public API,
+These sibling distributions do not change the managed `1.0.2` public API,
 status numbers, NuGet runtime dependencies, or mapped layout. Their `0.1.0`
 versions are alpha lines and are not included in the NuGet package.
 

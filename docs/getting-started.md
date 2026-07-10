@@ -15,13 +15,13 @@ remove, and close workflow. All three use layout `1.2` and resource naming `1`.
 - Docker Engine or Docker Desktop only when validating same-host container
   sharing.
 
-The managed package version is `1.0.1`; the native and Python distributions are
+The managed package version is `1.0.2`; the native and Python distributions are
 independently versioned `0.1.0`. If an artifact has not been published to its
 ecosystem feed, build it locally from the repository.
 
 | Consumer | Artifact | Public entry point |
 |----------|----------|--------------------|
-| .NET | NuGet `SharedMemoryStore` `1.0.1` | `MemoryStore` |
+| .NET | NuGet `SharedMemoryStore` `1.0.2` | `MemoryStore` |
 | C++ | CMake `SharedMemoryStore` `0.1.0` | `shared_memory_store::memory_store` |
 | Python | wheel `shared-memory-store` `0.1.0` | `shared_memory_store.MemoryStore` |
 

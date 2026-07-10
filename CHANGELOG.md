@@ -5,44 +5,63 @@ chronological order.
 
 ## Unreleased
 
+## 1.0.2 - 2026-07-10
+
 ### Added
 
 - Added an independently versioned CMake `SharedMemoryStore` `0.1.0`
   distribution with a C++20 protocol core, Windows and Linux adapters,
-  fixed-width C ABI `1.0`, move-only C++ RAII wrappers, dependency-free native
-  tests, install/export rules, clean-consumer project, and basic sample.
-- Added the Python `shared-memory-store` `0.1.0` source and wheel configuration
-  for Python 3.10 or newer. Its standard-library `ctypes` API packages and
-  validates the native library beside the Python modules and exposes
-  context-managed stores, leases, reservations, recovery, waits, and
-  diagnostics.
-- Added the canonical language-neutral protocol boundary for layout `1.2`,
-  resource naming `1`, exact conformance fixtures, compatibility metadata, and
-  test-only .NET, C++, and Python JSON-lines participants.
-- Added an ordered 3x3 core exchange harness plus native and Python contract,
-  lifecycle, ABI, diagnostics, and package tests.
+  fixed-width C ABI `1.0`, move-only C++ RAII wrappers, install/export rules,
+  native tests, a clean-consumer project, and a basic sample.
+- Added the independently versioned Python `shared-memory-store` `0.1.0`
+  distribution sources for Python 3.10 or newer. Its standard-library `ctypes`
+  API loads the packaged native library and exposes context-managed stores,
+  leases, reservations, recovery, bounded waits, and diagnostics.
+- Added canonical language-neutral specifications and conformance fixtures for
+  mapped layout `1.2` and resource naming `1`, plus a complete ordered 3x3
+  .NET/C++/Python interoperability harness.
+
+### Fixed
+
+- Corrected managed Linux opening of an existing store so the actual backing
+  file is mapped before layout validation; mismatched capacities now report
+  `IncompatibleLayout` instead of a mapping failure.
+- Made the managed implementation reject non-64-bit or non-little-endian
+  processes with `UnsupportedPlatform` before opening platform resources.
+
+### Packaging
+
+- Updated the release workflow to Node 24-based immutable action pins while
+  retaining trusted NuGet publishing and draft-first GitHub release behavior.
 
 ### Security
 
-- Preserved the trusted same-host participant boundary across all three
-  distributions. Native and Python callers receive lifecycle and layout
-  validation, but no implementation claims protection from a malicious writer
-  that already has legitimate access to the shared resources.
 - Restricted Python native loading to the library packaged beside its modules;
   it does not search the current directory, `PATH`, or system library paths.
+- Preserved the trusted same-host participant boundary across all three
+  implementations; no implementation claims protection from a malicious writer
+  that already has legitimate access to the shared resources.
+
+### Validation
+
+- Validated native configure, build, CTest, install, clean CMake consumption,
+  Python source and installed-wheel behavior, and ordered .NET/C++/Python
+  interoperability on Windows x64 and Linux x64.
+- Validated mixed lifecycle, bounded-contention, crash-recovery, diagnostics,
+  Linux ownership cleanup, protocol fixtures, package consumption, and existing
+  managed regression scenarios.
 
 ### Compatibility
 
-- NuGet `SharedMemoryStore` remains `1.0.1`; its public managed API, status
-  numbers, BCL-only runtime dependency surface, and layout `1.2` behavior are
-  unchanged. The native and Python artifacts are sibling distributions and are
-  not included in the NuGet package.
-- NuGet, CMake, and Python versions advance independently. Cross-runtime
-  compatibility is declared through layout `1.2`, resource naming `1`, and C
-  ABI `1.0` where applicable.
-- The native and Python `0.1.0` lines are alpha. Registry publication and full
-  Windows/Linux ordered-pair release evidence remain explicit publication
-  gates rather than claims made by this entry.
+- NuGet `SharedMemoryStore` advances to `1.0.2` while preserving the managed
+  public API, status values, .NET BCL-only runtime dependency surface, mapped
+  layout `1.2`, and resource naming `1`.
+- CMake `SharedMemoryStore` and Python `shared-memory-store` remain independently
+  versioned `0.1.0` alpha sibling distributions. They are not included in the
+  NuGet package, and this release does not publish them to PyPI or a native
+  package registry.
+- All three runtimes interoperate through mapped layout `1.2` and resource
+  naming `1`; the native and Python distributions use C ABI `1.0`.
 
 ## 1.0.1 - 2026-07-10
 
