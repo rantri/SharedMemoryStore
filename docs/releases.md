@@ -5,6 +5,45 @@ written for the current `1.0.1` package and should be updated when package
 metadata, public API behavior, compatibility scope, support policy, security
 reporting, documentation scope, or sample behavior changes.
 
+## Automated Release Process
+
+Releases are deliberately started by a maintainer and automated after that
+point. The [release workflow](../.github/workflows/release.yml) validates the
+version and release target, runs the full Linux and Docker release suite, packs
+the primary and symbol packages, creates a draft GitHub release, publishes to
+NuGet.org, and then publishes the GitHub release. CI separately validates the
+same commit on Linux and Windows through
+[ci.yml](../.github/workflows/ci.yml).
+
+Configure NuGet.org trusted publishing once before the first automated release:
+
+1. Sign in to NuGet.org as the `rantri` owner and open **Trusted Publishing**.
+2. Add a GitHub policy with owner `rantri`, repository
+   `SharedMemoryStore`, workflow file `release.yml`, and environment `release`.
+3. In GitHub, confirm the `release` environment exists. An optional required
+   reviewer adds a second approval before publication.
+4. Merge all release changes to `main` and confirm the CI workflow succeeds.
+
+To publish a release:
+
+1. Set `<Version>` and `PackageReleaseNotes` in the package project, then align
+   README, packaging documentation, and `CHANGELOG.md`.
+2. Complete the compatibility and validation review below.
+3. On GitHub, open **Actions**, choose **Release**, select **Run workflow** on
+   `main`, enter the exact version without a `v` prefix, and run it.
+4. Confirm the workflow publishes `SharedMemoryStore.<version>.nupkg` and
+   `.snupkg`, creates tag `v<version>`, and publishes the GitHub release.
+5. Allow time for NuGet.org validation and indexing, then install the exact
+   published version in a clean consumer.
+
+Do not create the tag or GitHub release first; the workflow owns both. NuGet
+package versions are immutable, so a failed release must be diagnosed rather
+than retried under the same version with different contents. If NuGet publishing
+fails, the workflow intentionally leaves the GitHub release as a draft. If the
+package is still absent from NuGet.org, delete that draft and its tag before a
+retry. If NuGet.org already has the version, keep the tag and publish the
+existing draft after verifying its attached package rather than rebuilding it.
+
 ## Package Metadata
 
 Verify
@@ -200,9 +239,10 @@ The 2026-07-09 review completed the following release evidence:
 - Public API names, status values, runtime dependencies, and the shared-memory
   layout remain compatible with `1.0.0`.
 
-External publication gate: the GitHub repository reported private
-vulnerability reporting as disabled during this review. Enable it or publish an
-owner-approved private reporting channel before publishing `1.0.1`.
+External publication gates completed on 2026-07-10: GitHub private vulnerability
+reporting is enabled for the public repository, the `release` GitHub environment
+is restricted to `main`, and the NuGet.org trusted-publishing policy targets
+`rantri/SharedMemoryStore`, `release.yml`, and the `release` environment.
 
 ## 1.0.0 Documentation and Samples Excellence Notes
 

@@ -14,10 +14,12 @@ and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library` |
 | `PackageLicenseExpression` | `MIT` |
+| `PackageProjectUrl` | `https://github.com/rantri/SharedMemoryStore` |
 | `PackageReadmeFile` | `README.md` |
 | `PackageReleaseNotes` | `Linux, Windows, and same-host Docker support hardening: fixes bounded waits, crash-safe ownership and index maintenance, private Linux resource permissions, layout overflow validation, and cleanup reliability while preserving the 1.0.0 public API and layout.` |
 | `RepositoryType` | `git` |
 | `RepositoryUrl` | `https://github.com/rantri/SharedMemoryStore` |
+| `SymbolPackageFormat` | `snupkg` |
 
 The package project packs the root [README.md](../README.md) at the package
 root so NuGet consumers see the same package purpose, status, first-use
@@ -31,6 +33,22 @@ dotnet restore
 dotnet build SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
+
+Packing produces both `SharedMemoryStore.<version>.nupkg` and the portable-symbol
+package `SharedMemoryStore.<version>.snupkg`. NuGet.org publishes the symbol
+package to its symbol server alongside the primary package.
+
+## Automated Publication
+
+The [CI workflow](../.github/workflows/ci.yml) validates Linux and Windows on
+pull requests and pushes to `main`. The manually triggered
+[release workflow](../.github/workflows/release.yml) performs the full release
+validation, including Docker, verifies that the version is unused, creates the
+package and symbols, publishes them to NuGet.org with trusted publishing, and
+creates the matching GitHub release and `v<version>` tag.
+
+The one-time trusted-publishing policy and the exact release procedure are
+documented in [Release preparation](releases.md).
 
 ## Clean Consumer Validation
 

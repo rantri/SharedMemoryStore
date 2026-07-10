@@ -15,10 +15,13 @@
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
     <PackageTags>shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/rantri/SharedMemoryStore</PackageProjectUrl>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/rantri/SharedMemoryStore</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageReleaseNotes>Linux, Windows, and same-host Docker support hardening: fixes bounded waits, crash-safe ownership and index maintenance, private Linux resource permissions, layout overflow validation, and cleanup reliability while preserving the 1.0.0 public API and layout.</PackageReleaseNotes>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <AssemblyName>SharedMemoryStore</AssemblyName>
     <RootNamespace>SharedMemoryStore</RootNamespace>
   </PropertyGroup>

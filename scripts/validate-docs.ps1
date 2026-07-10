@@ -268,6 +268,7 @@ function Assert-PackageMetadata {
         Description = "A bounded named shared-memory key-value store for opaque binary values."
         PackageLicenseExpression = "MIT"
         PackageReadmeFile = "README.md"
+        PackageProjectUrl = "https://github.com/rantri/SharedMemoryStore"
         RepositoryType = "git"
         RepositoryUrl = "https://github.com/rantri/SharedMemoryStore"
     }
@@ -289,6 +290,10 @@ function Assert-PackageMetadata {
     }
     elseif ($propertyGroup.PackageReleaseNotes.IndexOf("Linux, Windows, and same-host Docker support", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
         Add-Failure "PackageReleaseNotes must mention Linux, Windows, and same-host Docker support."
+    }
+
+    if ($propertyGroup.IncludeSymbols -ne "true" -or $propertyGroup.SymbolPackageFormat -ne "snupkg") {
+        Add-Failure "Package project must produce portable .snupkg symbols."
     }
 
     $readmeItem = $project.Project.ItemGroup.None | Where-Object {

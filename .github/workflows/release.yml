@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish; must match the project (for example, 1.0.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate and package
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Verify release version and target
+        id: version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+              throw "Releases must run from the main branch, not '$env:GITHUB_REF'."
+          }
+
+          $requested = $env:REQUESTED_VERSION.Trim()
+          if ($requested -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+              throw "'$requested' is not a supported semantic version."
+          }
+
+          [xml]$project = Get-Content -Raw -LiteralPath "src/SharedMemoryStore/SharedMemoryStore.csproj"
+          $projectVersion = [string](
+              $project.Project.PropertyGroup |
+                  Where-Object { $_.Version } |
+                  Select-Object -First 1
+          ).Version
+          if ($projectVersion -ne $requested) {
+              throw "Requested version '$requested' does not match project version '$projectVersion'."
+          }
+
+          git ls-remote --exit-code --tags origin "refs/tags/v$requested" *> $null
+          if ($LASTEXITCODE -eq 0) {
+              throw "Tag 'v$requested' already exists. Versions and tags are immutable."
+          }
+          if ($LASTEXITCODE -ne 2) {
+              throw "Could not verify whether tag 'v$requested' exists (git exit code $LASTEXITCODE)."
+          }
+
+          $published = Invoke-RestMethod `
+              -Uri "https://api.nuget.org/v3-flatcontainer/sharedmemorystore/index.json" `
+              -Headers @{ "User-Agent" = "SharedMemoryStore-release-workflow" }
+          if ($published.versions -contains $requested.ToLowerInvariant()) {
+              throw "SharedMemoryStore $requested is already published on NuGet.org. Package versions are immutable."
+          }
+
+          "value=$requested" >> $env:GITHUB_OUTPUT
+
+      - name: Run full release validation
+        shell: pwsh
+        run: ./scripts/validate-cross-platform.ps1
+
+      - name: Create release packages and notes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj `
+              -c Release `
+              --no-build `
+              -o artifacts/release
+          if ($LASTEXITCODE -ne 0) {
+              throw "dotnet pack failed with exit code $LASTEXITCODE."
+          }
+
+          $package = "artifacts/release/SharedMemoryStore.$env:RELEASE_VERSION.nupkg"
+          $symbols = "artifacts/release/SharedMemoryStore.$env:RELEASE_VERSION.snupkg"
+          if (-not (Test-Path -LiteralPath $package -PathType Leaf)) {
+              throw "Expected package was not created: $package"
+          }
+          if (-not (Test-Path -LiteralPath $symbols -PathType Leaf)) {
+              throw "Expected symbol package was not created: $symbols"
+          }
+
+          ./scripts/get-release-notes.ps1 `
+              -Version $env:RELEASE_VERSION `
+              -OutputPath artifacts/release/release-notes.md
+
+      - name: Preserve release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nuget-release-${{ steps.version.outputs.value }}
+          path: |
+            artifacts/release/SharedMemoryStore.${{ steps.version.outputs.value }}.nupkg
+            artifacts/release/SharedMemoryStore.${{ steps.version.outputs.value }}.snupkg
+            artifacts/release/release-notes.md
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish NuGet and GitHub release
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://www.nuget.org/packages/SharedMemoryStore/${{ needs.validate.outputs.version }}
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: nuget-release-${{ needs.validate.outputs.version }}
+          path: artifacts/release
+
+      - name: Exchange GitHub identity for a temporary NuGet API key
+        id: nuget
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: rantri
+
+      - name: Create draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $arguments = @(
+              "release", "create", $tag,
+              "artifacts/release/SharedMemoryStore.$env:RELEASE_VERSION.nupkg",
+              "artifacts/release/SharedMemoryStore.$env:RELEASE_VERSION.snupkg",
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--target", $env:GITHUB_SHA,
+              "--title", $tag,
+              "--notes-file", "artifacts/release/release-notes.md",
+              "--draft"
+          )
+          if ($env:RELEASE_VERSION.Contains("-")) {
+              $arguments += "--prerelease"
+          }
+
+          gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+              throw "Creating the draft GitHub release failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Publish package and symbols to NuGet.org
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          dotnet nuget push `
+              "artifacts/release/SharedMemoryStore.$env:RELEASE_VERSION.nupkg" `
+              --api-key $env:NUGET_API_KEY `
+              --source https://api.nuget.org/v3/index.json
+          if ($LASTEXITCODE -ne 0) {
+              throw "NuGet publishing failed with exit code $LASTEXITCODE. The GitHub release remains a draft."
+          }
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $arguments = @(
+              "release", "edit", "v$env:RELEASE_VERSION",
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--draft=false"
+          )
+          if (-not $env:RELEASE_VERSION.Contains("-")) {
+              $arguments += "--latest"
+          }
+
+          gh @arguments
+          if ($LASTEXITCODE -ne 0) {
+              throw "NuGet publishing succeeded, but publishing the draft GitHub release failed. Publish the existing draft manually."
+          }
