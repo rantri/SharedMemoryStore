@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading;
 
 namespace SharedMemoryStore;
@@ -26,4 +27,17 @@ public readonly record struct StoreWaitOptions(TimeSpan Timeout, CancellationTok
 
     /// <summary>Gets a value indicating whether the timeout is finite and non-negative, or explicitly infinite.</summary>
     public bool IsValid => IsInfinite || Timeout >= TimeSpan.Zero;
+
+    internal StoreWaitOptions RemainingSince(long startTimestamp)
+    {
+        if (IsInfinite)
+        {
+            return this;
+        }
+
+        var remaining = Timeout - Stopwatch.GetElapsedTime(startTimestamp);
+        return new StoreWaitOptions(
+            remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
+            CancellationToken);
+    }
 }

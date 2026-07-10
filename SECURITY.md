@@ -1,26 +1,29 @@
 # Security Policy
 
-SharedMemoryStore is currently a prerelease `0.1.0` library. Security support is
-best effort until maintainers publish a stable support policy.
+SharedMemoryStore `1.0.x` receives best-effort community security fixes. This
+policy does not promise response or remediation service levels.
 
 ## Supported Versions
 
 | Version | Support |
 |---------|---------|
-| `0.1.x` | Best-effort prerelease security review |
+| `1.0.x` | Supported with best-effort community security fixes |
+| `< 1.0` | Unsupported |
 
 Older unpublished or local builds are not independently supported. Users should
 reproduce reports against the latest package version available to them.
 
 ## Reporting a Vulnerability
 
-Use GitHub private vulnerability reporting or a repository security advisory for
-this project. Do not include exploit details, private payloads, credentials, or
-reproduction data in public issues or pull requests.
+Use GitHub private vulnerability reporting or a repository security advisory
+for this project when that channel is enabled. Do not include exploit details,
+private payloads, credentials, or reproduction data in public issues or pull
+requests.
 
-If private vulnerability reporting is not enabled for the hosted repository
-before publication, maintainers must replace this guidance with an
-owner-approved private contact path before publishing a public release.
+Enabling private vulnerability reporting, or publishing an owner-approved
+private contact path, is a mandatory release gate. If neither is available,
+open only a minimal public issue requesting a secure contact channel and do not
+include vulnerability details.
 
 Include:
 

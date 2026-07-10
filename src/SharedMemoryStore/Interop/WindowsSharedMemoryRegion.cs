@@ -13,10 +13,12 @@ internal static class WindowsSharedMemoryRegion
         out MemoryMappedStoreRegion? region)
     {
         region = null;
+        MemoryMappedFile? mapping = null;
+        MemoryMappedViewAccessor? accessor = null;
 
         try
         {
-            var mapping = options.OpenMode switch
+            mapping = options.OpenMode switch
             {
                 OpenMode.CreateNew => MemoryMappedFile.CreateNew(
                     resourceName.WindowsRegionName,
@@ -31,15 +33,17 @@ internal static class WindowsSharedMemoryRegion
                     MemoryMappedFileAccess.ReadWrite)
             };
 
-            var accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
+            accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
             region = MemoryMappedStoreRegion.Create(mapping, accessor, options.TotalBytes);
+            mapping = null;
+            accessor = null;
             return StoreOpenStatus.Success;
         }
         catch (FileNotFoundException) when (options.OpenMode == OpenMode.OpenExisting)
         {
             return StoreOpenStatus.NotFound;
         }
-        catch (IOException) when (options.OpenMode == OpenMode.CreateNew)
+        catch (IOException) when (options.OpenMode == OpenMode.CreateNew && mapping is null)
         {
             return StoreOpenStatus.AlreadyExists;
         }
@@ -58,6 +62,11 @@ internal static class WindowsSharedMemoryRegion
         catch (Exception)
         {
             return StoreOpenStatus.MappingFailed;
+        }
+        finally
+        {
+            accessor?.Dispose();
+            mapping?.Dispose();
         }
     }
 }

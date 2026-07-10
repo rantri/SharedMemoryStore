@@ -115,14 +115,14 @@ and compatibility contract belongs to the span, memory, and sequence APIs above.
 
 ## Segmented Publish Rules
 
-- `TryPublishSegments` is a helper over the reservation lifecycle.
+- `TryPublishSegments` applies the same pending-to-published safety rules as a
+  reservation while holding one shared-synchronization acquisition.
 - `ReadOnlySequence<byte>.Length` must fit in `int` and not exceed
   `MaxValueBytes`.
-- The helper copies segments in order into one reserved payload region,
-  advances the reservation by each segment length, and commits only after the
-  copied byte count equals the sequence length.
-- If segment copy fails or commit fails, the helper aborts any active
-  reservation before returning.
+- The helper copies segments in order into one reserved payload region and
+  publishes only after the copied byte count equals the sequence length.
+- If segment copy or validation fails, the helper reclaims the unpublished slot
+  before releasing shared synchronization.
 - The helper must not allocate a temporary contiguous full-payload array.
 - The stored value bytes must equal the logical concatenation of all segments.
 

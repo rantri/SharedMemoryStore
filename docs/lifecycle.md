@@ -124,6 +124,11 @@ the store toward safe error outcomes such as `CorruptStore`.
 - Use `TryRecoverLeases` and `TryRecoverReservations` only when owner policy
   permits recovery.
 
+Linux removes region, synchronization, and owner metadata after the final live
+handle closes. A zero-length per-name lifecycle lock file may remain so a later
+opener cannot race a different lock inode; applications should use stable store
+names rather than generating an unbounded sequence of one-time names.
+
 ## Long-Running Identity
 
 Reusable slots carry generation and reuse-epoch identity. Index entries, lease

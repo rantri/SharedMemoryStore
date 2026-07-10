@@ -16,7 +16,7 @@ Detailed sources:
 
 ## Current Baseline
 
-- Runtime package: `SharedMemoryStore` `1.0.0`.
+- Runtime package: `SharedMemoryStore` `1.0.1`.
 - Target framework: `net10.0`.
 - Supported host platforms: Linux and Windows.
 - Supported container profile: Linux-based same-host Docker containers with
@@ -70,11 +70,19 @@ API. Future implementations or bindings must document the same trust boundary.
 ## Platform Resource Model
 
 Windows uses named operating-system memory mappings and named synchronization.
+An explicit `Global\` mapping name uses global synchronization as of `1.0.1`;
+all participants in such a store must use `1.0.1` or later. Ordinary unqualified
+and explicit `Local\` names retain session-local synchronization.
 Linux uses deterministic files in a shared runtime memory location such as
 `/dev/shm`, with names derived from the public store name and a collision
 prevention hash. Docker containers participate in the Linux model only when
 their IPC and process-liveness configuration lets all participants see the same
 resources and classify owners safely.
+
+The Linux resource directory is owner-only (`0700`), and region,
+synchronization, owner, and lifecycle files are owner-only (`0600`). Cooperating
+host processes must therefore run as the same Unix identity. Containers must
+share a compatible identity as well as IPC and process-liveness namespaces.
 
 ## Unsupported Scenarios
 

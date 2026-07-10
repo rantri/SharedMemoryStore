@@ -8,7 +8,7 @@ readers can exchange data without copying payloads through a broker process.
 Package identity:
 
 - PackageId: `SharedMemoryStore`
-- Version: `1.0.0`
+- Version: `1.0.1`
 - Target framework: `net10.0`
 - License: MIT, see the [license file](LICENSE)
 - Runtime dependencies: .NET BCL only
@@ -47,7 +47,7 @@ Docker into distributed storage.
 
 For package consumers, start with [Getting started](docs/getting-started.md) and
 the [Usage guide](docs/usage.md). A local package source workflow is documented
-because this prerelease repository may be consumed before a public NuGet publish.
+when validating a local build before consuming the published package.
 
 ```powershell
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
@@ -204,4 +204,4 @@ pwsh ./scripts/validate-docker-shared-memory.ps1
 
 Documentation changes must keep package metadata, README content, release notes,
 support policy, security policy, and contract links aligned with the current
-`1.0.0` package behavior.
+`1.0.1` package behavior.

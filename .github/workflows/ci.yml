@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore SharedMemoryStore.slnx
+      - run: dotnet build SharedMemoryStore.slnx -c Release --no-restore
+      - run: dotnet format SharedMemoryStore.slnx --verify-no-changes --no-restore
+      - run: dotnet test SharedMemoryStore.slnx -c Release --no-build
+      - shell: pwsh
+        run: ./scripts/validate-docs.ps1
+      - shell: pwsh
+        run: ./scripts/validate-package-consumption.ps1 -Configuration Release
+      - run: dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release --no-build -o artifacts/package
+
+  docker:
+    name: Docker sharing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - shell: pwsh
+        run: ./scripts/validate-docker-shared-memory.ps1 -Configuration Release

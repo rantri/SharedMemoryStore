@@ -10,28 +10,31 @@ internal readonly struct StoreLayout
         int maxDescriptorBytes,
         int maxKeyBytes)
     {
-        TotalBytes = totalBytes;
-        SlotCount = slotCount;
-        LeaseRecordCount = leaseRecordCount;
-        MaxValueBytes = maxValueBytes;
-        MaxDescriptorBytes = maxDescriptorBytes;
-        MaxKeyBytes = maxKeyBytes;
-        HeaderLength = Align(System.Runtime.InteropServices.Marshal.SizeOf<StoreHeader>());
-        IndexEntryCount = NextPowerOfTwo(Math.Max(4, slotCount * 2));
-        IndexEntrySize = Align(System.Runtime.InteropServices.Marshal.SizeOf<SharedIndexEntryHeader>() + maxKeyBytes);
-        IndexOffset = HeaderLength;
-        IndexLength = checked((long)IndexEntryCount * IndexEntrySize);
-        LeaseRegistryOffset = Align(IndexOffset + IndexLength);
-        LeaseRegistryLength = checked((long)leaseRecordCount * System.Runtime.InteropServices.Marshal.SizeOf<SharedLeaseRecord>());
-        SlotMetadataOffset = Align(LeaseRegistryOffset + LeaseRegistryLength);
-        SlotMetadataLength = checked((long)slotCount * System.Runtime.InteropServices.Marshal.SizeOf<SharedSlotMetadata>());
-        DescriptorStride = Align(Math.Max(1, maxDescriptorBytes));
-        DescriptorStorageOffset = Align(SlotMetadataOffset + SlotMetadataLength);
-        DescriptorStorageLength = checked((long)slotCount * DescriptorStride);
-        PayloadStride = Align(Math.Max(1, maxValueBytes));
-        PayloadStorageOffset = Align(DescriptorStorageOffset + DescriptorStorageLength);
-        PayloadStorageLength = checked((long)slotCount * PayloadStride);
-        RequiredBytes = Align(PayloadStorageOffset + PayloadStorageLength);
+        checked
+        {
+            TotalBytes = totalBytes;
+            SlotCount = slotCount;
+            LeaseRecordCount = leaseRecordCount;
+            MaxValueBytes = maxValueBytes;
+            MaxDescriptorBytes = maxDescriptorBytes;
+            MaxKeyBytes = maxKeyBytes;
+            HeaderLength = Align(System.Runtime.InteropServices.Marshal.SizeOf<StoreHeader>());
+            IndexEntryCount = NextPowerOfTwo(Math.Max(4, slotCount * 2));
+            IndexEntrySize = Align(System.Runtime.InteropServices.Marshal.SizeOf<SharedIndexEntryHeader>() + maxKeyBytes);
+            IndexOffset = HeaderLength;
+            IndexLength = (long)IndexEntryCount * IndexEntrySize;
+            LeaseRegistryOffset = Align(IndexOffset + IndexLength);
+            LeaseRegistryLength = (long)leaseRecordCount * System.Runtime.InteropServices.Marshal.SizeOf<SharedLeaseRecord>();
+            SlotMetadataOffset = Align(LeaseRegistryOffset + LeaseRegistryLength);
+            SlotMetadataLength = (long)slotCount * System.Runtime.InteropServices.Marshal.SizeOf<SharedSlotMetadata>();
+            DescriptorStride = Align(Math.Max(1, maxDescriptorBytes));
+            DescriptorStorageOffset = Align(SlotMetadataOffset + SlotMetadataLength);
+            DescriptorStorageLength = (long)slotCount * DescriptorStride;
+            PayloadStride = Align(Math.Max(1, maxValueBytes));
+            PayloadStorageOffset = Align(DescriptorStorageOffset + DescriptorStorageLength);
+            PayloadStorageLength = (long)slotCount * PayloadStride;
+            RequiredBytes = Align(PayloadStorageOffset + PayloadStorageLength);
+        }
     }
 
     public long TotalBytes { get; }
@@ -64,6 +67,12 @@ internal readonly struct StoreLayout
         int maxKeyBytes,
         int leaseRecordCount)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(slotCount, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxValueBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxDescriptorBytes);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxKeyBytes, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(leaseRecordCount, 1);
+
         var layout = new StoreLayout(
             0,
             slotCount,
@@ -124,21 +133,26 @@ internal readonly struct StoreLayout
         return TotalBytes >= RequiredBytes
             && TotalBytes > 0
             && PayloadStorageOffset >= 0
-            && PayloadStorageOffset + PayloadStorageLength <= TotalBytes;
+            && PayloadStorageLength >= 0;
     }
 
     public static int Align(int value)
     {
-        return (value + LayoutConstants.Alignment - 1) & ~(LayoutConstants.Alignment - 1);
+        return checked(value + LayoutConstants.Alignment - 1) & ~(LayoutConstants.Alignment - 1);
     }
 
     public static long Align(long value)
     {
-        return (value + LayoutConstants.Alignment - 1) & ~(LayoutConstants.Alignment - 1);
+        return checked(value + LayoutConstants.Alignment - 1) & ~(LayoutConstants.Alignment - 1);
     }
 
     private static int NextPowerOfTwo(int value)
     {
+        if (value <= 0 || value > 1 << 30)
+        {
+            throw new OverflowException("The requested index entry count cannot be represented.");
+        }
+
         var result = 1;
         while (result < value)
         {

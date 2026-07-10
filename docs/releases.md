@@ -1,7 +1,7 @@
 # Release Preparation
 
 This guide is the maintainer checklist for preparing a package release. It is
-written for the current `1.0.0` package and should be updated when package
+written for the current `1.0.1` package and should be updated when package
 metadata, public API behavior, compatibility scope, support policy, security
 reporting, documentation scope, or sample behavior changes.
 
@@ -182,6 +182,27 @@ Benchmark commands are required when release notes make performance claims:
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *DirectIngest*
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 ```
+
+## 1.0.1 Production Hardening Notes
+
+The 2026-07-09 review completed the following release evidence:
+
+- Windows Release build completed with zero warnings and 153 tests passed.
+- Linux .NET 10 container validation passed 43 contract, 62 unit, and 47
+  integration tests; the package-consumption path was validated separately in
+  a clean Linux container.
+- The full Docker matrix passed supported sharing, advanced ingest, abrupt-exit
+  recovery, contention, disposal race, isolated negative behavior, and clean
+  packed-package consumption.
+- Documentation validation, formatting/analyzers, package packing, Windows
+  clean-consumer validation, and current transitive NuGet vulnerability checks
+  passed.
+- Public API names, status values, runtime dependencies, and the shared-memory
+  layout remain compatible with `1.0.0`.
+
+External publication gate: the GitHub repository reported private
+vulnerability reporting as disabled during this review. Enable it or publish an
+owner-approved private reporting channel before publishing `1.0.1`.
 
 ## 1.0.0 Documentation and Samples Excellence Notes
 

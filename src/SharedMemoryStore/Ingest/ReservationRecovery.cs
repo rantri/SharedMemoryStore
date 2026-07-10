@@ -71,7 +71,7 @@ namespace SharedMemoryStore.Ingest
                 }
 
                 var lifecycleId = SlotLifecycleId.FromSlot(slot);
-                if (!index.TryRemoveSlot(i, lifecycleId))
+                if (!index.TryRemoveSlot(i, lifecycleId, slot.KeyHash))
                 {
                     failed++;
                     continue;

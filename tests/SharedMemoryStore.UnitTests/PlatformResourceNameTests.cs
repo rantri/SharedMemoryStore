@@ -1,4 +1,6 @@
+using System.Runtime.Versioning;
 using SharedMemoryStore.Interop;
+using SharedMemoryStore.UnitTests.TestSupport;
 
 namespace SharedMemoryStore.UnitTests;
 
@@ -35,5 +37,66 @@ public sealed class PlatformResourceNameTests
 
         Assert.Equal("sms.compatibility", resourceName.WindowsRegionName);
         Assert.StartsWith(@"Local\SharedMemoryStore-", resourceName.WindowsSynchronizationName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WindowsGlobalMappingsUseGlobalSynchronizationScope()
+    {
+        var resourceName = PlatformResourceName.Create(@"Global\sms.compatibility");
+
+        Assert.Equal(@"Global\sms.compatibility", resourceName.WindowsRegionName);
+        Assert.StartsWith(@"Global\SharedMemoryStore-", resourceName.WindowsSynchronizationName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LinuxResourcesArePrivateToTheCreatingIdentity()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var options = StoreTestNames.Options();
+        using var store = StoreTestNames.CreateStore(options);
+        var resource = PlatformResourceName.Create(options.Name);
+        var privateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        var privateDirectoryMode = privateFileMode | UnixFileMode.UserExecute;
+
+        Assert.Equal(privateDirectoryMode, File.GetUnixFileMode(Path.GetDirectoryName(resource.LinuxRegionPath)!));
+        Assert.Equal(privateFileMode, File.GetUnixFileMode(resource.LinuxRegionPath));
+        Assert.Equal(privateFileMode, File.GetUnixFileMode(resource.LinuxSynchronizationPath));
+        Assert.Equal(privateFileMode, File.GetUnixFileMode(resource.LinuxOwnersPath));
+        Assert.Equal(privateFileMode, File.GetUnixFileMode(resource.LinuxLifecycleLockPath));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("linux")]
+    public void LinuxResourceDirectoryRejectsSymbolicLinks()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "sms-symlink-test-" + Guid.NewGuid().ToString("N"));
+        var target = Path.Combine(root, "target");
+        var link = Path.Combine(root, "link");
+        Directory.CreateDirectory(target);
+        File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        Directory.CreateSymbolicLink(link, target);
+
+        try
+        {
+            Assert.Throws<UnauthorizedAccessException>(() => LinuxSharedMemoryDirectory.EnsureExists(link));
+            Assert.NotEqual(LinuxSharedMemoryDirectory.PrivateDirectoryMode, File.GetUnixFileMode(target));
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(target);
+            Directory.Delete(root);
+        }
     }
 }

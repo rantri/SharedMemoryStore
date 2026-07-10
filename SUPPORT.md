@@ -1,6 +1,6 @@
 # Support
 
-SharedMemoryStore is a prerelease package. Support is best effort and does not
+SharedMemoryStore `1.0.x` is a stable community package. Support is best effort and does not
 include response-time service levels, production incident response, or paid
 support commitments.
 
@@ -30,7 +30,7 @@ Useful reports include:
 
 ## Unsupported Scenarios
 
-The current prerelease does not claim support for:
+The current package does not claim support for:
 
 - C++ or Python bindings.
 - macOS runtime support.

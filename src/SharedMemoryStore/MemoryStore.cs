@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Threading;
 using SharedMemoryStore.Diagnostics;
 using SharedMemoryStore.Ingest;
@@ -16,7 +17,7 @@ namespace SharedMemoryStore;
 /// </summary>
 public sealed unsafe class MemoryStore : IDisposable
 {
-    private readonly object _gate = new();
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly MemoryMappedStoreRegion _region;
     private readonly ISharedStoreSynchronization _synchronization;
     private readonly StoreLayout _layout;
@@ -87,7 +88,8 @@ public sealed unsafe class MemoryStore : IDisposable
             return validation;
         }
 
-        var mappingStatus = SharedStorePlatform.TryOpen(options, out var region, out var synchronization);
+        var waitStartTimestamp = Stopwatch.GetTimestamp();
+        var mappingStatus = SharedStorePlatform.TryOpen(options, waitOptions, out var region, out var synchronization);
         if (mappingStatus != StoreOpenStatus.Success || region is null || synchronization is null)
         {
             return mappingStatus;
@@ -112,7 +114,7 @@ public sealed unsafe class MemoryStore : IDisposable
         }
 
         StoreOpenStatus initializeStatus;
-        if (!candidate.TryEnterStoreLock(waitOptions, out var lockStatus))
+        if (!candidate.TryEnterStoreLock(waitOptions.RemainingSince(waitStartTimestamp), out var lockStatus))
         {
             candidate.DisposeUninitialized();
             return ToOpenStatus(lockStatus);
@@ -192,6 +194,7 @@ public sealed unsafe class MemoryStore : IDisposable
 
                 ref var slot = ref _slots.GetSlot(slotIndex);
                 var lifecycleId = SlotLifecycleId.FromSlot(slot);
+                var indexInserted = false;
                 try
                 {
                     _writer.Write(ref slot, value, descriptor);
@@ -200,6 +203,7 @@ public sealed unsafe class MemoryStore : IDisposable
                         _slots.Abort(slotIndex);
                         return Record(StoreStatus.DuplicateKey);
                     }
+                    indexInserted = true;
 
                     var sequence = Interlocked.Increment(ref Header.Sequence);
                     _slots.Commit(slotIndex, hash, key.Length, descriptor.Length, value.Length, sequence);
@@ -207,6 +211,10 @@ public sealed unsafe class MemoryStore : IDisposable
                 }
                 catch (Exception)
                 {
+                    if (indexInserted)
+                    {
+                        _index.TryRemoveSlot(slotIndex, lifecycleId, hash);
+                    }
                     _slots.Abort(slotIndex);
                     return Record(StoreStatus.UnknownFailure);
                 }
@@ -302,7 +310,7 @@ public sealed unsafe class MemoryStore : IDisposable
                 }
                 catch (Exception)
                 {
-                    _index.TryRemoveSlot(slotIndex, lifecycleId);
+                    _index.TryRemoveSlot(slotIndex, lifecycleId, hash);
                     _slots.Abort(slotIndex);
                     return Record(StoreStatus.UnknownFailure);
                 }
@@ -327,7 +335,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes a segmented payload using the supplied wait policy for each synchronized reservation operation.
+    /// Publishes a segmented payload after acquiring shared synchronization with the supplied wait policy.
     /// </summary>
     public StoreStatus TryPublishSegments(
         ReadOnlySpan<byte> key,
@@ -336,8 +344,87 @@ public sealed unsafe class MemoryStore : IDisposable
         StoreWaitOptions waitOptions,
         out long copiedBytes)
     {
-        var status = SegmentedPublisher.Publish(this, key, payload, descriptor, waitOptions, out copiedBytes);
-        return status == StoreStatus.Success ? status : Record(status);
+        copiedBytes = 0;
+        if (payload.Length > int.MaxValue)
+        {
+            return Record(StoreStatus.ValueTooLarge);
+        }
+
+        if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
+        {
+            return Record(enterStatus);
+        }
+
+        using (operation)
+        {
+            try
+            {
+                var ready = EnsureReady();
+                if (ready != StoreStatus.Success)
+                {
+                    return Record(ready);
+                }
+
+                var validation = ValidateOperationInput(key, (int)payload.Length, descriptor);
+                if (validation != StoreStatus.Success)
+                {
+                    return Record(validation);
+                }
+
+                var hash = StoreKey.Hash(key);
+                if (_index.TryFind(key, hash, out var existingSlotIndex, out _))
+                {
+                    ref var existingSlot = ref _slots.GetSlot(existingSlotIndex);
+                    if (Volatile.Read(ref existingSlot.State) is LayoutConstants.SlotPublished or LayoutConstants.SlotPublishing or LayoutConstants.SlotRemoveRequested)
+                    {
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+                }
+
+                if (!_slots.TryReserve(out var slotIndex))
+                {
+                    return Record(StoreStatus.StoreFull);
+                }
+
+                ref var slot = ref _slots.GetSlot(slotIndex);
+                var lifecycleId = SlotLifecycleId.FromSlot(slot);
+                var indexInserted = false;
+                try
+                {
+                    _writer.WriteDescriptor(ref slot, descriptor);
+                    _writer.WriteSegments(ref slot, payload, out copiedBytes);
+                    if (copiedBytes != payload.Length)
+                    {
+                        _slots.Abort(slotIndex);
+                        return Record(StoreStatus.UnknownFailure);
+                    }
+
+                    if (!_index.TryInsert(key, hash, slotIndex, lifecycleId))
+                    {
+                        _slots.Abort(slotIndex);
+                        return Record(StoreStatus.DuplicateKey);
+                    }
+                    indexInserted = true;
+
+                    var sequence = Interlocked.Increment(ref Header.Sequence);
+                    _slots.Commit(slotIndex, hash, key.Length, descriptor.Length, (int)payload.Length, sequence);
+                    return StoreStatus.Success;
+                }
+                catch (Exception)
+                {
+                    if (indexInserted)
+                    {
+                        _index.TryRemoveSlot(slotIndex, lifecycleId, hash);
+                    }
+                    _slots.Abort(slotIndex);
+                    return Record(StoreStatus.UnknownFailure);
+                }
+            }
+            finally
+            {
+                ExitStoreLock();
+            }
+        }
     }
 
     /// <summary>
@@ -1039,13 +1126,13 @@ public sealed unsafe class MemoryStore : IDisposable
                     return Record(ready);
                 }
 
-                var status = _slots.ValidatePendingReservation(slotIndex, lifecycleId, out _);
+                var status = _slots.ValidatePendingReservation(slotIndex, lifecycleId, out var slot);
                 if (status != StoreStatus.Success)
                 {
                     return Record(status);
                 }
 
-                if (!_index.TryRemoveSlot(slotIndex, lifecycleId))
+                if (!_index.TryRemoveSlot(slotIndex, lifecycleId, slot.KeyHash))
                 {
                     return Record(StoreStatus.CorruptStore);
                 }
@@ -1142,13 +1229,18 @@ public sealed unsafe class MemoryStore : IDisposable
 
     private StoreStatus ValidateOperationInput(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor)
     {
+        return ValidateOperationInput(key, value.Length, descriptor);
+    }
+
+    private StoreStatus ValidateOperationInput(ReadOnlySpan<byte> key, int valueLength, ReadOnlySpan<byte> descriptor)
+    {
         var keyStatus = StoreKey.Validate(key, _layout.MaxKeyBytes);
         if (keyStatus != StoreStatus.Success)
         {
             return keyStatus;
         }
 
-        if (value.Length > _layout.MaxValueBytes)
+        if (valueLength > _layout.MaxValueBytes)
         {
             return StoreStatus.ValueTooLarge;
         }
@@ -1211,18 +1303,39 @@ public sealed unsafe class MemoryStore : IDisposable
             return false;
         }
 
-        Monitor.Enter(_gate);
+        var waitStartTimestamp = Stopwatch.GetTimestamp();
+        bool gateEntered;
+        try
+        {
+            gateEntered = waitOptions.IsInfinite
+                ? _gate.Wait(Timeout.InfiniteTimeSpan, waitOptions.CancellationToken)
+                : _gate.Wait(waitOptions.Timeout, waitOptions.CancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            status = StoreStatus.OperationCanceled;
+            return false;
+        }
+
+        if (!gateEntered)
+        {
+            status = waitOptions.CancellationToken.IsCancellationRequested
+                ? StoreStatus.OperationCanceled
+                : StoreStatus.StoreBusy;
+            return false;
+        }
+
         if (_lifecycle.IsDisposingOrDisposed || _disposed)
         {
-            Monitor.Exit(_gate);
+            _gate.Release();
             status = StoreStatus.StoreDisposed;
             return false;
         }
 
-        status = _synchronization.TryEnter(waitOptions);
+        status = _synchronization.TryEnter(waitOptions.RemainingSince(waitStartTimestamp));
         if (status != StoreStatus.Success)
         {
-            Monitor.Exit(_gate);
+            _gate.Release();
             return false;
         }
 
@@ -1295,6 +1408,11 @@ public sealed unsafe class MemoryStore : IDisposable
 
     private StoreStatus Record(StoreStatus status)
     {
+        if (status == StoreStatus.CorruptStore && !_disposed)
+        {
+            Volatile.Write(ref Header.StoreState, LayoutConstants.StoreCorrupt);
+        }
+
         _diagnostics.Record(status);
         return status;
     }
@@ -1332,6 +1450,6 @@ public sealed unsafe class MemoryStore : IDisposable
     private void ExitStoreLock()
     {
         _synchronization.Exit();
-        Monitor.Exit(_gate);
+        _gate.Release();
     }
 }

@@ -7,10 +7,11 @@ namespace SharedMemoryStore.Interop;
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxFileLock : IDisposable
 {
-    private static readonly ConcurrentDictionary<string, object> LocalLocks = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, LocalLockEntry> LocalLocks = new(StringComparer.Ordinal);
 
     private readonly FileStream _stream;
-    private readonly object _localLock;
+    private readonly string _localLockPath;
+    private readonly LocalLockEntry _localLockEntry;
     private bool _locked;
     private bool _localLockHeld;
     private bool _disposed;
@@ -18,7 +19,8 @@ internal sealed class LinuxFileLock : IDisposable
     private LinuxFileLock(string path, FileStream stream)
     {
         _stream = stream;
-        _localLock = LocalLocks.GetOrAdd(Path.GetFullPath(path), _ => new object());
+        _localLockPath = Path.GetFullPath(path);
+        _localLockEntry = AcquireLocalLockEntry(_localLockPath);
     }
 
     public static StoreStatus TryAcquire(
@@ -35,12 +37,7 @@ internal sealed class LinuxFileLock : IDisposable
         FileStream stream;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-            stream = new FileStream(
-                path,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.ReadWrite | FileShare.Delete);
+            stream = OpenLockFile(path);
         }
         catch (UnauthorizedAccessException)
         {
@@ -143,12 +140,7 @@ internal sealed class LinuxFileLock : IDisposable
         fileLock = null;
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
-            var stream = new FileStream(
-                path,
-                FileMode.OpenOrCreate,
-                FileAccess.ReadWrite,
-                FileShare.ReadWrite | FileShare.Delete);
+            var stream = OpenLockFile(path);
 
             fileLock = new LinuxFileLock(path, stream);
             return StoreStatus.Success;
@@ -185,7 +177,7 @@ internal sealed class LinuxFileLock : IDisposable
 
         if (_localLockHeld)
         {
-            Monitor.Exit(_localLock);
+            Monitor.Exit(_localLockEntry.SyncRoot);
             _localLockHeld = false;
         }
     }
@@ -200,13 +192,14 @@ internal sealed class LinuxFileLock : IDisposable
         _disposed = true;
         Release();
         _stream.Dispose();
+        ReleaseLocalLockEntry(_localLockPath, _localLockEntry);
     }
 
     private bool TryAcquireLocal(StoreWaitOptions waitOptions, long startTimestamp)
     {
         while (true)
         {
-            if (Monitor.TryEnter(_localLock))
+            if (Monitor.TryEnter(_localLockEntry.SyncRoot))
             {
                 _localLockHeld = true;
                 return true;
@@ -239,5 +232,68 @@ internal sealed class LinuxFileLock : IDisposable
         }
 
         return waitOptions.CancellationToken.WaitHandle.WaitOne(sleep) == false;
+    }
+
+    private static FileStream OpenLockFile(string path)
+    {
+        LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(path) ?? ".");
+        var stream = new FileStream(path, new FileStreamOptions
+        {
+            Mode = FileMode.OpenOrCreate,
+            Access = FileAccess.ReadWrite,
+            Share = FileShare.ReadWrite | FileShare.Delete,
+            UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
+        });
+        File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
+        return stream;
+    }
+
+    private static LocalLockEntry AcquireLocalLockEntry(string path)
+    {
+        while (true)
+        {
+            var entry = LocalLocks.GetOrAdd(path, static _ => new LocalLockEntry());
+            lock (entry.ReferenceGate)
+            {
+                if (entry.Retired)
+                {
+                    continue;
+                }
+
+                entry.ReferenceCount++;
+                return entry;
+            }
+        }
+    }
+
+    private static void ReleaseLocalLockEntry(string path, LocalLockEntry entry)
+    {
+        var remove = false;
+        lock (entry.ReferenceGate)
+        {
+            entry.ReferenceCount--;
+            if (entry.ReferenceCount == 0)
+            {
+                entry.Retired = true;
+                remove = true;
+            }
+        }
+
+        if (remove)
+        {
+            _ = ((ICollection<KeyValuePair<string, LocalLockEntry>>)LocalLocks).Remove(
+                new KeyValuePair<string, LocalLockEntry>(path, entry));
+        }
+    }
+
+    private sealed class LocalLockEntry
+    {
+        public object SyncRoot { get; } = new();
+
+        public object ReferenceGate { get; } = new();
+
+        public int ReferenceCount { get; set; }
+
+        public bool Retired { get; set; }
     }
 }

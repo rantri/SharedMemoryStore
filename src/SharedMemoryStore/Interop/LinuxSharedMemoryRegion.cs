@@ -10,13 +10,14 @@ internal static class LinuxSharedMemoryRegion
     public static StoreOpenStatus TryOpen(
         PlatformResourceName resourceName,
         SharedMemoryStoreOptions options,
+        StoreWaitOptions waitOptions,
         out MemoryMappedStoreRegion? region)
     {
         region = null;
 
         var lifecycleLockStatus = LinuxFileLock.TryAcquire(
             resourceName.LinuxLifecycleLockPath,
-            StoreWaitOptions.Infinite,
+            waitOptions,
             out var lifecycleLock);
         if (lifecycleLockStatus != StoreStatus.Success || lifecycleLock is null)
         {
@@ -27,7 +28,7 @@ internal static class LinuxSharedMemoryRegion
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(resourceName.LinuxRegionPath) ?? ".");
+                LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(resourceName.LinuxRegionPath) ?? ".");
                 var liveOwners = ReadLiveOwnerRecords(resourceName.LinuxOwnersPath);
                 var hasLiveResource = File.Exists(resourceName.LinuxRegionPath) && liveOwners.Count > 0;
                 if (!hasLiveResource)
@@ -67,19 +68,33 @@ internal static class LinuxSharedMemoryRegion
         out MemoryMappedStoreRegion? region)
     {
         region = null;
+        FileStream stream;
         try
         {
-            var stream = new FileStream(
-                resourceName.LinuxRegionPath,
-                FileMode.CreateNew,
-                FileAccess.ReadWrite,
-                FileShare.ReadWrite | FileShare.Delete);
+            stream = new FileStream(resourceName.LinuxRegionPath, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.ReadWrite,
+                Share = FileShare.ReadWrite | FileShare.Delete,
+                UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
+            });
+            File.SetUnixFileMode(resourceName.LinuxRegionPath, LinuxSharedMemoryDirectory.PrivateFileMode);
+        }
+        catch (IOException) when (File.Exists(resourceName.LinuxRegionPath))
+        {
+            return StoreOpenStatus.AlreadyExists;
+        }
+
+        try
+        {
             stream.SetLength(options.TotalBytes);
             return CreateMappedRegion(resourceName, options, stream, out region);
         }
-        catch (IOException)
+        catch
         {
-            return StoreOpenStatus.AlreadyExists;
+            stream.Dispose();
+            DeleteIfExists(resourceName.LinuxRegionPath);
+            throw;
         }
     }
 
@@ -99,6 +114,7 @@ internal static class LinuxSharedMemoryRegion
             FileMode.Open,
             FileAccess.ReadWrite,
             FileShare.ReadWrite | FileShare.Delete);
+        File.SetUnixFileMode(resourceName.LinuxRegionPath, LinuxSharedMemoryDirectory.PrivateFileMode);
 
         if (stream.Length < options.TotalBytes)
         {
@@ -119,6 +135,8 @@ internal static class LinuxSharedMemoryRegion
         var ownerRecord = CreateOwnerRecord();
         MemoryMappedFile? mapping = null;
         MemoryMappedViewAccessor? accessor = null;
+        MemoryMappedStoreRegion? candidate = null;
+        var ownerRegistered = false;
         try
         {
             mapping = MemoryMappedFile.CreateFromFile(
@@ -130,18 +148,28 @@ internal static class LinuxSharedMemoryRegion
                 leaveOpen: false);
 
             accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
-            RegisterOwner(resourceName.LinuxOwnersPath, ownerRecord);
-            region = MemoryMappedStoreRegion.Create(
+            candidate = MemoryMappedStoreRegion.Create(
                 mapping,
                 accessor,
                 options.TotalBytes,
-                () => ReleaseOwner(resourceName, ownerRecord));
+                () =>
+                {
+                    if (ownerRegistered)
+                    {
+                        ReleaseOwner(resourceName, ownerRecord);
+                    }
+                });
             mapping = null;
             accessor = null;
+            RegisterOwner(resourceName.LinuxOwnersPath, ownerRecord);
+            ownerRegistered = true;
+            region = candidate;
+            candidate = null;
             return StoreOpenStatus.Success;
         }
         catch
         {
+            candidate?.Dispose();
             accessor?.Dispose();
             mapping?.Dispose();
             stream.Dispose();
@@ -151,7 +179,11 @@ internal static class LinuxSharedMemoryRegion
 
     private static string CreateOwnerRecord()
     {
-        return Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + Guid.NewGuid().ToString("N");
+        return string.Join(
+            ':',
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            GetProcessStartToken(Environment.ProcessId),
+            Guid.NewGuid().ToString("N"));
     }
 
     private static void RegisterOwner(string ownersPath, string ownerRecord)
@@ -209,7 +241,8 @@ internal static class LinuxSharedMemoryRegion
                 continue;
             }
 
-            if (TryReadProcessId(trimmed, out var processId) && IsProcessLive(processId))
+            if (TryReadOwnerIdentity(trimmed, out var processId, out var startToken)
+                && IsProcessLive(processId, startToken))
             {
                 owners.Add(trimmed);
             }
@@ -220,37 +253,86 @@ internal static class LinuxSharedMemoryRegion
 
     private static void WriteOwners(string ownersPath, List<string> owners)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(ownersPath) ?? ".");
-        File.WriteAllLines(ownersPath, owners);
+        LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(ownersPath) ?? ".");
+        var temporaryPath = ownersPath + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
+            }))
+            using (var writer = new StreamWriter(stream))
+            {
+                foreach (var owner in owners)
+                {
+                    writer.WriteLine(owner);
+                }
+            }
+
+            File.SetUnixFileMode(temporaryPath, LinuxSharedMemoryDirectory.PrivateFileMode);
+            File.Move(temporaryPath, ownersPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                DeleteIfExists(temporaryPath);
+            }
+            catch
+            {
+                // A later owner update or stale-resource cleanup will retry temporary-file cleanup.
+            }
+        }
     }
 
-    private static bool TryReadProcessId(string ownerRecord, out int processId)
+    private static bool TryReadOwnerIdentity(string ownerRecord, out int processId, out string? startToken)
     {
-        var separator = ownerRecord.IndexOf(':');
-        var value = separator < 0 ? ownerRecord : ownerRecord[..separator];
-        return int.TryParse(
-            value,
+        processId = 0;
+        startToken = null;
+        var parts = ownerRecord.Split(':', 3);
+        if (!int.TryParse(
+            parts[0],
             System.Globalization.NumberStyles.None,
             System.Globalization.CultureInfo.InvariantCulture,
-            out processId);
+            out processId))
+        {
+            return false;
+        }
+
+        if (parts.Length >= 3)
+        {
+            startToken = parts[1];
+        }
+
+        return true;
     }
 
-    private static bool IsProcessLive(int processId)
+    private static bool IsProcessLive(int processId, string? startToken)
     {
         if (processId <= 0)
         {
             return false;
         }
 
-        if (processId == Environment.ProcessId)
-        {
-            return true;
-        }
-
         try
         {
             using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(startToken))
+            {
+                return true;
+            }
+
+            var observedStartToken = GetProcessStartToken(processId);
+            return observedStartToken.Length == 0
+                || string.Equals(observedStartToken, startToken, StringComparison.Ordinal);
         }
         catch (ArgumentException)
         {
@@ -266,11 +348,44 @@ internal static class LinuxSharedMemoryRegion
         }
     }
 
+    private static string GetProcessStartToken(int processId)
+    {
+        try
+        {
+            var stat = File.ReadAllText($"/proc/{processId}/stat");
+            var commandEnd = stat.LastIndexOf(')');
+            if (commandEnd >= 0 && commandEnd + 2 < stat.Length)
+            {
+                var fields = stat[(commandEnd + 2)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (fields.Length > 19)
+                {
+                    return "proc-" + fields[19];
+                }
+            }
+        }
+        catch
+        {
+            // Fall back to the runtime process timestamp when procfs is unavailable.
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return "utc-" + process.StartTime.ToUniversalTime().Ticks.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     private static void DeleteStaleResources(PlatformResourceName resourceName)
     {
         DeleteIfExists(resourceName.LinuxRegionPath);
         DeleteIfExists(resourceName.LinuxSynchronizationPath);
         DeleteIfExists(resourceName.LinuxOwnersPath);
+        DeleteIfExists(resourceName.LinuxOwnersPath + ".tmp");
     }
 
     private static void DeleteIfExists(string path)
