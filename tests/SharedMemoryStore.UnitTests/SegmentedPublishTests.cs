@@ -30,6 +30,22 @@ public sealed class SegmentedPublishTests
         lease.Dispose();
     }
 
+    [Fact]
+    public void InconsistentSequenceLengthCannotWriteBeyondReservedPayload()
+    {
+        using var store = StoreTestNames.CreateStore(StoreTestNames.Options(slotCount: 1, maxValueBytes: 64));
+        var first = new BufferSegment(new byte[8]);
+        var last = first.Append(new byte[8], runningIndex: 1);
+        var malformed = new ReadOnlySequence<byte>(first, 0, last, last.Memory.Length);
+
+        var status = store.TryPublishSegments([1], malformed, default, out var copiedBytes);
+
+        Assert.Equal(StoreStatus.UnknownFailure, status);
+        Assert.Equal(8, copiedBytes);
+        Assert.Equal(StoreStatus.NotFound, store.TryAcquire([1], out _));
+        Assert.Equal(1, store.GetDiagnostics().FreeSlotCount);
+    }
+
     private static class SequenceFactory
     {
         public static ReadOnlySequence<byte> Create(params byte[][] segments)
@@ -52,11 +68,11 @@ public sealed class SegmentedPublishTests
             Memory = memory;
         }
 
-        public BufferSegment Append(byte[] memory)
+        public BufferSegment Append(byte[] memory, long? runningIndex = null)
         {
             var segment = new BufferSegment(memory)
             {
-                RunningIndex = RunningIndex + Memory.Length
+                RunningIndex = runningIndex ?? RunningIndex + Memory.Length
             };
             Next = segment;
             return segment;

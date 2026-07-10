@@ -8,18 +8,15 @@ internal sealed unsafe class ReservationMemoryManager : IDisposable
 {
     private readonly byte* _payloadStorage;
     private readonly int _payloadStride;
-    private readonly SlotPayloadMemoryManager[] _payloads;
+    private readonly int _maxValueBytes;
+    private readonly Dictionary<int, SlotPayloadMemoryManager> _payloads = new();
     private bool _disposed;
 
     public ReservationMemoryManager(MemoryMappedStoreRegion region, StoreLayout layout)
     {
         _payloadStorage = region.Pointer + layout.PayloadStorageOffset;
         _payloadStride = layout.PayloadStride;
-        _payloads = new SlotPayloadMemoryManager[layout.SlotCount];
-        for (var i = 0; i < _payloads.Length; i++)
-        {
-            _payloads[i] = new SlotPayloadMemoryManager(_payloadStorage + ((long)i * _payloadStride), layout.MaxValueBytes);
-        }
+        _maxValueBytes = layout.MaxValueBytes;
     }
 
     public Span<byte> GetSpan(int slotIndex, int offset, int length)
@@ -39,7 +36,15 @@ internal sealed unsafe class ReservationMemoryManager : IDisposable
             return Memory<byte>.Empty;
         }
 
-        return _payloads[slotIndex].Memory.Slice(offset, length);
+        if (!_payloads.TryGetValue(slotIndex, out var payload))
+        {
+            payload = new SlotPayloadMemoryManager(
+                _payloadStorage + ((long)slotIndex * _payloadStride),
+                _maxValueBytes);
+            _payloads.Add(slotIndex, payload);
+        }
+
+        return payload.Memory.Slice(offset, length);
     }
 
     public void Dispose()
@@ -50,10 +55,12 @@ internal sealed unsafe class ReservationMemoryManager : IDisposable
         }
 
         _disposed = true;
-        for (var i = 0; i < _payloads.Length; i++)
+        foreach (var payload in _payloads.Values)
         {
-            ((IDisposable)_payloads[i]).Dispose();
+            ((IDisposable)payload).Dispose();
         }
+
+        _payloads.Clear();
     }
 
     private sealed unsafe class SlotPayloadMemoryManager : MemoryManager<byte>

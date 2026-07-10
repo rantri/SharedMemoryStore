@@ -104,6 +104,7 @@ internal sealed unsafe class SharedKeyIndex
     {
         var start = ProbeStart(hash);
         var probes = 0;
+        var removed = false;
 
         for (var step = 0; step < _layout.IndexEntryCount; step++)
         {
@@ -115,7 +116,7 @@ internal sealed unsafe class SharedKeyIndex
             if (state == LayoutConstants.IndexEmpty)
             {
                 RecordProbeLength(probes);
-                return false;
+                return removed;
             }
 
             if (state == LayoutConstants.IndexOccupied
@@ -123,34 +124,43 @@ internal sealed unsafe class SharedKeyIndex
                 && StoreKey.Equals(KeyPointer(entryIndex), entry.KeyLength, key))
             {
                 Volatile.Write(ref entry.State, LayoutConstants.IndexTombstone);
-                RecordProbeLength(probes);
-                return true;
+                removed = true;
             }
         }
 
         RecordProbeLength(probes);
-        return false;
+        return removed;
     }
 
-    public bool TryRemoveSlot(int slotIndex, SlotLifecycleId lifecycleId)
+    public bool TryRemoveSlot(int slotIndex, SlotLifecycleId lifecycleId, ulong hash)
     {
+        var start = ProbeStart(hash);
         var probes = 0;
-        for (var entryIndex = 0; entryIndex < _layout.IndexEntryCount; entryIndex++)
+        var removed = false;
+        for (var step = 0; step < _layout.IndexEntryCount; step++)
         {
             probes++;
+            var entryIndex = (start + step) & (_layout.IndexEntryCount - 1);
             ref var entry = ref Entry(entryIndex);
-            if (Volatile.Read(ref entry.State) == LayoutConstants.IndexOccupied
+            var state = Volatile.Read(ref entry.State);
+            if (state == LayoutConstants.IndexEmpty)
+            {
+                RecordProbeLength(probes);
+                return removed;
+            }
+
+            if (state == LayoutConstants.IndexOccupied
+                && entry.KeyHash == hash
                 && entry.SlotIndex == slotIndex
                 && lifecycleId.Matches(entry.SlotGeneration, entry.SlotReuseEpoch))
             {
                 Volatile.Write(ref entry.State, LayoutConstants.IndexTombstone);
-                RecordProbeLength(probes);
-                return true;
+                removed = true;
             }
         }
 
         RecordProbeLength(probes);
-        return false;
+        return removed;
     }
 
     public int OccupiedCount()
@@ -200,45 +210,86 @@ internal sealed unsafe class SharedKeyIndex
 
     public bool TryCompact()
     {
-        var occupied = new List<IndexEntrySnapshot>(_layout.IndexEntryCount);
-        for (var entryIndex = 0; entryIndex < _layout.IndexEntryCount; entryIndex++)
+        var compacted = false;
+        for (var pass = 0; pass < _layout.IndexEntryCount; pass++)
         {
-            ref var entry = ref Entry(entryIndex);
-            if (Volatile.Read(ref entry.State) != LayoutConstants.IndexOccupied)
+            var changedThisPass = false;
+            for (var entryIndex = 0; entryIndex < _layout.IndexEntryCount; entryIndex++)
             {
-                continue;
+                if (Volatile.Read(ref Entry(entryIndex).State) != LayoutConstants.IndexTombstone
+                    || !TryCompactHole(entryIndex))
+                {
+                    continue;
+                }
+
+                changedThisPass = true;
+                compacted = true;
             }
 
-            var key = new byte[entry.KeyLength];
-            new ReadOnlySpan<byte>(KeyPointer(entryIndex), entry.KeyLength).CopyTo(key);
-            occupied.Add(new IndexEntrySnapshot(
-                key,
-                entry.KeyHash,
-                entry.SlotIndex,
-                SlotLifecycleId.FromIndex(entry)));
-        }
-
-        for (var entryIndex = 0; entryIndex < _layout.IndexEntryCount; entryIndex++)
-        {
-            ref var entry = ref Entry(entryIndex);
-            Volatile.Write(ref entry.State, LayoutConstants.IndexEmpty);
-            entry.KeyLength = 0;
-            entry.KeyHash = 0;
-            entry.SlotIndex = -1;
-            entry.SlotGeneration = 0;
-            entry.SlotReuseEpoch = 0;
-            new Span<byte>(KeyPointer(entryIndex), _layout.MaxKeyBytes).Clear();
-        }
-
-        foreach (var snapshot in occupied)
-        {
-            if (!TryInsertWithoutProbeMetrics(snapshot.Key, snapshot.Hash, snapshot.SlotIndex, snapshot.LifecycleId))
+            if (!changedThisPass)
             {
-                return false;
+                break;
             }
         }
 
-        return true;
+        return compacted;
+    }
+
+    private bool TryCompactHole(int initialHole)
+    {
+        var mask = _layout.IndexEntryCount - 1;
+        var hole = initialHole;
+        var scan = (hole + 1) & mask;
+
+        for (var step = 0; step < _layout.IndexEntryCount; step++)
+        {
+            ref var candidate = ref Entry(scan);
+            var state = Volatile.Read(ref candidate.State);
+            if (state == LayoutConstants.IndexEmpty)
+            {
+                ClearEntry(hole);
+                return true;
+            }
+
+            if (state == LayoutConstants.IndexOccupied)
+            {
+                var home = ProbeStart(candidate.KeyHash);
+                var distanceToHole = (hole - home) & mask;
+                var distanceToCandidate = (scan - home) & mask;
+                if (distanceToHole < distanceToCandidate)
+                {
+                    var lifecycleId = SlotLifecycleId.FromIndex(candidate);
+                    WriteEntry(
+                        hole,
+                        new ReadOnlySpan<byte>(KeyPointer(scan), candidate.KeyLength),
+                        candidate.KeyHash,
+                        candidate.SlotIndex,
+                        lifecycleId);
+
+                    // Destination publication precedes source removal. A process crash can
+                    // leave a harmless duplicate, and remove paths deliberately clear all
+                    // matching copies.
+                    Volatile.Write(ref candidate.State, LayoutConstants.IndexTombstone);
+                    hole = scan;
+                }
+            }
+
+            scan = (scan + 1) & mask;
+        }
+
+        return false;
+    }
+
+    private void ClearEntry(int entryIndex)
+    {
+        ref var entry = ref Entry(entryIndex);
+        Volatile.Write(ref entry.State, LayoutConstants.IndexEmpty);
+        entry.KeyLength = 0;
+        entry.KeyHash = 0;
+        entry.SlotIndex = -1;
+        entry.SlotGeneration = 0;
+        entry.SlotReuseEpoch = 0;
+        new Span<byte>(KeyPointer(entryIndex), _layout.MaxKeyBytes).Clear();
     }
 
     private void WriteEntry(int entryIndex, ReadOnlySpan<byte> key, ulong hash, int slotIndex, SlotLifecycleId lifecycleId)
@@ -254,23 +305,6 @@ internal sealed unsafe class SharedKeyIndex
         destination.Clear();
         key.CopyTo(destination);
         Volatile.Write(ref entry.State, LayoutConstants.IndexOccupied);
-    }
-
-    private bool TryInsertWithoutProbeMetrics(ReadOnlySpan<byte> key, ulong hash, int slotIndex, SlotLifecycleId lifecycleId)
-    {
-        var start = ProbeStart(hash);
-        for (var step = 0; step < _layout.IndexEntryCount; step++)
-        {
-            var entryIndex = (start + step) & (_layout.IndexEntryCount - 1);
-            ref var entry = ref Entry(entryIndex);
-            if (Volatile.Read(ref entry.State) == LayoutConstants.IndexEmpty)
-            {
-                WriteEntry(entryIndex, key, hash, slotIndex, lifecycleId);
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private void RecordProbeLength(int probeLength)
@@ -304,7 +338,6 @@ internal sealed unsafe class SharedKeyIndex
         return _region.Pointer + _layout.IndexOffset + ((long)entryIndex * _layout.IndexEntrySize) + _entryHeaderSize;
     }
 
-    private readonly record struct IndexEntrySnapshot(byte[] Key, ulong Hash, int SlotIndex, SlotLifecycleId LifecycleId);
 }
 
 internal readonly record struct IndexStateCounts(

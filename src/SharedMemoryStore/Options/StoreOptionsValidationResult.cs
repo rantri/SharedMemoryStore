@@ -15,7 +15,7 @@ public sealed class StoreOptionsValidationResult
     internal StoreOptionsValidationResult(StoreOpenStatus status, IReadOnlyList<StoreOptionsValidationFailure> failures)
     {
         Status = status;
-        Failures = failures;
+        Failures = Array.AsReadOnly(failures.ToArray());
     }
 
     /// <summary>Gets a value indicating whether the options are valid.</summary>

@@ -35,7 +35,11 @@ internal sealed class SlotReclaimer
             return StoreStatus.RemovePending;
         }
 
-        _index.TryRemoveSlot(slotIndex, lifecycleId);
+        if (!_index.TryRemoveSlot(slotIndex, lifecycleId, slot.KeyHash))
+        {
+            return StoreStatus.CorruptStore;
+        }
+
         return _slots.Reclaim(slotIndex);
     }
 
@@ -50,7 +54,11 @@ internal sealed class SlotReclaimer
         if (Volatile.Read(ref slot.State) == LayoutConstants.SlotRemoveRequested
             && Volatile.Read(ref slot.UsageCount) == 0)
         {
-            _index.TryRemoveSlot(slotIndex, lifecycleId);
+            if (!_index.TryRemoveSlot(slotIndex, lifecycleId, slot.KeyHash))
+            {
+                return StoreStatus.CorruptStore;
+            }
+
             return _slots.Reclaim(slotIndex);
         }
 

@@ -46,7 +46,7 @@ internal sealed unsafe class MemoryMappedStoreRegion : ISharedStoreRegion
 
     public static StoreOpenStatus TryOpen(SharedMemoryStoreOptions options, out MemoryMappedStoreRegion? region)
     {
-        return SharedStorePlatform.TryOpenRegion(options, out region);
+        return SharedStorePlatform.TryOpenRegion(options, StoreWaitOptions.Default, out region);
     }
 
     public void Dispose()

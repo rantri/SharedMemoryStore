@@ -4,13 +4,14 @@ internal static class SharedStorePlatform
 {
     public static StoreOpenStatus TryOpen(
         SharedMemoryStoreOptions options,
+        StoreWaitOptions waitOptions,
         out MemoryMappedStoreRegion? region,
         out ISharedStoreSynchronization? synchronization)
     {
         region = null;
         synchronization = null;
 
-        var status = TryOpenRegion(options, out region);
+        var status = TryOpenRegion(options, waitOptions, out region);
         if (status != StoreOpenStatus.Success || region is null)
         {
             return status;
@@ -43,6 +44,7 @@ internal static class SharedStorePlatform
 
     public static StoreOpenStatus TryOpenRegion(
         SharedMemoryStoreOptions options,
+        StoreWaitOptions waitOptions,
         out MemoryMappedStoreRegion? region)
     {
         region = null;
@@ -54,7 +56,7 @@ internal static class SharedStorePlatform
 
         if (OperatingSystem.IsLinux())
         {
-            return LinuxSharedMemoryRegion.TryOpen(resourceName, options, out region);
+            return LinuxSharedMemoryRegion.TryOpen(resourceName, options, waitOptions, out region);
         }
 
         return StoreOpenStatus.UnsupportedPlatform;

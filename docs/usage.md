@@ -209,10 +209,11 @@ ReadOnlySequence<byte> payload = GetPayloadSequence();
 var publish = store.TryPublishSegments(key, payload, descriptor, out var copiedBytes);
 ```
 
-The helper reserves a contiguous slot, copies each segment in order, advances
-reservation progress, and commits only after the copied byte count matches the
-sequence length. On copy, advance, or commit failure, it aborts the active
-reservation before returning.
+The helper acquires shared synchronization once, reserves a contiguous slot,
+copies each segment in order, and publishes only after the copied byte count
+matches the sequence length. A copy or validation failure reclaims the internal
+slot before synchronization is released, so bounded contention cannot strand a
+caller-inaccessible reservation.
 
 ## Diagnostics
 

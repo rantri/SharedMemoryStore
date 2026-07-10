@@ -64,4 +64,43 @@ public sealed class StoreOptionsValidationTests
         Assert.Equal(StoreOpenStatus.InsufficientCapacity, result.Status);
         Assert.Contains(result.Failures, failure => failure.MemberName == nameof(SharedMemoryStoreOptions.TotalBytes));
     }
+
+    [Fact]
+    public void LayoutCalculationRejectsDimensionsThatOverflowInternalIndexing()
+    {
+        Assert.Throws<OverflowException>(() => SharedMemoryStoreOptions.CalculateRequiredBytes(
+            int.MaxValue,
+            maxValueBytes: 1,
+            maxDescriptorBytes: 0,
+            maxKeyBytes: 1,
+            leaseRecordCount: 1));
+
+        Assert.Throws<OverflowException>(() => SharedMemoryStoreOptions.CalculateRequiredBytes(
+            slotCount: 1,
+            maxValueBytes: int.MaxValue,
+            maxDescriptorBytes: 0,
+            maxKeyBytes: 1,
+            leaseRecordCount: 1));
+    }
+
+    [Fact]
+    public void ValidateRejectsDimensionsThatCannotBeRepresentedByTheLayout()
+    {
+        var options = new SharedMemoryStoreOptions
+        {
+            Name = StoreTestNames.Create(),
+            SlotCount = int.MaxValue,
+            MaxValueBytes = 1,
+            MaxDescriptorBytes = 0,
+            MaxKeyBytes = 1,
+            LeaseRecordCount = 1,
+            TotalBytes = long.MaxValue
+        };
+
+        var result = options.Validate();
+
+        Assert.False(result.IsValid);
+        Assert.Equal(StoreOpenStatus.InvalidOptions, result.Status);
+        Assert.Contains(result.Failures, failure => failure.MemberName == nameof(SharedMemoryStoreOptions.TotalBytes));
+    }
 }

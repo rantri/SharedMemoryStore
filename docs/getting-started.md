@@ -11,7 +11,7 @@ create/open, publish, acquire, release, remove, and dispose workflow.
 - Docker Engine or Docker Desktop only when validating same-host container
   sharing.
 
-The package version is `1.0.0`. If it has not been published to a package
+The package version is `1.0.1`. If it has not been published to a package
 feed, build a local package source from the repository.
 
 ## Create a Local Package Source

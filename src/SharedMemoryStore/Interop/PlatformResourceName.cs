@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Runtime.Versioning;
 
 namespace SharedMemoryStore.Interop;
 
@@ -64,7 +65,10 @@ internal sealed class PlatformResourceName
 
     public static string BuildWindowsSynchronizationName(string publicName)
     {
-        return @"Local\SharedMemoryStore-" + string.Create(publicName.Length, publicName, static (destination, source) =>
+        var resourceScope = publicName.StartsWith(@"Global\", StringComparison.OrdinalIgnoreCase)
+            ? @"Global\"
+            : @"Local\";
+        return resourceScope + "SharedMemoryStore-" + string.Create(publicName.Length, publicName, static (destination, source) =>
         {
             for (var i = 0; i < source.Length; i++)
             {
@@ -104,6 +108,11 @@ internal sealed class PlatformResourceName
 
 internal static class LinuxSharedMemoryDirectory
 {
+    public const UnixFileMode PrivateDirectoryMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    public const UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
     public static string GetPath()
     {
         var root = Directory.Exists("/dev/shm")
@@ -111,5 +120,19 @@ internal static class LinuxSharedMemoryDirectory
             : Path.GetTempPath();
 
         return Path.Combine(root, "SharedMemoryStore");
+    }
+
+    [SupportedOSPlatform("linux")]
+    public static void EnsureExists(string path)
+    {
+        Directory.CreateDirectory(path, PrivateDirectoryMode);
+        var directory = new DirectoryInfo(path);
+        if (directory.LinkTarget is not null
+            || (directory.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new UnauthorizedAccessException("The SharedMemoryStore Linux resource directory must not be a symbolic link.");
+        }
+
+        File.SetUnixFileMode(path, PrivateDirectoryMode);
     }
 }

@@ -9,14 +9,15 @@ and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
 | Field | Value |
 |-------|-------|
 | `PackageId` | `SharedMemoryStore` |
-| `Version` | `1.0.0` |
+| `Version` | `1.0.1` |
 | `TargetFramework` | `net10.0` |
 | `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
 | `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library` |
 | `PackageLicenseExpression` | `MIT` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `Linux, Windows, and same-host Docker support: adds platform resource adapters, Docker validation, portable development workflows, and updated platform documentation while preserving the 1.0.0 public API contract.` |
+| `PackageReleaseNotes` | `Linux, Windows, and same-host Docker support hardening: fixes bounded waits, crash-safe ownership and index maintenance, private Linux resource permissions, layout overflow validation, and cleanup reliability while preserving the 1.0.0 public API and layout.` |
 | `RepositoryType` | `git` |
+| `RepositoryUrl` | `https://github.com/rantri/SharedMemoryStore` |
 
 The package project packs the root [README.md](../README.md) at the package
 root so NuGet consumers see the same package purpose, status, first-use

@@ -3,6 +3,37 @@
 All notable package and documentation changes are recorded in reverse
 chronological order.
 
+## 1.0.1 - 2026-07-09
+
+### Fixed
+
+- Enforced one caller-selected wait budget across same-handle synchronization,
+  Linux lifecycle locking, and shared store locking.
+- Replaced destructive key-index rebuilds with crash-safe backward-shift
+  compaction and duplicate-tolerant cleanup.
+- Made Linux owner metadata replacement atomic and resistant to PID reuse, and
+  prevented failed opens from leaving live-looking owner records.
+- Rejected layout dimensions whose index, alignment, or section calculations
+  cannot be represented safely.
+- Moved stores that detect usage-count underflow into shared safe error mode.
+- Prevented Windows mapping-handle leaks when view creation fails and removed
+  process-local Linux lock registry growth after handles are disposed.
+- Matched Windows `Global\` mapping names with global synchronization so
+  cross-session participants cannot mutate one mapping under different mutexes.
+- Made segmented publish use one synchronized operation so bounded contention
+  cannot strand an internal reservation.
+
+### Security
+
+- Linux shared-memory directories now use owner-only `0700` permissions and
+  region, synchronization, owner, and lifecycle files use owner-only `0600`
+  permissions.
+
+### Compatibility
+
+- Public API names, status values, and shared-memory layout remain compatible
+  with the `1.0.0` production contract.
+
 ## 1.0.0 - 2026-07-03
 
 ### Added
