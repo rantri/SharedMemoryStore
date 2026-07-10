@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "shared_protocol": {
+    "layout": { "major": 1, "minor": 2 },
+    "resource_naming": 1,
+    "byte_order": "little",
+    "required_pointer_width": 64
+  },
+  "distributions": [
+    {
+      "name": "SharedMemoryStore",
+      "ecosystem": "NuGet",
+      "version": "1.0.1",
+      "creates_layouts": ["1.2"],
+      "reads_layouts": ["1.2"],
+      "resource_naming": 1,
+      "validated_targets": ["windows-x86_64", "linux-x86_64"]
+    },
+    {
+      "name": "SharedMemoryStore",
+      "ecosystem": "CMake",
+      "version": "0.1.0",
+      "c_abi": "1.0",
+      "creates_layouts": ["1.2"],
+      "reads_layouts": ["1.2"],
+      "resource_naming": 1,
+      "validated_targets": ["windows-x86_64", "linux-x86_64"]
+    },
+    {
+      "name": "shared-memory-store",
+      "ecosystem": "Python",
+      "version": "0.1.0",
+      "requires_c_abi": "1.0",
+      "creates_layouts": ["1.2"],
+      "reads_layouts": ["1.2"],
+      "resource_naming": 1,
+      "validated_targets": ["windows-x86_64", "linux-x86_64"]
+    }
+  ],
+  "interoperability": {
+    "ordered_pairs": [
+      "dotnet->dotnet",
+      "dotnet->cpp",
+      "dotnet->python",
+      "cpp->dotnet",
+      "cpp->cpp",
+      "cpp->python",
+      "python->dotnet",
+      "python->cpp",
+      "python->python"
+    ],
+    "required_scenarios": [
+      "binary-publish-acquire-release",
+      "remove-final-release-reuse",
+      "reservation-commit-abort",
+      "bounded-lock-contention",
+      "explicit-crash-recovery",
+      "linux-owner-cleanup"
+    ]
+  }
+}

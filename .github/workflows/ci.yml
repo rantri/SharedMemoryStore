@@ -72,3 +72,78 @@ jobs:
       - name: Validate Docker sharing
         shell: pwsh
         run: ./scripts/validate-docker-shared-memory.ps1 -Configuration Release
+
+  native:
+    name: Native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate CMake build, tests, install, and clean consumer
+        shell: pwsh
+        run: ./scripts/validate-native.ps1 -Configuration Release
+
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Python build frontend
+        run: python -m pip install --upgrade build
+
+      - name: Validate source tests, wheel contents, and clean installation
+        shell: pwsh
+        run: ./scripts/validate-python.ps1 -Configuration Release
+
+  interoperability:
+    name: Interoperability (${{ matrix.os }})
+    needs: [native, python]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Validate all ordered runtime pairs and stress lifecycles
+        shell: pwsh
+        run: >-
+          ./scripts/validate-interoperability.ps1
+          -Configuration Release
+          -Stress
+          -StressValueCount 1000
+          -StressLifecycleCycleCount 10000

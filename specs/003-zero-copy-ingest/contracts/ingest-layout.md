@@ -29,8 +29,10 @@ state and visibility rules.
 
 - Layout major version remains `1` unless implementation requires incompatible
   section sizes, field ordering changes, or unsafe behavior for old clients.
-- Layout minor version becomes `1` to document pending reservation progress in
-  existing slot metadata.
+- Layout minor version is `2`. Minor `1` introduced pending reservation
+  progress in existing slot metadata; minor `2` subsequently added the reuse
+  epoch to index, slot, and lease records so lifecycle identities cannot repeat
+  when the 32-bit generation rolls over.
 - Opening a mapping with an unsupported higher major version fails with
   `IncompatibleLayout`.
 - Contract tests must verify header version constants and state numeric values.

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["scikit-build-core>=1,<2"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "shared-memory-store"
+version = "0.1.0"
+description = "Bounded, cross-process shared-memory values for Python"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "SharedMemoryStore contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Repository = "https://github.com/rantri/SharedMemoryStore"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+wheel.packages = []
+wheel.py-api = "py3"
+install.components = ["Python"]
+sdist.inclusion-mode = "explicit"
+sdist.include = [
+  "/pyproject.toml",
+  "/CMakeLists.txt",
+  "/cmake/**",
+  "/src/cpp/**",
+  "/src/python/shared_memory_store/*.py",
+  "/protocol/compatibility.json",
+  "/LICENSE",
+  "/README.md",
+]
+
+[tool.scikit-build.cmake.define]
+SMS_INSTALL = "ON"
+SMS_BUILD_TESTS = "OFF"
+SMS_BUILD_SAMPLES = "OFF"
+SMS_PYTHON_INSTALL_DIR = "shared_memory_store"

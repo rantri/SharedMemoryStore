@@ -54,7 +54,8 @@ function Invoke-Compose {
     )
 
     $projectName = "smsdocker-" + [Guid]::NewGuid().ToString("N").Substring(0, 12)
-    $upArgs = @("compose", "-p", $projectName, "-f", $ComposeFile, "up", "--abort-on-container-exit", "--exit-code-from", $ExitCodeFrom)
+    $composeArgs = @("compose", "-p", $projectName, "-f", $ComposeFile)
+    $upArgs = $composeArgs + @("up", "--detach")
     if (-not $SkipComposeBuild) {
         $upArgs += "--build"
     }
@@ -63,6 +64,21 @@ function Invoke-Compose {
 
     try {
         Invoke-CommandChecked "docker" $upArgs "docker compose up"
+        $containerId = (& docker @composeArgs "ps" "--quiet" $ExitCodeFrom | Select-Object -Last 1).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
+            throw "Could not resolve the '$ExitCodeFrom' Compose container for project '$projectName'."
+        }
+
+        $waitOutput = & docker wait $containerId
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker wait failed for service '$ExitCodeFrom' in project '$projectName'."
+        }
+
+        & docker @composeArgs "logs" "--no-color" @Services
+        $containerExitCode = [int](($waitOutput | Select-Object -Last 1).Trim())
+        if ($containerExitCode -ne 0) {
+            throw "Compose service '$ExitCodeFrom' failed with exit code $containerExitCode."
+        }
     }
     finally {
         & docker compose -p $projectName -f $ComposeFile down --volumes

@@ -1,0 +1,101 @@
+{
+  "format_version": 1,
+  "fixture": "published",
+  "offline_only": true,
+  "protocol": {
+    "layout_major": 1,
+    "layout_minor": 2,
+    "byte_order": "little"
+  },
+  "header": {
+    "magic_hex": "31534d53",
+    "header_length": 160,
+    "total_bytes": 1016,
+    "slot_count": 3,
+    "lease_record_count": 4,
+    "max_key_bytes": 9,
+    "max_descriptor_bytes": 5,
+    "max_value_bytes": 17,
+    "index_entry_count": 8,
+    "index_entry_size": 48,
+    "index_offset": 160,
+    "index_length": 384,
+    "lease_registry_offset": 544,
+    "lease_registry_length": 160,
+    "slot_metadata_offset": 704,
+    "slot_metadata_length": 216,
+    "descriptor_storage_offset": 920,
+    "descriptor_storage_length": 24,
+    "payload_storage_offset": 944,
+    "payload_storage_length": 72,
+    "store_id_hex": "0102030405060708",
+    "store_state": 1,
+    "sequence": 1
+  },
+  "index_entries": [
+    {
+      "entry_index": 5,
+      "state": 1,
+      "state_name": "Occupied",
+      "key_hex": "0001ff80",
+      "key_hash_hex": "4653dd7f9a76930d",
+      "slot_index": 0,
+      "slot_generation": 1,
+      "slot_reuse_epoch": 0
+    }
+  ],
+  "lease_records": [],
+  "slots": [
+    {
+      "slot_index": 0,
+      "state": 2,
+      "state_name": "Published",
+      "generation": 1,
+      "reuse_epoch": 0,
+      "usage_count": 0,
+      "key_length": 4,
+      "descriptor_hex": "d0007f",
+      "payload_hex": "000102ff80",
+      "publisher_process_id": 4242,
+      "reservation_bytes_written": 0,
+      "key_hash_hex": "4653dd7f9a76930d",
+      "descriptor_offset": 920,
+      "payload_offset": 944,
+      "committed_sequence": 1
+    },
+    {
+      "slot_index": 1,
+      "state": 0,
+      "state_name": "Free",
+      "generation": 1,
+      "reuse_epoch": 0,
+      "usage_count": 0,
+      "key_length": 0,
+      "descriptor_hex": "",
+      "payload_hex": "",
+      "publisher_process_id": 0,
+      "reservation_bytes_written": 0,
+      "key_hash_hex": "0000000000000000",
+      "descriptor_offset": 928,
+      "payload_offset": 968,
+      "committed_sequence": 0
+    },
+    {
+      "slot_index": 2,
+      "state": 0,
+      "state_name": "Free",
+      "generation": 1,
+      "reuse_epoch": 0,
+      "usage_count": 0,
+      "key_length": 0,
+      "descriptor_hex": "",
+      "payload_hex": "",
+      "publisher_process_id": 0,
+      "reservation_bytes_written": 0,
+      "key_hash_hex": "0000000000000000",
+      "descriptor_offset": 936,
+      "payload_offset": 992,
+      "committed_sequence": 0
+    }
+  ]
+}
