@@ -19,7 +19,7 @@ Detailed sources:
 
 ## Current Baseline
 
-- Managed distribution: NuGet `SharedMemoryStore` `1.0.1`, targeting
+- Managed distribution: NuGet `SharedMemoryStore` `1.0.2`, targeting
   `net10.0`.
 - Native distribution: CMake `SharedMemoryStore` `0.1.0`, C++20, C ABI `1.0`.
 - Python distribution: `shared-memory-store` `0.1.0`, Python 3.10 or newer,
@@ -95,7 +95,7 @@ the public API.
 
 Windows uses named operating-system memory mappings and named synchronization.
 An explicit `Global\` mapping name uses global synchronization in managed
-`1.0.1` and native `0.1.0`. All participants must implement compatible
+`1.0.2` and native `0.1.0`. All participants must implement compatible
 resource-naming version `1` behavior. Ordinary unqualified and explicit
 `Local\` names retain session-local synchronization.
 Linux uses deterministic files in a shared runtime memory location such as

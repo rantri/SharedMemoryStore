@@ -9,7 +9,7 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <PackageId>SharedMemoryStore</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <Authors>SharedMemoryStore contributors</Authors>
     <Company>SharedMemoryStore</Company>
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
@@ -19,7 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/rantri/SharedMemoryStore</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Linux, Windows, and same-host Docker support hardening remains the managed 1.0.1 package scope. The repository also adds independently versioned native C++ and Python sibling distributions over layout 1.2 and C ABI 1.0; they are not included in the NuGet package, whose public API and runtime dependency surface remain unchanged.</PackageReleaseNotes>
+    <PackageReleaseNotes>NuGet SharedMemoryStore 1.0.2 preserves Linux, Windows, and same-host Docker support, corrects Linux layout-mismatch reporting, and rejects unsupported managed processes early while preserving the public API, status values, BCL-only runtime surface, layout 1.2, and resource naming 1. Repository source adds independently versioned native C++ and Python 0.1.0 sibling distributions using C ABI 1.0, validated with .NET on Windows and Linux; v1.0.2 neither includes them in NuGet nor publishes them to PyPI or a native package registry.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <AssemblyName>SharedMemoryStore</AssemblyName>
