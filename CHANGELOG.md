@@ -3,7 +3,14 @@
 All notable package and documentation changes are recorded in reverse
 chronological order.
 
-## 1.0.1 - 2026-07-09
+## 1.0.1 - 2026-07-10
+
+### Packaging
+
+- Added Linux and Windows GitHub Actions validation and a manually triggered,
+  trusted-publishing release workflow for NuGet.org and GitHub Releases.
+- Added portable `.snupkg` symbols to improve package debugging without growing
+  the primary package.
 
 ### Fixed
 

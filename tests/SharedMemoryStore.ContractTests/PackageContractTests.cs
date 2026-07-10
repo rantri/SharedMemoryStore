@@ -24,7 +24,10 @@ public sealed class PackageContractTests
         Assert.Contains("<PackageId>SharedMemoryStore</PackageId>", project);
         Assert.Contains("<GenerateDocumentationFile>true</GenerateDocumentationFile>", project);
         Assert.Contains("<PackageLicenseExpression>MIT</PackageLicenseExpression>", project);
+        Assert.Contains("<PackageProjectUrl>https://github.com/rantri/SharedMemoryStore</PackageProjectUrl>", project);
         Assert.Contains("<PackageReadmeFile>README.md</PackageReadmeFile>", project);
+        Assert.Contains("<IncludeSymbols>true</IncludeSymbols>", project);
+        Assert.Contains("<SymbolPackageFormat>snupkg</SymbolPackageFormat>", project);
         Assert.Contains("linux", project, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows", project, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("docker", project, StringComparison.OrdinalIgnoreCase);
