@@ -170,11 +170,12 @@ rules and abnormal termination behavior.
 
 ## Portability
 
-The current package is C# on `.NET 10` with Linux and Windows host support and
-same-host Docker support for configured Linux containers. C++ and Python are
-future portability audiences, not current bindings. Future implementations must
-follow the documented layout and lifecycle contracts rather than redefining
-behavior per language. See [Portability](portability.md).
+The repository provides independently versioned .NET, CMake/C++, and Python
+distributions for 64-bit little-endian Linux and Windows hosts. They interoperate
+through mapped layout `1.2`, resource naming `1`, and the same lifecycle rules;
+the Python package loads the native C ABI `1.0`. Same-host Docker sharing is
+supported for configured Linux containers. See [Portability](portability.md)
+and [Packaging](packaging.md).
 
 ## Package Contract
 

@@ -7,6 +7,42 @@ public sealed class MultiStoreLifecycleIntegrationTests
 {
     [Fact]
     [Trait("Category", "Integration")]
+    public void LinuxMapsTheExistingFileBeforeReportingLayoutMismatch()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var name = $"sms-linux-layout-mismatch-{Guid.NewGuid():N}";
+        var createOptions = SharedMemoryStoreOptions.Create(
+            name,
+            slotCount: 6,
+            maxValueBytes: 128,
+            maxDescriptorBytes: 32,
+            maxKeyBytes: 32,
+            leaseRecordCount: 16,
+            openMode: OpenMode.CreateNew,
+            enableLeaseRecovery: true);
+        var mismatchedOptions = SharedMemoryStoreOptions.Create(
+            name,
+            slotCount: 5,
+            maxValueBytes: 128,
+            maxDescriptorBytes: 32,
+            maxKeyBytes: 32,
+            leaseRecordCount: 16,
+            openMode: OpenMode.OpenExisting,
+            enableLeaseRecovery: true);
+
+        using var created = IntegrationStoreFactory.Create(createOptions);
+        Assert.Equal(
+            StoreOpenStatus.IncompatibleLayout,
+            Store.TryCreateOrOpen(mismatchedOptions, out var mismatched));
+        Assert.Null(mismatched);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public void MultipleNamedStoresRemainIsolated()
     {
         using var first = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options());

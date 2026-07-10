@@ -3,8 +3,10 @@
 This guide defines the maintenance process for documentation, samples, package
 metadata, release notes, public contracts, and evidence-backed claims. Use it
 with [Architecture](architecture.md), [Release preparation](releases.md), and
-the feature validation quickstart at
-[specs/006-improve-docs-samples/quickstart.md](../specs/006-improve-docs-samples/quickstart.md).
+the managed documentation quickstart at
+[specs/006-improve-docs-samples/quickstart.md](../specs/006-improve-docs-samples/quickstart.md)
+and the native/Python validation quickstart at
+[specs/008-cpp-python-implementations/quickstart.md](../specs/008-cpp-python-implementations/quickstart.md).
 
 ## Contract Boundaries
 
@@ -31,6 +33,17 @@ Stable public contracts include:
   [owner-recovery-contract.md](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md).
 - production public API readiness documented by
   [public-api-contract.md](../specs/005-api-production-readiness/contracts/public-api-contract.md).
+- layout, resource naming, versions, and conformance fixtures under
+  [`protocol/`](../protocol/).
+- fixed-width native C ABI `1.0` documented by
+  [native-c-api.md](../specs/008-cpp-python-implementations/contracts/native-c-api.md).
+- the public C++ and Python surfaces documented by
+  [cpp-api.md](../specs/008-cpp-python-implementations/contracts/cpp-api.md)
+  and [python-api.md](../specs/008-cpp-python-implementations/contracts/python-api.md).
+- distribution compatibility and packaging documented by
+  [interoperability.md](../specs/008-cpp-python-implementations/contracts/interoperability.md),
+  [packaging.md](../specs/008-cpp-python-implementations/contracts/packaging.md),
+  and [`protocol/compatibility.json`](../protocol/compatibility.json).
 
 Current implementation details include private type organization, search
 cursor choices, compaction thresholds, and helper method structure. They may be
@@ -53,6 +66,11 @@ diagnostics, or release status changes.
 | Performance claim | `docs/performance.md`, benchmark command/result notes, `docs/releases.md`, `CHANGELOG.md` if release-affecting |
 | Platform or portability scope | `docs/portability.md`, `SUPPORT.md`, sample READMEs, Docker sample docs, release notes |
 | Package metadata or release notes | `src/SharedMemoryStore/SharedMemoryStore.csproj`, `README.md`, `docs/packaging.md`, `docs/releases.md`, `CHANGELOG.md` |
+| C ABI symbol, structure, width, or ownership rule | `c_api.h`, native ABI contract, protocol fixtures, C ABI tests, Python `ctypes` declarations, compatibility metadata, changelog |
+| C++ public wrapper | `store.hpp`, C++ API contract, native tests, C++ sample, packaging and getting-started guides |
+| Python public API, loader, or view lifetime | Python modules, Python API contract, wheel tests, Python sample, packaging and getting-started guides |
+| Layout, resource naming, or cross-runtime behavior | `protocol/`, all three implementations, static conformance tests, ordered-pair tests, portability, security, compatibility metadata |
+| Native or Python distribution version | root `CMakeLists.txt` or `pyproject.toml`, compatibility metadata, packaging, README, changelog, release preparation, support policy |
 | Sample command or output | sample source, sample README, `docs/samples.md`, `specs/006-improve-docs-samples/sample-validation.md` |
 | Documentation-only clarification | affected doc, `docs/index.md` if navigation changes, `scripts/validate-docs.ps1`, release-impact review |
 
@@ -73,6 +91,15 @@ dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
 pwsh ./scripts/validate-docker-shared-memory.ps1
+pwsh ./scripts/validate-native.ps1 -Configuration Release
+python -m pip install build
+python -m build --wheel
+python -m venv artifacts/python-consumer
+artifacts/python-consumer/Scripts/python -m pip install (Get-ChildItem dist/*.whl | Select-Object -First 1)
+$env:SMS_TEST_INSTALLED_PACKAGE = '1'
+artifacts/python-consumer/Scripts/python -m unittest discover -s tests/python -v
+artifacts/python-consumer/Scripts/python samples/PythonBasicUsage/main.py
+dotnet test tests/SharedMemoryStore.InteropTests/SharedMemoryStore.InteropTests.csproj -c Release
 ```
 
 Use
@@ -83,6 +110,15 @@ package metadata, and release-note alignment. Use
 for clean package-source consumption. Use
 [`SharedMemoryStore.slnx`](../SharedMemoryStore.slnx) for build and test
 coverage.
+
+The native wrapper validates CTest, installation, and a clean external CMake
+consumer. Python validation must use a built wheel installed into a clean
+environment so repository imports cannot hide a missing native artifact. The
+interoperability test run must record which agent executables were available;
+the existence of nine theory rows is not evidence that all nine ran on both
+platforms.
+
+Use `bin/python` instead of `Scripts/python` on Linux.
 
 ## Review Questions
 
@@ -97,7 +133,8 @@ For every change, answer:
   validated environment?
 - Does the change preserve the rules against hidden background work, broad core
   service abstractions, persistence promises, distributed-cache claims,
-  unsupported platforms, and delivered future bindings?
+  unsupported platforms, arbitrary native-library loading, and unverified
+  interoperability claims?
 
 ## Documentation-Only Review
 
@@ -135,6 +172,8 @@ Before publishing:
 - verify package README content in [README.md](../README.md).
 - align [CHANGELOG.md](../CHANGELOG.md), [Release preparation](releases.md),
   and [Packaging](packaging.md).
+- align NuGet, CMake, Python, C ABI, layout, and resource-naming versions with
+  [`protocol/compatibility.json`](../protocol/compatibility.json).
 - review [SUPPORT.md](../SUPPORT.md) and [SECURITY.md](../SECURITY.md).
 - update sample validation notes in
   [sample-validation.md](../specs/006-improve-docs-samples/sample-validation.md)
@@ -145,6 +184,8 @@ Before publishing:
 - capture Linux, Windows, Docker, unsupported-profile, and compatibility
   validation evidence in [Release preparation](releases.md) before publishing a
   platform-support release.
+- capture native CTest and clean CMake consumption, installed-wheel tests, and
+  every ordered runtime pair claimed for the release.
 
 ## Boundaries To Preserve
 
@@ -158,4 +199,7 @@ Do not introduce or imply:
 - protection from malicious same-host writers that already have mapping access.
 - macOS, Windows-container, default-isolated Docker, or cross-host support
   beyond validated scope.
-- delivered C++ or Python bindings before a feature explicitly adds them.
+- native or Python registry publication before release automation and artifacts
+  are actually available.
+- Windows/Linux or ordered-pair validation based only on target metadata or
+  skipped tests.

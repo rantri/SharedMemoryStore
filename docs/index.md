@@ -43,7 +43,7 @@ by goal first, then provides the full file inventory for validation and review.
 | Run samples | [Samples](samples.md) -> [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) -> [samples/FrameValue/README.md](../samples/FrameValue/README.md) -> [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md) -> [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md) -> [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md) |
 | Review internals | [Architecture](architecture.md) -> [Maintainers](maintainers.md) -> contract sources |
 | Prepare a contribution | [CONTRIBUTING.md](../CONTRIBUTING.md) -> [Maintainers](maintainers.md) -> [Release preparation](releases.md) |
-| Review future portability | [Concepts](concepts.md) -> [Portability](portability.md) -> [shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md) |
+| Review portability and interoperability | [Concepts](concepts.md) -> [Portability](portability.md) -> [Protocol](../protocol/README.md) -> [Packaging](packaging.md) |
 
 ## Guides
 

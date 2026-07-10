@@ -88,7 +88,7 @@ internal static class LinuxSharedMemoryRegion
         try
         {
             stream.SetLength(options.TotalBytes);
-            return CreateMappedRegion(resourceName, options, stream, out region);
+            return CreateMappedRegion(resourceName, options.TotalBytes, stream, out region);
         }
         catch
         {
@@ -122,12 +122,12 @@ internal static class LinuxSharedMemoryRegion
             return StoreOpenStatus.IncompatibleLayout;
         }
 
-        return CreateMappedRegion(resourceName, options, stream, out region);
+        return CreateMappedRegion(resourceName, stream.Length, stream, out region);
     }
 
     private static StoreOpenStatus CreateMappedRegion(
         PlatformResourceName resourceName,
-        SharedMemoryStoreOptions options,
+        long mappingCapacity,
         FileStream stream,
         out MemoryMappedStoreRegion? region)
     {
@@ -142,16 +142,16 @@ internal static class LinuxSharedMemoryRegion
             mapping = MemoryMappedFile.CreateFromFile(
                 stream,
                 mapName: null,
-                capacity: options.TotalBytes,
+                capacity: mappingCapacity,
                 MemoryMappedFileAccess.ReadWrite,
                 HandleInheritability.None,
                 leaveOpen: false);
 
-            accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
+            accessor = mapping.CreateViewAccessor(0, mappingCapacity, MemoryMappedFileAccess.ReadWrite);
             candidate = MemoryMappedStoreRegion.Create(
                 mapping,
                 accessor,
-                options.TotalBytes,
+                mappingCapacity,
                 () =>
                 {
                     if (ownerRegistered)

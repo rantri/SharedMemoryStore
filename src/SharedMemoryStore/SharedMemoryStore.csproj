@@ -19,7 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/rantri/SharedMemoryStore</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Linux, Windows, and same-host Docker support hardening: fixes bounded waits, crash-safe ownership and index maintenance, private Linux resource permissions, layout overflow validation, and cleanup reliability while preserving the 1.0.0 public API and layout.</PackageReleaseNotes>
+    <PackageReleaseNotes>Linux, Windows, and same-host Docker support hardening remains the managed 1.0.1 package scope. The repository also adds independently versioned native C++ and Python sibling distributions over layout 1.2 and C ABI 1.0; they are not included in the NuGet package, whose public API and runtime dependency surface remain unchanged.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <AssemblyName>SharedMemoryStore</AssemblyName>

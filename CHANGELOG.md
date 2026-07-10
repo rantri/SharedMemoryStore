@@ -3,6 +3,47 @@
 All notable package and documentation changes are recorded in reverse
 chronological order.
 
+## Unreleased
+
+### Added
+
+- Added an independently versioned CMake `SharedMemoryStore` `0.1.0`
+  distribution with a C++20 protocol core, Windows and Linux adapters,
+  fixed-width C ABI `1.0`, move-only C++ RAII wrappers, dependency-free native
+  tests, install/export rules, clean-consumer project, and basic sample.
+- Added the Python `shared-memory-store` `0.1.0` source and wheel configuration
+  for Python 3.10 or newer. Its standard-library `ctypes` API packages and
+  validates the native library beside the Python modules and exposes
+  context-managed stores, leases, reservations, recovery, waits, and
+  diagnostics.
+- Added the canonical language-neutral protocol boundary for layout `1.2`,
+  resource naming `1`, exact conformance fixtures, compatibility metadata, and
+  test-only .NET, C++, and Python JSON-lines participants.
+- Added an ordered 3x3 core exchange harness plus native and Python contract,
+  lifecycle, ABI, diagnostics, and package tests.
+
+### Security
+
+- Preserved the trusted same-host participant boundary across all three
+  distributions. Native and Python callers receive lifecycle and layout
+  validation, but no implementation claims protection from a malicious writer
+  that already has legitimate access to the shared resources.
+- Restricted Python native loading to the library packaged beside its modules;
+  it does not search the current directory, `PATH`, or system library paths.
+
+### Compatibility
+
+- NuGet `SharedMemoryStore` remains `1.0.1`; its public managed API, status
+  numbers, BCL-only runtime dependency surface, and layout `1.2` behavior are
+  unchanged. The native and Python artifacts are sibling distributions and are
+  not included in the NuGet package.
+- NuGet, CMake, and Python versions advance independently. Cross-runtime
+  compatibility is declared through layout `1.2`, resource naming `1`, and C
+  ABI `1.0` where applicable.
+- The native and Python `0.1.0` lines are alpha. Registry publication and full
+  Windows/Linux ordered-pair release evidence remain explicit publication
+  gates rather than claims made by this entry.
+
 ## 1.0.1 - 2026-07-10
 
 ### Packaging

@@ -1,9 +1,11 @@
 # Release Preparation
 
-This guide is the maintainer checklist for preparing a package release. It is
-written for the current `1.0.1` package and should be updated when package
-metadata, public API behavior, compatibility scope, support policy, security
-reporting, documentation scope, or sample behavior changes.
+This guide is the maintainer checklist for preparing independently versioned
+managed, native, and Python releases. The current source identities are NuGet
+`SharedMemoryStore` `1.0.1`, CMake `SharedMemoryStore` `0.1.0`, Python
+`shared-memory-store` `0.1.0`, C ABI `1.0`, mapped layout `1.2`, and resource
+naming `1`. Update this guide when any distribution, ABI, protocol, support,
+security, documentation, or sample contract changes.
 
 ## Automated Release Process
 
@@ -14,6 +16,12 @@ the primary and symbol packages, creates a draft GitHub release, publishes to
 NuGet.org, and then publishes the GitHub release. CI separately validates the
 same commit on Linux and Windows through
 [ci.yml](../.github/workflows/ci.yml).
+
+The existing workflow publishes the managed NuGet and GitHub release. Native
+CMake installation and Python wheel construction exist in the repository, but
+this guide does not claim a native registry or Python index publication path
+until dedicated automation, credentials, artifact signing/provenance, and clean
+install checks are reviewed.
 
 Configure NuGet.org trusted publishing once before the first automated release:
 
@@ -66,12 +74,28 @@ before publishing:
 - `RepositoryType` remains `git`. Add an owner-approved repository URL before a
   public package publication if the repository host is finalized.
 
+For a native or Python release, also verify:
+
+- root `project(... VERSION ...)` and `[project].version` identify the intended
+  distribution versions.
+- `SharedMemoryStoreConfig.cmake` declares native package, C ABI, layout, and
+  resource-naming versions.
+- `shared_memory_store.__version__` and `pyproject.toml` agree.
+- [`protocol/compatibility.json`](../protocol/compatibility.json) agrees with
+  every released distribution.
+- wheel contents place the correct native library beside the Python modules and
+  the loader rejects an incompatible or misplaced artifact.
+- target-platform metadata is not described as completed validation without a
+  corresponding recorded run.
+
 ## Release Notes and Changelog
 
 Update [CHANGELOG.md](../CHANGELOG.md) in reverse chronological order. Each
 entry should identify:
 
 - package version.
+- distribution ecosystem and artifact name.
+- C ABI, layout, and resource-naming compatibility identities.
 - public API or behavior impact.
 - package metadata impact.
 - documentation-only changes.
@@ -101,9 +125,16 @@ Compare public docs with these contracts:
 - [contention-configuration-contract.md](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
 - [diagnostics-integration-contract.md](../specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md)
 - [reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
+- [protocol/README.md](../protocol/README.md)
+- [native-c-api.md](../specs/008-cpp-python-implementations/contracts/native-c-api.md)
+- [cpp-api.md](../specs/008-cpp-python-implementations/contracts/cpp-api.md)
+- [python-api.md](../specs/008-cpp-python-implementations/contracts/python-api.md)
+- [interoperability.md](../specs/008-cpp-python-implementations/contracts/interoperability.md)
+- [packaging.md](../specs/008-cpp-python-implementations/contracts/packaging.md)
 
-Confirm that docs do not claim current C++ or Python bindings, broad
-macOS or cross-host support, unmeasured hardware performance,
+Confirm that docs describe the delivered C++ and Python surfaces without
+claiming registry publication, unrun platform/pair validation, broad macOS or
+cross-host support, unmeasured hardware performance,
 application-specific frame parsing by the core store, hidden background work,
 persistence, Windows-container support, default-isolated Docker support, or
 cross-host cache behavior.
@@ -116,6 +147,8 @@ Documentation-only changes still need release review:
 - Confirm examples and sample outputs match current source.
 - Confirm package metadata, `PackageReleaseNotes`, README, packaging guide,
   changelog, and release notes agree.
+- Confirm CMake, Python, C ABI, layout, resource-naming, and compatibility
+  metadata versions agree.
 - Confirm compatibility wording did not change public behavior promises.
 - Confirm known limitations, platform scope, performance claims, support scope,
   and security reporting paths remain current.
@@ -131,6 +164,9 @@ Documentation-only changes still need release review:
 - Confirm issue templates and the pull request template still route questions,
   bugs, documentation issues, feature requests, and security disclosures to the
   right place.
+- Confirm reports can identify the affected managed, native, or Python
+  distribution and that all docs preserve the trusted same-host participant
+  boundary.
 
 ## Validation Commands
 
@@ -149,11 +185,26 @@ dotnet test SharedMemoryStore.slnx -c Release
 dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
 pwsh ./scripts/validate-docker-shared-memory.ps1
+pwsh ./scripts/validate-native.ps1 -Configuration Release
+python -m pip install build
+python -m build --wheel
+python -m venv artifacts/python-consumer
+artifacts/python-consumer/Scripts/python -m pip install (Get-ChildItem dist/*.whl | Select-Object -First 1)
+$env:SMS_TEST_INSTALLED_PACKAGE = '1'
+artifacts/python-consumer/Scripts/python -m unittest discover -s tests/python -v
+artifacts/python-consumer/Scripts/python samples/PythonBasicUsage/main.py
+dotnet test tests/SharedMemoryStore.InteropTests/SharedMemoryStore.InteropTests.csproj -c Release
 ```
 
+Use `bin/python` instead of `Scripts/python` on Linux. Configure the C++ and
+Python agent paths required by the interoperability harness and record every
+ordered pair that actually executes. A skipped or unavailable agent is not a
+passing release result.
+
 Expected result: documentation inventory, placeholder checks, internal links,
-package metadata alignment, sample README contracts, public API/status drift
-checks, sample commands, clean package consumption, tests, and pack all pass.
+metadata alignment, sample contracts, managed regressions and package
+consumption, native CTest/install/clean CMake consumption, installed-wheel
+tests, samples, and every claimed runtime pair all pass.
 
 ## Linux, Windows, and Docker Support Notes
 
@@ -221,6 +272,41 @@ Benchmark commands are required when release notes make performance claims:
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *DirectIngest*
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 ```
+
+## Native and Python 0.1.0 Preparation Notes (Unreleased)
+
+The repository now contains the implementation and packaging inputs for:
+
+- a C++20 native core with Windows/Linux adapters, fixed-width C ABI `1.0`,
+  move-only C++ RAII wrappers, CMake install/export rules, native tests, and a
+  basic sample.
+- a Python 3.10+ `ctypes` package with context-managed stores, leases, and
+  reservations, package-adjacent native loading, wheel configuration, Python
+  tests, and a basic sample.
+- canonical layout `1.2`, resource naming `1`, compatibility metadata,
+  conformance fixtures, test-only JSON-lines agents, and the ordered 3x3 core
+  exchange harness.
+
+These sibling distributions do not change the managed `1.0.1` public API,
+status numbers, NuGet runtime dependencies, or mapped layout. Their `0.1.0`
+versions are alpha lines and are not included in the NuGet package.
+
+Before publishing native or Python artifacts or describing a platform as
+release-validated, capture all of the following:
+
+- native configure, compile, CTest, install, basic sample, and clean external
+  `find_package` consumption on Windows x64 and Linux x64.
+- a wheel build and clean installed-wheel tests on both targets, including
+  proof that the bundled native library loads without repository or system
+  search-path fallback.
+- every ordered .NET/C++/Python producer-consumer pair on each target, plus
+  mixed lease removal/reuse, reservation lifecycle, bounded contention, crash
+  recovery, and Linux owner cleanup.
+- existing managed, documentation, Docker, package-consumption, security, and
+  vulnerability regression gates.
+
+No PyPI, native archive registry, or automatic native/Python publication is
+claimed by this source change. Add and review those release channels separately.
 
 ## 1.0.1 Production Hardening Notes
 

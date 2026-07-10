@@ -48,6 +48,11 @@ internal static class SharedStorePlatform
         out MemoryMappedStoreRegion? region)
     {
         region = null;
+        if (!Environment.Is64BitProcess || !BitConverter.IsLittleEndian)
+        {
+            return StoreOpenStatus.UnsupportedPlatform;
+        }
+
         var resourceName = PlatformResourceName.Create(options.Name);
         if (OperatingSystem.IsWindows())
         {
