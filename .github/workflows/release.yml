@@ -56,12 +56,12 @@ jobs:
               throw "Requested version '$requested' does not match project version '$projectVersion'."
           }
 
-          git ls-remote --exit-code --tags origin "refs/tags/v$requested" *> $null
-          if ($LASTEXITCODE -eq 0) {
-              throw "Tag 'v$requested' already exists. Versions and tags are immutable."
-          }
-          if ($LASTEXITCODE -ne 2) {
+          $existingTag = git ls-remote --tags origin "refs/tags/v$requested"
+          if ($LASTEXITCODE -ne 0) {
               throw "Could not verify whether tag 'v$requested' exists (git exit code $LASTEXITCODE)."
+          }
+          if (-not [string]::IsNullOrWhiteSpace(($existingTag -join ""))) {
+              throw "Tag 'v$requested' already exists. Versions and tags are immutable."
           }
 
           $published = Invoke-RestMethod `
