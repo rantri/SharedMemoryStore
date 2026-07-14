@@ -240,6 +240,79 @@ p99 stayed below 10 us, and every lock-free raw stall stayed below 10 ms. This
 is pre-final diagnostic evidence, not a substitute for the common-provenance
 final gate.
 
+### Terminal clean pre-final diagnostic
+
+The remaining pre-final attempts were preserved rather than overwritten. In
+order, they exposed and closed four release-evidence or bounded cold-start
+defects: a WSL source-provenance timeout (`849a7a0` binds raw evidence to the
+captured source tuple); empty strings emitted for non-executed OS fields
+(`f754118` preserves JSON nulls); partially visible ready/go/done trace markers
+(`5925fee` publishes each marker by same-directory atomic rename); and the
+broker-key sample reusing the one-second default cold-open budget while starting
+12 processes on an already loaded host (`853b10f` gives that sample operation a
+single explicit ten-second budget). The marker correction passed 15 repeated
+Linux `strace` gates and five complete Linux plus five Windows trace classes.
+The sample correction passed 40 consecutive 12-worker Linux startups and fresh
+6- and 12-worker Linux and Windows sample runs. Independent reviews of both
+changes found no High, Medium, or Low finding; neither changes a layout-v2 hot
+publish, acquire, release, or remove path.
+
+One deliberately contaminated, concurrent diagnostic left 17,733 historical
+Linux rendezvous files and demonstrated a scoped Low cold-path limitation:
+release-marker and owner-anchor discovery scans the flat per-distro rendezvous
+directory, so extreme high-cardinality store-name churn can consume a finite
+cold-open budget. Stable `.lock` and `.lifecycle` inodes cannot be routinely
+deleted without breaking lock identity. This does not introduce a global lock,
+does not affect an already-open store, and is outside the intended stable-name
+deployment; bounded `StoreBusy` remains the specified cold-path outcome. The
+final diagnostics therefore used an idle, restarted WSL tmpfs. A future
+resource-protocol revision should use per-store namespaces or direct marker
+resolution and add a high-cardinality cold-open regression, without changing
+the lock-free key-value engine.
+
+After a Docker-integration-only not-qualified attempt was preserved as
+`009-pre-final10`, the clean immutable diagnostic at
+`artifacts/lock-free-os-validation/009-pre-final11-linux-x64.json` passed on
+commit `853b10f317bcab16a4c69ead9b23b5bd6027ec7a`, tree
+`69a8e453a3edc0528fab2a4a80fc151eff8820d0`, and source-manifest SHA-256
+`90F772F9FA240CE44029DF02D2EFF5D294996E69CC9184473ED83D5ECD1E1194`.
+Start and completion provenance and all 33 tested-assembly rows were identical.
+All 28 required rows passed; the optional Docker-pause row was correctly
+not-qualified with a JSON-null execution tuple. Unit 436/436, Contract 117/117,
+Integration 302/302, Interop 75/75, and Linearizability 83/83 passed, for
+**1,013/1,013** across five TRX files. Native C++, Python, required Docker,
+6/12-worker samples, packing, held-lock/`strace`, all 67 crash checkpoints, and
+SIGSTOP recovery also passed.
+
+The report SHA-256 is
+`28CD4C989898C481D26F77E8B1951771CFBAF1BC99ADDBC8358FBF09A66E5D27`;
+its exact 52-file evidence-tree digest is
+`FDA14EA9612EE0F891808FBA4348297CA766A72A4F32FBEDA541080EF8451478`;
+and its raw schema-7 performance report SHA-256 is
+`C621574937EA90DB110CF140641895F479E20425ACBF7B0BDFAB8BE3F2CA2CED`.
+The actual release importer accepted the untouched report and recomputed the
+same manifest and hashes. A separate audit independently reconstructed the
+source digest from 589 blobs and found no evidence or importer finding.
+
+| Profile | Scenario | Processes | Median calls/s | Median p99 | Maximum raw stall |
+|---|---|---:|---:|---:|---:|
+| Legacy | acquire/release | 1 | 251,281 | 13.5 us | 315.5 us |
+| Legacy | acquire/release | 8 | 253,850 | 15.7 us | 111,495.7 us |
+| LockFree | acquire/release | 1 | 3,983,372 | 0.7 us | 4,047.6 us |
+| LockFree | acquire/release | 8 | 22,008,409 | 1.5 us | 4,023.2 us |
+| Legacy | publish/remove | 1 | 970,910 | 2.7 us | 4,849.8 us |
+| Legacy | publish/remove | 8 | 951,879 | 2.9 us | 111,292.2 us |
+| LockFree | publish/remove | 1 | 1,425,052 | 1.8 us | 1,554.0 us |
+| LockFree | publish/remove | 8 | 6,492,213 | 4.6 us | 2,363.8 us |
+
+Acquire/release lock-free one-process p99 was 5.19% of legacy and its
+eight-process throughput was 86.70x legacy; publish/remove was 66.67% and 6.82x
+respectively. Lock-free eight/one-process p99 amplification was 2.14x and 2.56x.
+Every contracted ratio, absolute p99, raw-stall, host-identity, affinity,
+scenario-dimension, checksum, corruption, and exact-trial gate passed. This is
+terminal diagnostic evidence and freezes T107/T108; it does not replace the
+final PR/nightly/release and dual-platform common-provenance gate.
+
 ### Directory handoff and delayed-helper closure
 
 The first full Linux tiny-operation diagnostic on commit `d834146` is preserved
