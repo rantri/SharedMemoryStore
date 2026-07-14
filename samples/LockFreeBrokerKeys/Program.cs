@@ -191,8 +191,11 @@ static SharedMemoryStoreOptions Options(string name, int slotCount, OpenMode mod
 
 static MemoryStore OpenExisting(string name, int slotCount)
 {
+    // A burst of worker processes may serialize briefly on cold lifecycle
+    // registration. Give that startup phase an explicit bounded budget.
     StoreOpenStatus status = MemoryStore.TryCreateOrOpen(
         Options(name, slotCount, OpenMode.OpenExisting),
+        new StoreWaitOptions(TimeSpan.FromSeconds(10)),
         out MemoryStore? store);
     return status == StoreOpenStatus.Success && store is not null
         ? store
