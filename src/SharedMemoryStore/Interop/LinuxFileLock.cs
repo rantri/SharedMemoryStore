@@ -9,18 +9,29 @@ internal sealed class LinuxFileLock : IDisposable
 {
     private static readonly ConcurrentDictionary<string, LocalLockEntry> LocalLocks = new(StringComparer.Ordinal);
 
-    private readonly FileStream _stream;
     private readonly string _localLockPath;
     private readonly LocalLockEntry _localLockEntry;
     private bool _locked;
     private bool _localLockHeld;
     private bool _disposed;
 
-    private LinuxFileLock(string path, FileStream stream)
+    private LinuxFileLock(string path)
     {
-        _stream = stream;
         _localLockPath = Path.GetFullPath(path);
         _localLockEntry = AcquireLocalLockEntry(_localLockPath);
+        try
+        {
+            // POSIX process-associated record locks are dropped when any file
+            // descriptor for the same inode is closed. Every managed lock
+            // object for one path must therefore share this exact stream for
+            // the complete local reference lifetime.
+            _ = _localLockEntry.Stream;
+        }
+        catch
+        {
+            ReleaseLocalLockEntry(_localLockPath, _localLockEntry);
+            throw;
+        }
     }
 
     public static StoreStatus TryAcquire(
@@ -34,10 +45,10 @@ internal sealed class LinuxFileLock : IDisposable
             return StoreStatus.OperationCanceled;
         }
 
-        FileStream stream;
+        LinuxFileLock candidate;
         try
         {
-            stream = OpenLockFile(path);
+            candidate = new LinuxFileLock(path);
         }
         catch (UnauthorizedAccessException)
         {
@@ -52,7 +63,6 @@ internal sealed class LinuxFileLock : IDisposable
             return StoreStatus.UnknownFailure;
         }
 
-        var candidate = new LinuxFileLock(path, stream);
         var status = candidate.TryAcquire(waitOptions);
         if (status != StoreStatus.Success)
         {
@@ -89,7 +99,7 @@ internal sealed class LinuxFileLock : IDisposable
 
             try
             {
-                _stream.Lock(0, 1);
+                _localLockEntry.Stream.Lock(0, 1);
                 _locked = true;
                 return StoreStatus.Success;
             }
@@ -140,9 +150,7 @@ internal sealed class LinuxFileLock : IDisposable
         fileLock = null;
         try
         {
-            var stream = OpenLockFile(path);
-
-            fileLock = new LinuxFileLock(path, stream);
+            fileLock = new LinuxFileLock(path);
             return StoreStatus.Success;
         }
         catch (UnauthorizedAccessException)
@@ -165,7 +173,7 @@ internal sealed class LinuxFileLock : IDisposable
         {
             try
             {
-                _stream.Unlock(0, 1);
+                _localLockEntry.Stream.Unlock(0, 1);
             }
             catch
             {
@@ -177,7 +185,7 @@ internal sealed class LinuxFileLock : IDisposable
 
         if (_localLockHeld)
         {
-            Monitor.Exit(_localLockEntry.SyncRoot);
+            _localLockEntry.LocalGate.Release();
             _localLockHeld = false;
         }
     }
@@ -191,7 +199,6 @@ internal sealed class LinuxFileLock : IDisposable
 
         _disposed = true;
         Release();
-        _stream.Dispose();
         ReleaseLocalLockEntry(_localLockPath, _localLockEntry);
     }
 
@@ -199,7 +206,11 @@ internal sealed class LinuxFileLock : IDisposable
     {
         while (true)
         {
-            if (Monitor.TryEnter(_localLockEntry.SyncRoot))
+            // FileStream.Lock uses a process-associated POSIX record lock on
+            // Linux, so another handle in this process would not contend at
+            // the kernel boundary. A deliberately non-reentrant local gate
+            // preserves binary ownership even for two handles on one thread.
+            if (_localLockEntry.LocalGate.Wait(0))
             {
                 _localLockHeld = true;
                 return true;
@@ -260,48 +271,110 @@ internal sealed class LinuxFileLock : IDisposable
     {
         while (true)
         {
-            var entry = LocalLocks.GetOrAdd(path, static _ => new LocalLockEntry());
+            // The value factory creates only an unevaluated Lazy<FileStream>,
+            // so discarded GetOrAdd candidates never open or close a sibling
+            // descriptor for this inode.
+            var entry = LocalLocks.GetOrAdd(path, static key => new LocalLockEntry(key));
             lock (entry.ReferenceGate)
             {
                 if (entry.Retired)
                 {
-                    continue;
+                    if (entry.RetirementFailure is not null)
+                    {
+                        throw new IOException(
+                            "The prior Linux file-lock descriptor could not be closed safely; "
+                            + "opening a sibling descriptor is refused.",
+                            entry.RetirementFailure);
+                    }
                 }
-
-                entry.ReferenceCount++;
-                return entry;
+                else
+                {
+                    entry.ReferenceCount++;
+                    return entry;
+                }
             }
+
+            // This contender observed the old generation before its last
+            // releaser removed it. Yield without holding any gate and retry;
+            // unrelated paths remain entirely independent.
+            Thread.Yield();
         }
     }
 
     private static void ReleaseLocalLockEntry(string path, LocalLockEntry entry)
     {
-        var remove = false;
         lock (entry.ReferenceGate)
         {
             entry.ReferenceCount--;
             if (entry.ReferenceCount == 0)
             {
                 entry.Retired = true;
-                remove = true;
-            }
-        }
+                try
+                {
+                    // Close before removing the retired registry entry. A new
+                    // generation for this path cannot open its descriptor until
+                    // this process no longer has an older sibling descriptor
+                    // whose close could release the new generation's lock.
+                    entry.DisposeStream();
+                }
+                catch (Exception exception)
+                {
+                    // Retain a fail-closed tombstone. Removing this entry after
+                    // an uncertain close could allow a new descriptor to open
+                    // and then have its process-associated lock invalidated by
+                    // the old descriptor closing later.
+                    entry.RetirementFailure = exception;
+                }
 
-        if (remove)
-        {
-            _ = ((ICollection<KeyValuePair<string, LocalLockEntry>>)LocalLocks).Remove(
-                new KeyValuePair<string, LocalLockEntry>(path, entry));
+                if (entry.RetirementFailure is null)
+                {
+                    // Remove before releasing ReferenceGate. A contender that
+                    // already observed this generation will see Retired after
+                    // the close; later contenders can create a new generation
+                    // without a preemption-sensitive spin window.
+                    bool removed = ((ICollection<KeyValuePair<string, LocalLockEntry>>)LocalLocks).Remove(
+                        new KeyValuePair<string, LocalLockEntry>(path, entry));
+                    if (!removed
+                        && LocalLocks.TryGetValue(path, out LocalLockEntry? current)
+                        && ReferenceEquals(current, entry))
+                    {
+                        entry.RetirementFailure = new IOException(
+                            "The retired Linux file-lock registry entry could not be removed safely.");
+                    }
+                }
+            }
         }
     }
 
     private sealed class LocalLockEntry
     {
-        public object SyncRoot { get; } = new();
+        private readonly Lazy<FileStream> _stream;
+
+        internal LocalLockEntry(string path)
+        {
+            _stream = new Lazy<FileStream>(
+                () => OpenLockFile(path),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
+        public FileStream Stream => _stream.Value;
+
+        public SemaphoreSlim LocalGate { get; } = new(1, 1);
 
         public object ReferenceGate { get; } = new();
 
         public int ReferenceCount { get; set; }
 
         public bool Retired { get; set; }
+
+        public Exception? RetirementFailure { get; set; }
+
+        public void DisposeStream()
+        {
+            if (_stream.IsValueCreated)
+            {
+                _stream.Value.Dispose();
+            }
+        }
     }
 }

@@ -47,6 +47,7 @@ try
             "raw-visibility-reader" => RawVisibilityCommands.RunReader(args),
             "raw-visibility-remover" => RawVisibilityCommands.RunRemover(args),
             "steady-no-lock" => SteadyNoLockCommands.Run(args),
+            "linux-file-lock-probe" => LinuxFileLockCommands.Run(args),
             _ => invalidArgumentsExitCode
         };
 }

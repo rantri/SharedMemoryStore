@@ -327,6 +327,62 @@ public sealed class LockFreeDisposalIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void HeldColdOpenLockIsScopedToItsNamedStore()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        string blockedName = $"sms-v2-held-cold-store-a-{Guid.NewGuid():N}";
+        string independentName = $"sms-v2-held-cold-store-b-{Guid.NewGuid():N}";
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            MemoryStore.TryCreateOrOpen(
+                Options(blockedName, OpenMode.CreateNew),
+                out MemoryStore? blockedOwner));
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            MemoryStore.TryCreateOrOpen(
+                Options(independentName, OpenMode.CreateNew),
+                out MemoryStore? independentOwner));
+        Assert.NotNull(blockedOwner);
+        Assert.NotNull(independentOwner);
+
+        try
+        {
+            using var held = new DedicatedColdSynchronizationHolder(blockedName);
+            Assert.Equal(
+                StoreOpenStatus.StoreBusy,
+                MemoryStore.TryCreateOrOpen(
+                    Options(blockedName, OpenMode.OpenExisting),
+                    StoreWaitOptions.NoWait,
+                    out MemoryStore? blockedOpen));
+            Assert.Null(blockedOpen);
+
+            Assert.Equal(
+                StoreOpenStatus.Success,
+                MemoryStore.TryCreateOrOpen(
+                    Options(independentName, OpenMode.OpenExisting),
+                    out MemoryStore? independentOpen));
+            using (independentOpen)
+            {
+                Assert.Equal(StoreStatus.Success, independentOpen!.TryPublish(Key(801), [8]));
+                Assert.Equal(StoreStatus.Success, independentOpen.TryAcquire(Key(801), out ValueLease lease));
+                Assert.Equal(8, lease.ValueSpan[0]);
+                Assert.Equal(StoreStatus.Success, lease.Release());
+                Assert.Equal(StoreStatus.Success, independentOpen.TryRemove(Key(801)));
+            }
+        }
+        finally
+        {
+            blockedOwner?.Dispose();
+            independentOwner?.Dispose();
+        }
+    }
+
     private static DisposalContext CreateContext(
         DisposalOperation operation,
         CheckpointGate? checkpointGate = null)
