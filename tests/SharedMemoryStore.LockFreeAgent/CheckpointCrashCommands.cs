@@ -255,6 +255,8 @@ internal static class CheckpointCrashCommands
             case LockFreeCheckpointId.DirectoryAfterDescriptorClear:
             case LockFreeCheckpointId.DirectoryAfterOperationValidation:
             case LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation:
+            case LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas:
+            case LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation:
             case LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch:
             case LockFreeCheckpointId.DirectoryAfterInsertBindingChangedStateValidationBeforeReservedPublication:
             case LockFreeCheckpointId.DirectoryAfterInsertCompletionStateValidationBeforeLocationRead:

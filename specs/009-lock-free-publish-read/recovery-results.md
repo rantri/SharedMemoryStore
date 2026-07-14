@@ -1,14 +1,30 @@
 # Lock-Free Checkpoint Crash-Recovery Evidence
 
-## Projection and recovery-window extension (2026-07-14)
+## Directory publication/revalidation extension (2026-07-14)
 
-The append-only catalog now contains 65 checkpoints. IDs 62-65 cover canceled
+The append-only catalog now contains 67 checkpoints. Checkpoint 66 pauses after
+an Empty-location source tuple has been revalidated and before the location CAS;
+checkpoint 67 pauses after location publication and before source
+revalidation. They make cancellation handoff, first-publisher arbitration,
+post-CAS withdrawal, alternate-location cleanup, and generation-reuse behavior
+crash-observable through the production callback.
+
+Focused Release runs of the complete current catalog passed 67/67 on Windows
+x64 and 67/67 on Linux x64 (WSL2). The corresponding final 8-process fixed-key
+churn regression passed on both platforms, and the full Release aggregate on
+each platform passed 985/985 tests with zero failures or skips. These worktree
+runs establish implementation/review closure; the immutable final qualification
+workflow remains the release-evidence authority.
+
+## Projection and recovery-window extension (2026-07-14, historical)
+
+At this intermediate stage the append-only catalog contained 65 checkpoints.
+IDs 62-65 covered canceled
 insert cleanup, the no-active-lease reclaim proof, participant generation
 advance, and the lease-projection metadata/control revalidation window. A
-focused Release run of the complete current catalog passed 65/65 on Windows
+focused Release run of that complete catalog passed 65/65 on Windows
 x64. The earlier Linux x64 run below covered the then-current 61-entry catalog;
-the final qualification workflow owns Linux evidence for the four appended
-entries.
+the current 67-entry result above supersedes that former Linux gap.
 
 ## PID-namespace checkpoint extension (2026-07-14)
 
@@ -98,9 +114,11 @@ required all recovery passes to converge without a failed-recovery count.
   slot/lease capacity, invalidated the live owner, or prevented unrelated-key
   progress.
 
-## Platform qualification boundary
+## Original platform qualification boundary (2026-07-13)
 
-This run qualifies the portable checkpoint pause and process-kill recovery mode
+This historical run qualified the portable checkpoint pause and process-kill recovery mode
 on the current Windows x64 host. Linux x64 `SIGSTOP`/`SIGCONT` and Docker
 pause/resume/kill were not available in this Windows run and remain **not
-qualified**, not passed, until their separate Linux evidence jobs execute.
+qualified** by this historical section; the later Linux current-catalog result
+is recorded above, while final platform qualification remains machine-derived
+from the immutable release evidence.

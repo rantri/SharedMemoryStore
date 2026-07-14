@@ -17,19 +17,23 @@ namespace SharedMemoryStore.LockFree;
 /// </summary>
 internal static class LockFreeStoreEngine
 {
-    internal static StoreOpenStatus TryCreateOrOpen(
+    internal static StoreOpenStatus TryCreateOrOpenUnderColdGate(
         SharedMemoryStoreOptions options,
         StoreWaitOptions waitOptions,
+        long waitStartTimestamp,
         MemoryMappedStoreRegion region,
         ISharedStoreSynchronization coldSynchronization,
+        RegionOpenDisposition disposition,
         out IStoreEngine? engine)
     {
         NoOpLockFreeCheckpoint checkpoint = default;
-        StoreOpenStatus status = LockFreeStoreEngine<NoOpLockFreeCheckpoint>.TryCreateOrOpen(
+        StoreOpenStatus status = LockFreeStoreEngine<NoOpLockFreeCheckpoint>.TryCreateOrOpenUnderColdGate(
             options,
             waitOptions,
+            waitStartTimestamp,
             region,
             coldSynchronization,
+            disposition,
             checkpoint,
             out LockFreeStoreEngine<NoOpLockFreeCheckpoint>? concrete);
         engine = concrete;
@@ -156,16 +160,20 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
 
     void ILockFreeCheckpointEmitter.ReachCheckpoint(LockFreeCheckpointId checkpoint) => Reach(checkpoint);
 
-    internal static StoreOpenStatus TryCreateOrOpen(
+    internal static StoreOpenStatus TryCreateOrOpenUnderColdGate(
         SharedMemoryStoreOptions options,
         StoreWaitOptions waitOptions,
+        long waitStartTimestamp,
         MemoryMappedStoreRegion region,
         ISharedStoreSynchronization coldSynchronization,
+        RegionOpenDisposition disposition,
         TCheckpoint checkpoint,
         out LockFreeStoreEngine<TCheckpoint>? engine)
     {
         engine = null;
-        LockFreeOperationBudget operationBudget = LockFreeOperationBudget.Start(waitOptions);
+        LockFreeOperationBudget operationBudget = LockFreeOperationBudget.Start(
+            waitOptions,
+            waitStartTimestamp);
         if (!LayoutV2Constants.IsSupportedArchitecture(RuntimeInformation.ProcessArchitecture))
         {
             return StoreOpenStatus.UnsupportedPlatform;
@@ -192,17 +200,10 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
             return StoreOpenStatus.InvalidOptions;
         }
 
-        StoreStatus remainingStatus = operationBudget.TryGetRemainingWaitOptions(
-            out StoreWaitOptions remainingWait);
+        StoreStatus remainingStatus = operationBudget.TryGetRemainingWaitOptions(out _);
         if (remainingStatus != StoreStatus.Success)
         {
             return ToOpenStatus(remainingStatus);
-        }
-
-        StoreStatus enterStatus = coldSynchronization.TryEnter(remainingWait);
-        if (enterStatus != StoreStatus.Success)
-        {
-            return ToOpenStatus(enterStatus);
         }
 
         try
@@ -214,12 +215,27 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
 
             ref StoreHeaderV2 header = ref Header(region);
             uint observedMagic = header.Magic;
-            bool initialize = options.OpenMode == OpenMode.CreateNew
-                || (options.OpenMode == OpenMode.CreateOrOpen && observedMagic == 0);
+            bool initialize = disposition == RegionOpenDisposition.CreatedNew;
 
-            if (options.OpenMode == OpenMode.OpenExisting && observedMagic == 0)
+            if (initialize && options.OpenMode == OpenMode.OpenExisting)
             {
                 return StoreOpenStatus.IncompatibleLayout;
+            }
+
+            if (!initialize && options.OpenMode == OpenMode.CreateNew)
+            {
+                return StoreOpenStatus.AlreadyExists;
+            }
+
+            if (!initialize && observedMagic == 0)
+            {
+                // The existing unpublished region may still be owned by an
+                // older creator that mapped before taking the named gate. This
+                // process cannot prove initialization ownership and therefore
+                // must never clear or publish the header.
+                return options.OpenMode == OpenMode.CreateOrOpen
+                    ? StoreOpenStatus.StoreBusy
+                    : StoreOpenStatus.IncompatibleLayout;
             }
 
             if (initialize)
@@ -346,10 +362,6 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
         catch (Exception)
         {
             return StoreOpenStatus.MappingFailed;
-        }
-        finally
-        {
-            coldSynchronization.Exit();
         }
     }
 

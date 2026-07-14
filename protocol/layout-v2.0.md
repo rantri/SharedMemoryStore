@@ -238,6 +238,31 @@ exact full-word CAS. A helper paused across reclaim/reuse cannot match a newer
 lifecycle; any old binding it installed remains generation-tagged and may be
 exactly rolled back or helped clear without touching the newer generation.
 
+For directory-location publication, the validated tuple is the canonical
+mutation word, exact operation word, current location word, slot control,
+immutable directory binding, and selected or competing target cells. A helper
+MUST NOT report terminal corruption until two acquire collections return the
+same tuple, exact no-op compare/exchanges confirm every atomic member, and a
+fresh immutable-binding read still agrees. A lost comparison proves concurrent
+progress and requires retry.
+
+Cancellation may hand an Insert to `Unlink/Prepared`. At that handoff, an empty
+target or structurally valid different in-range binding is legal target-loss
+progress, while a malformed or out-of-range target is corruption. The first
+valid `Unlink/Prepared` location publication wins; a losing publisher may
+exact-clear only its distinct recovered old binding. `Unlink/TargetSelected`
+MUST tolerate a structurally valid same-generation alternate location and
+exact-clean its selected and alternate old-binding witnesses plus the alternate
+location, preserving empty cells and valid replacements. Source loss after a
+location CAS withdraws only the publisher's exact old target and location; a
+committed Insert successor or valid replacement is preserved.
+
+An older location is stale exact-cleanable residue. A future location proves
+benign reuse only when another old-tuple member has moved; a future location
+inside the confirmed exact old-generation tuple is corruption and remains
+untouched for diagnosis. This protocol changes validation and helping only; the
+directory-operation and directory-location offsets and encodings are unchanged.
+
 An atomic directory-reference read is a cached witness. The exact raw source
 word and its decoded slot binding are separate: a primary/overflow word equals
 the binding, while a spill-summary source is the complete encoded

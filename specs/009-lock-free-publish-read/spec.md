@@ -232,6 +232,11 @@ and unchanged key-value semantics.
    process by a different PID-namespace view, **When** that process performs a
    cold lifecycle operation, **Then** the live mapping is retained without
    adding synchronization to any key-value operation.
+6. **Given** a physical region whose header is still unpublished and zero,
+   **When** any same-profile or opposite-profile client attempts to open it,
+   **Then** the opener leaves every byte unchanged and returns `AlreadyExists`
+   for `CreateNew`, `StoreBusy` for `CreateOrOpen`, or `IncompatibleLayout` for
+   `OpenExisting`.
 
 ### Edge Cases
 
@@ -279,6 +284,10 @@ and unchanged key-value semantics.
   state becomes available.
 - A store handle is disposed while another local operation is active, while
   other process handles remain live, or while borrowed memory is retained.
+- A creator pauses after exposing a physical region but before publishing its
+  header, including an older client that mapped before entering cold
+  coordination; another opener must not infer initialization ownership from
+  open mode, dimensions, profile, or zero bytes.
 - Diagnostics observe counters and gauges while they change concurrently and
   therefore may be moment-in-time rather than transactionally exact.
 - A broker delivers a missing, removed, duplicate, or delayed key; the store
@@ -291,9 +300,11 @@ and unchanged key-value semantics.
 The following outcome sets make same-key and lifecycle races testable. A caller
 may additionally receive its documented input-validation, disposed,
 incompatible, access-denied, unsupported-platform, or corruption outcome when
-that condition genuinely applies. `StoreBusy` is allowed only when the caller's
-bounded local retry budget is exhausted; it does not mean another process owns
-a global store lock.
+that condition genuinely applies. Steady-state `StoreStatus.StoreBusy` is
+allowed only when the caller's bounded local retry budget is exhausted; it does
+not mean another process owns a global store lock. Cold
+`StoreOpenStatus.StoreBusy` may additionally report cold-gate contention or an
+existing unpublished region whose initialization ownership cannot be proven.
 
 | Concurrent actions | Allowed observable outcome |
 |---|---|
@@ -542,6 +553,13 @@ a global store lock.
   `Initializing` slot can no longer become `Reserved`, and an exact versioned
   `Empty(binding)` published by cancellation MUST suppress an older overflow
   setter without being reclassified as malformed state. A helper that resumes
+  after validating `Insert` MAY exact-clear that insert's target after
+  cancellation has handed the same canonical mutation to `Unlink/Prepared`.
+  A delayed unlink location publisher that revalidates the canceling
+  `Aborting`/`Reclaiming` lifecycle MUST treat an empty target or a structurally
+  valid different in-range binding as legal progress and MUST preserve the
+  replacement; a stable malformed or mapping-out-of-range target remains
+  `CorruptStore`. A helper that resumes
   after cancellation, reclaim, or reuse MUST remain generation-fenced and MUST
   NOT alter the later lifecycle. Losing `Initializing -> Reserved` to exact
   `Aborting`/`Reclaiming`, terminal retirement, or a strictly later generation
@@ -583,7 +601,26 @@ a global store lock.
   reference word, unlink/reclaim/reuse or summary replacement has overtaken the
   cached observation and the caller MUST perform a budgeted fresh lookup or
   maintenance retry instead of reporting corruption. Only an unchanged exact
-  reference word around a repeated invalid slot snapshot may fail closed. Every
+  reference word around a repeated invalid slot snapshot may fail closed.
+  Directory-location publication MUST apply the same rule to one joint tuple:
+  canonical mutation, exact operation, current location, slot control,
+  immutable directory binding, and every selected or competing target cell.
+  Before returning `CorruptStore`, two stable acquire collects MUST be followed
+  by exact no-op compare/exchange confirmation of the atomic tuple members and
+  a fresh immutable-binding read; any loss is progress or retry, not corruption.
+  For `Unlink/Prepared`, the first valid location publication wins arbitration;
+  a losing helper MUST exact-clear only its distinct recovered old binding and
+  preserve an empty or structurally valid replacement target. If
+  `Unlink/TargetSelected` later finds another structurally valid
+  same-generation location, it MUST exact-clean both old-binding witnesses and
+  the alternate location while preserving any replacement it does not own.
+  After a location CAS, loss of the exact unlink source MUST withdraw that
+  helper's exact old target and location; an exact committed `Insert` successor
+  or other valid replacement MUST remain untouched. A structurally valid older
+  location is exact-cleanable residue. A future-generation location is benign
+  reuse only when another member of the old tuple proves movement; if the exact
+  old-generation tuple remains stable around that future location, the shape is
+  corruption and the future word is preserved for diagnosis. Every
   slot control used to classify a live directory reference MUST also have a
   valid generation, state, and owner shape:
   `Initializing`/`Reserved` require a structurally valid configured participant
@@ -635,6 +672,19 @@ a global store lock.
   preserve the malformed record. This per-operation check and the transition
   MUST use only mapped 64-bit atomics and MUST add no OS synchronization,
   process-held lock, or shared hot-path counter.
+- **FR-056**: A cold create/open attempt MUST acquire the platform's required
+  ordered lifecycle coordination before creating, opening, or mapping the
+  physical region and MUST retain that coordination through header
+  initialization or validation and handle registration. Only the attempt that
+  proves it physically created the region MAY initialize an unpublished
+  header; `OpenMode`, requested profile or dimensions, and observed zero bytes
+  MUST NOT confer that authority. An already-existing zero header MUST remain
+  byte-for-byte unchanged and return `AlreadyExists` for `CreateNew`,
+  `StoreBusy` for `CreateOrOpen`, or `IncompatibleLayout` for `OpenExisting`.
+  The caller's original wait and cancellation budget MUST cover the complete
+  cold transaction. Ordered gates MUST be released before failed-open mapped
+  resource cleanup that may re-enter outer lifecycle coordination, and no store
+  handle may escape until resource ownership has been transferred exactly once.
 
 ### Library Contract & Compatibility *(mandatory)*
 
@@ -663,9 +713,11 @@ a global store lock.
 - **LC-008**: Public documentation MUST separate empty/missing, duplicate,
   capacity, pending removal, local contention, timeout, cancellation, disposed,
   incompatible, unsupported recovery, and corruption outcomes.
-- **LC-009**: Resource ownership documentation MUST state who owns each store
+- **LC-009**: Resource ownership documentation MUST state who owns each cold
+  create/open transaction and its physical-initialization authority, store
   handle, reservation, borrowed writable view, read lease, recovery decision,
-  and mapped-memory lifetime.
+  and mapped-memory lifetime, including successful ownership transfer and
+  failed-open cleanup ordering.
 - **LC-010**: C++ and Python implementation of the new layout is outside this
   feature, but the shared-memory visibility, ordering, identity, progress, and
   recovery contracts MUST be documented without relying on managed-object

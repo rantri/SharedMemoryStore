@@ -136,8 +136,18 @@ unchanged. Layout 2.0 uses them as follows:
 | Stale/wrong lease record incarnation | `InvalidLease` or `LeaseAlreadyReleased` according to observable history |
 | Stale/wrong reservation generation | `InvalidReservation` or `ReservationAlreadyCompleted` according to observable history |
 | Requested profile differs from existing mapping | `StoreOpenStatus.IncompatibleLayout` |
+| `CreateNew` finds an existing unpublished zero header | `StoreOpenStatus.AlreadyExists`; existing bytes remain unchanged |
+| `CreateOrOpen` finds an existing unpublished zero header whose initialization ownership cannot be proven | `StoreOpenStatus.StoreBusy`; existing bytes remain unchanged |
+| `OpenExisting` finds an existing unpublished zero header | `StoreOpenStatus.IncompatibleLayout`; existing bytes remain unchanged |
+| Cold coordination cannot be entered within the caller's budget | `StoreOpenStatus.StoreBusy` or `StoreOpenStatus.OperationCanceled` according to the observed bound/cancellation |
 | No free v2 participant record for a new handle | `StoreOpenStatus.ParticipantTableFull` (appended numeric value 11) |
 | Existing v2 store control is `Corrupt` | `StoreOpenStatus.IncompatibleLayout` |
+
+The cold create/open budget begins before lifecycle coordination and covers
+physical discovery or creation, mapping, header work, and handle registration.
+Only the attempt that physically created the region may initialize it. No
+successful handle is returned until that ownership has been transferred and the
+ordered cold gates have been released.
 
 There is no ordinary `IndexFull`: layout 2.0 overflow capacity equals
 `SlotCount`. Failure to place a binding while a value slot is owned is an

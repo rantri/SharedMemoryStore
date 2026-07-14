@@ -16,6 +16,7 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
     private LockFreeCheckpointId? _target;
     private int _targetOccurrence;
     private int _observedTargetOccurrences;
+    private long _targetVersion;
     private long _sequence;
     private bool _disposed;
 
@@ -41,6 +42,7 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
             _target = checkpoint;
             _targetOccurrence = occurrence;
             _observedTargetOccurrences = 0;
+            _targetVersion++;
             _paused.Reset();
             _resume.Reset();
         }
@@ -62,6 +64,36 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
     {
         ThrowIfDisposed();
         _resume.Set();
+    }
+
+    /// <summary>
+    /// Arms the next checkpoint before releasing the invocation currently
+    /// paused by this scheduler. This removes the scheduling gap between a
+    /// Continue call and a subsequent PauseAt call.
+    /// </summary>
+    internal void ContinueAndPauseAt(
+        LockFreeCheckpointId checkpoint,
+        int occurrence = 1)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(occurrence, 1);
+        _ = LockFreeCheckpointCatalog.Get(checkpoint);
+
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!_target.HasValue || !_paused.IsSet)
+            {
+                throw new InvalidOperationException(
+                    "No checkpoint invocation is currently paused.");
+            }
+
+            _target = checkpoint;
+            _targetOccurrence = occurrence;
+            _observedTargetOccurrences = 0;
+            _targetVersion++;
+            _paused.Reset();
+            _resume.Set();
+        }
     }
 
     internal IReadOnlyList<Observation> Snapshot()
@@ -103,6 +135,7 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
     private void Observe(LockFreeCheckpointEntry entry)
     {
         bool pause;
+        long pauseVersion;
         long sequence = Interlocked.Increment(ref _sequence);
         lock (_sync)
         {
@@ -114,6 +147,7 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
             _observations.Add(new Observation(sequence, Environment.CurrentManagedThreadId, entry));
             pause = _target == entry.Id
                 && ++_observedTargetOccurrences == _targetOccurrence;
+            pauseVersion = pause ? _targetVersion : 0;
         }
 
         if (!pause)
@@ -126,9 +160,19 @@ internal sealed class ControlledLockFreeScheduler : IDisposable
 
         lock (_sync)
         {
-            _target = null;
-            _targetOccurrence = 0;
-            _observedTargetOccurrences = 0;
+            if (_targetVersion == pauseVersion)
+            {
+                _target = null;
+                _targetOccurrence = 0;
+                _observedTargetOccurrences = 0;
+            }
+            else
+            {
+                // ContinueAndPauseAt deliberately left a new target armed. The
+                // resumed invocation cannot reach it until this callback
+                // returns, so reset the shared gate here without a race.
+                _resume.Reset();
+            }
         }
     }
 

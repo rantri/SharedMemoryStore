@@ -15,8 +15,39 @@ public sealed class LockFreeChurnIntegrationTests
     private const int ParticipantRecordCount = 8;
     private const int WorkerCount = 2;
     private const int DefaultIterationsPerWorker = 1_024;
+    private const int FixedKeySlotCount = 32;
+    private const int FixedKeyParticipantRecordCount = 16;
+    private const int FixedKeyWorkerCount = 8;
+    private const int FixedKeyTrialCount = 3;
+    private const int FixedKeyIterationsPerWorker = 100_000;
     private static readonly int IterationsPerWorker = GetIterationsPerWorker();
     private static readonly TimeSpan WorkloadTimeout = GetWorkloadTimeout();
+    private static readonly TimeSpan FixedKeyWorkloadTimeout = TimeSpan.FromMinutes(2);
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = Enumerable.Range(1, FixedKeyWorkerCount)
+            .Select(static value => BitConverter.GetBytes((long)value))
+            .ToArray();
+        // SyncProbe worker ids 2, 4, and 7 use catalog keys 3, 5, and 8.
+        // Those exact benchmark keys serialize through canonical bucket 11.
+        int sharedBucket = CanonicalBucket(keys[2], FixedKeySlotCount);
+        Assert.Equal(11, sharedBucket);
+        Assert.Equal(sharedBucket, CanonicalBucket(keys[4], FixedKeySlotCount));
+        Assert.Equal(sharedBucket, CanonicalBucket(keys[7], FixedKeySlotCount));
+
+        for (var trial = 0; trial < FixedKeyTrialCount; trial++)
+        {
+            RunFixedKeyTrial(trial, keys);
+        }
+    }
 
     [Fact]
     [Trait("Category", "Integration")]
@@ -124,16 +155,121 @@ public sealed class LockFreeChurnIntegrationTests
         }
     }
 
+    private static void RunFixedKeyTrial(int trial, byte[][] keys)
+    {
+        string name = $"sms-v2-fixed-key-churn-{trial}-{Guid.NewGuid():N}";
+        using var store = CreateStore(
+            name,
+            FixedKeySlotCount,
+            FixedKeyParticipantRecordCount);
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"sms-v2-fixed-key-gate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string goPath = Path.Combine(directory, "go");
+        string[] readyPaths = Enumerable.Range(0, FixedKeyWorkerCount)
+            .Select(index => Path.Combine(directory, $"worker-{index}.ready"))
+            .ToArray();
+        Process[] workers = Enumerable.Range(0, FixedKeyWorkerCount)
+            .Select(worker => StartAgent(ChurnCommand(
+                name,
+                worker,
+                [keys[worker]],
+                readyPaths[worker],
+                goPath,
+                FixedKeySlotCount,
+                FixedKeyParticipantRecordCount,
+                FixedKeyIterationsPerWorker)))
+            .ToArray();
+
+        try
+        {
+            WaitForReadyFiles(readyPaths, workers, FixedKeyWorkloadTimeout);
+            File.WriteAllText(goPath, "go");
+            ChurnResult[] results = WaitForWorkers(workers, FixedKeyWorkloadTimeout)
+                .Select(ParseResult)
+                .ToArray();
+            Assert.Equal(FixedKeyWorkerCount, results.Length);
+            Assert.All(results, result =>
+            {
+                Assert.Equal(FixedKeyIterationsPerWorker, result.Iterations);
+                Assert.Equal(1, result.CollisionKeyCount);
+            });
+
+            // End-of-wave capacity recovery proves no failed delayed helper
+            // left a target cell, location, slot, or terminal corruption latch
+            // behind after the process-level collision schedule.
+            byte[][] capacityKeys = Enumerable.Range(0, FixedKeySlotCount)
+                .Select(index => BitConverter.GetBytes(0x1000_0000L + index))
+                .ToArray();
+            for (var index = 0; index < capacityKeys.Length; index++)
+            {
+                Assert.Equal(StoreStatus.Success, store.TryPublish(capacityKeys[index], [(byte)index]));
+            }
+
+            Assert.Equal(StoreStatus.StoreFull, store.TryPublish([0xff], [0xff]));
+            foreach (byte[] key in capacityKeys)
+            {
+                Assert.Equal(StoreStatus.Success, store.TryRemove(key));
+            }
+
+            Assert.Equal(StoreStatus.Success, store.TryGetDiagnostics(out var final));
+            Assert.Equal(FixedKeySlotCount, final.FreeSlotCount);
+            Assert.Equal(0, final.PublishedSlotCount);
+            Assert.Equal(0, final.PendingRemovalCount);
+            Assert.Equal(0, final.ActiveLeaseCount);
+            Assert.Equal(0, final.ActiveReservationCount);
+            Assert.Equal(0, final.InitializingSlotCount);
+            Assert.Equal(0, final.ReservedSlotCount);
+            Assert.Equal(0, final.ReclaimingSlotCount);
+            Assert.Equal(0, final.PrimaryDirectoryOccupancy);
+            Assert.Equal(0, final.SpilledBucketCount);
+            Assert.Equal(0, final.OverflowDirectoryOccupancy);
+        }
+        finally
+        {
+            try
+            {
+                File.WriteAllText(goPath, "go");
+            }
+            catch
+            {
+                // Best effort before worker termination.
+            }
+
+            foreach (Process worker in workers)
+            {
+                Kill(worker);
+                worker.Dispose();
+            }
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch
+            {
+                // Unique temporary artifacts can be reclaimed after process exit.
+            }
+        }
+    }
+
     private static MemoryStore CreateStore(string name)
+        => CreateStore(name, SlotCount, ParticipantRecordCount);
+
+    private static MemoryStore CreateStore(
+        string name,
+        int slotCount,
+        int participantRecordCount)
     {
         var options = SharedMemoryStoreOptions.CreateLockFree(
             name,
-            SlotCount,
+            slotCount,
             MaxValueBytes,
             MaxDescriptorBytes,
             MaxKeyBytes,
             LeaseRecordCount,
-            ParticipantRecordCount,
+            participantRecordCount,
             OpenMode.CreateNew,
             enableLeaseRecovery: true);
         StoreOpenStatus status = MemoryStore.TryCreateOrOpen(options, out var store);
@@ -147,17 +283,36 @@ public sealed class LockFreeChurnIntegrationTests
         byte[][] keys,
         string readyPath,
         string goPath) =>
+        ChurnCommand(
+            name,
+            workerId,
+            keys,
+            readyPath,
+            goPath,
+            SlotCount,
+            ParticipantRecordCount,
+            IterationsPerWorker);
+
+    private static string[] ChurnCommand(
+        string name,
+        int workerId,
+        byte[][] keys,
+        string readyPath,
+        string goPath,
+        int slotCount,
+        int participantRecordCount,
+        int iterations) =>
     [
         "churn-worker",
         name,
-        SlotCount.ToString(CultureInfo.InvariantCulture),
+        slotCount.ToString(CultureInfo.InvariantCulture),
         MaxValueBytes.ToString(CultureInfo.InvariantCulture),
         MaxDescriptorBytes.ToString(CultureInfo.InvariantCulture),
         MaxKeyBytes.ToString(CultureInfo.InvariantCulture),
         LeaseRecordCount.ToString(CultureInfo.InvariantCulture),
-        ParticipantRecordCount.ToString(CultureInfo.InvariantCulture),
+        participantRecordCount.ToString(CultureInfo.InvariantCulture),
         workerId.ToString(CultureInfo.InvariantCulture),
-        IterationsPerWorker.ToString(CultureInfo.InvariantCulture),
+        iterations.ToString(CultureInfo.InvariantCulture),
         string.Join(';', keys.Select(Convert.ToHexString)),
         readyPath,
         goPath
@@ -251,9 +406,12 @@ public sealed class LockFreeChurnIntegrationTests
         return keys.ToArray();
     }
 
-    private static int CanonicalBucket(ReadOnlySpan<byte> key)
+    private static int CanonicalBucket(ReadOnlySpan<byte> key) =>
+        CanonicalBucket(key, SlotCount);
+
+    private static int CanonicalBucket(ReadOnlySpan<byte> key, int slotCount)
     {
-        int primaryLanes = NextPowerOfTwo(Math.Max(32, SlotCount * 4));
+        int primaryLanes = NextPowerOfTwo(Math.Max(32, slotCount * 4));
         int bucketMask = (primaryLanes / 8) - 1;
         return (int)(Mix(Hash(key)) & (uint)bucketMask);
     }

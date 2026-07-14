@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SharedMemoryStore.Engines;
+using SharedMemoryStore.Interop;
 using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
@@ -54,6 +55,758 @@ public sealed class LockFreeInsertCancellationRaceTests
             expectedSlotState: LockFreeSlotTable.ReservedState,
             expectedStatus: StoreStatus.Success,
             key: [0x34]);
+
+    [Theory]
+    [InlineData(TargetAfterCancellation.Empty)]
+    [InlineData(TargetAfterCancellation.ValidReplacement)]
+    [InlineData(TargetAfterCancellation.Malformed)]
+    [InlineData(TargetAfterCancellation.OutOfRange)]
+    public async Task DelayedInsertCancellationTargetHandoffIsClassifiedExactly(
+        TargetAfterCancellation targetAfterCancellation)
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = GenerateBucketPairCollisions(count: RaceSlotCount + 2, RaceSlotCount);
+        byte[] key = keys[0];
+        string name = $"sms-v2-insert-unlink-handoff-{Guid.NewGuid():N}";
+        using var insertScheduler = new ControlledLockFreeScheduler();
+        using var unlinkScheduler = new ControlledLockFreeScheduler();
+        using MemoryStore owner = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.CreateNew,
+            insertScheduler);
+        using MemoryStore unlinker = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.OpenExisting,
+            unlinkScheduler);
+        LockFreeKeyDirectory ownerDirectory = ReadDirectory(owner);
+        LockFreeKeyDirectory unlinkDirectory = ReadDirectory(unlinker);
+        LockFreeSlotTable slots = ReadSlots(owner);
+
+        Assert.Equal(
+            StoreStatus.Success,
+            owner.TryReserve(
+                key,
+                payloadLength: 1,
+                descriptor: default,
+                StoreWaitOptions.Infinite,
+                out ValueReservation reservation));
+        ReservationHandle handle = reservation.HandleForEngine;
+        Assert.Equal(
+            StoreStatus.Success,
+            ownerDirectory.TryLookup(
+                key,
+                StoreKey.Hash(key),
+                LockFreeOperationBudget.UnboundedScan,
+                out ulong binding,
+                out DirectoryLocation location));
+        Assert.Equal(handle.SlotBinding, binding);
+        Assert.Equal(1, location.Kind);
+        Assert.Equal(binding, ReadDirectoryCell(ownerDirectory, location));
+
+        // Recreate the reachable window after an insert helper has claimed its
+        // exact target cell but before it publishes DirectoryLocation.  The
+        // successful reservation supplies fully initialized immutable slot
+        // metadata; only the three atomic protocol words are rewound.
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+        IndexBinding decoded = IndexBinding.Decode(binding);
+        int slotIndex = decoded.SlotIndex;
+        ulong targetSelected = DirectoryOperation.Encode(
+            intent: 1,
+            phase: 2,
+            location.Kind,
+            location.Index,
+            decoded.Generation);
+        AtomicControlWord.StoreRelease(ref slots.Slot(slotIndex).DirectoryLocation, 0);
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryOperation,
+            unchecked((long)targetSelected));
+        WriteCanonicalMutation(ownerDirectory, CanonicalBucket, binding);
+
+        insertScheduler.PauseAt(
+            LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> delayedInsert = Task.Run(() =>
+        {
+            _ = LockFreeCorruptionTrace.Consume();
+            InstrumentedLockFreeCheckpoint checkpoint =
+                insertScheduler.CreateInstrumentedCheckpoint();
+            StoreStatus status = ownerDirectory.HelpMutation(
+                CanonicalBucket,
+                LockFreeOperationBudget.UnboundedScan,
+                ref checkpoint,
+                maxSteps: 1);
+            return (status, LockFreeCorruptionTrace.Consume());
+        });
+
+        var insertResumed = false;
+        var unlinkResumed = false;
+        Task<(StoreStatus Status, string? CorruptionOrigin)>? delayedUnlink = null;
+        try
+        {
+            Assert.True(insertScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+            Assert.Equal(targetSelected, ReadDirectoryOperation(slots, slotIndex));
+
+            unlinkScheduler.PauseAt(
+                LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation);
+            delayedUnlink = Task.Run(() =>
+            {
+                _ = LockFreeCorruptionTrace.Consume();
+                InstrumentedLockFreeCheckpoint checkpoint =
+                    unlinkScheduler.CreateInstrumentedCheckpoint();
+                StoreStatus status = unlinkDirectory.TryUnlink(
+                    binding,
+                    LockFreeOperationBudget.UnboundedScan,
+                    ref checkpoint);
+                return (status, LockFreeCorruptionTrace.Consume());
+            });
+            Assert.True(unlinkScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+
+            DirectoryOperation preparedUnlink = DirectoryOperation.Decode(
+                ReadDirectoryOperation(slots, slotIndex));
+            Assert.Equal(2, preparedUnlink.Intent);
+            Assert.Equal(1, preparedUnlink.Phase);
+            Assert.Equal(
+                0,
+                AtomicControlWord.LoadAcquire(ref slots.Slot(slotIndex).DirectoryLocation));
+            Assert.Equal(binding, ReadDirectoryCell(ownerDirectory, location));
+
+            // The delayed helper still dispatches its validated Insert snapshot.
+            // CancelInsert exact-clears the target, but cannot replace the newer
+            // Unlink/Prepared descriptor that now owns the canonical mutation.
+            insertScheduler.Continue();
+            insertResumed = true;
+            (StoreStatus insertStatus, string? insertCorruption) =
+                await delayedInsert.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.StoreBusy, insertStatus);
+            Assert.Null(insertCorruption);
+            Assert.Equal(0UL, ReadDirectoryCell(ownerDirectory, location));
+            Assert.Equal(preparedUnlink.Value, ReadDirectoryOperation(slots, slotIndex));
+            Assert.Equal(binding, ownerDirectory.ReadCanonicalMutation(CanonicalBucket));
+
+            ulong replacement = targetAfterCancellation switch
+            {
+                TargetAfterCancellation.Empty => 0,
+                TargetAfterCancellation.ValidReplacement => IndexBinding.Encode(
+                    (decoded.SlotIndex + 1) % RaceSlotCount,
+                    decoded.Generation),
+                TargetAfterCancellation.Malformed => ulong.MaxValue,
+                TargetAfterCancellation.OutOfRange => IndexBinding.Encode(
+                    RaceSlotCount,
+                    decoded.Generation),
+                _ => throw new ArgumentOutOfRangeException(nameof(targetAfterCancellation)),
+            };
+            if (replacement != 0)
+            {
+                WriteDirectoryCell(ownerDirectory, location, replacement);
+            }
+
+            unlinkScheduler.Continue();
+            unlinkResumed = true;
+            (StoreStatus unlinkStatus, string? unlinkCorruption) =
+                await delayedUnlink.WaitAsync(TimeSpan.FromSeconds(5));
+
+            if (targetAfterCancellation is
+                TargetAfterCancellation.Malformed or TargetAfterCancellation.OutOfRange)
+            {
+                Assert.Equal(StoreStatus.CorruptStore, unlinkStatus);
+                Assert.NotNull(unlinkCorruption);
+                Assert.Equal(replacement, ReadDirectoryCell(ownerDirectory, location));
+                return;
+            }
+
+            Assert.Equal(StoreStatus.Success, unlinkStatus);
+            Assert.Null(unlinkCorruption);
+            Assert.Equal(replacement, ReadDirectoryCell(ownerDirectory, location));
+            if (replacement != 0)
+            {
+                // The delayed unlink must preserve a valid winner it does not
+                // own.  The test supplied that stand-in binding directly, so
+                // it also withdraws it before asserting old-slot reclamation.
+                WriteDirectoryCell(ownerDirectory, location, binding: 0);
+            }
+        }
+        finally
+        {
+            if (!insertResumed)
+            {
+                insertScheduler.Continue();
+            }
+
+            if (!unlinkResumed)
+            {
+                unlinkScheduler.Continue();
+            }
+        }
+
+        Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+        Assert.Equal(StoreStatus.NotFound, owner.TryAcquire(key, out _));
+        AssertDirectoryDrained(ownerDirectory);
+
+        byte[] laterKey = keys[1];
+        Assert.Equal(
+            StoreStatus.Success,
+            owner.TryPublish(laterKey, [0xA5], default, StoreWaitOptions.Infinite));
+        Assert.Equal(StoreStatus.Success, owner.TryAcquire(laterKey, out ValueLease laterLease));
+        Assert.Equal(0xA5, laterLease.ValueSpan[0]);
+        Assert.Equal(StoreStatus.Success, laterLease.Release());
+        Assert.Equal(StoreStatus.Success, owner.TryRemove(laterKey, StoreWaitOptions.Infinite));
+        AssertDirectoryDrained(ownerDirectory);
+        AssertAllSlotCapacityReusable(owner, keys, RaceSlotCount);
+    }
+
+    [Fact]
+    public async Task PreparedUnlinkFirstLocationPublisherWinsAndWithdrawsCompetingBinding()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = GenerateBucketPairCollisions(count: RaceSlotCount + 2, RaceSlotCount);
+        byte[] key = keys[0];
+        string name = $"sms-v2-unlink-location-arbitration-{Guid.NewGuid():N}";
+        using var firstScheduler = new ControlledLockFreeScheduler();
+        using var competingScheduler = new ControlledLockFreeScheduler();
+        using MemoryStore firstStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.CreateNew,
+            firstScheduler);
+        using MemoryStore competingStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.OpenExisting,
+            competingScheduler);
+        LockFreeKeyDirectory firstDirectory = ReadDirectory(firstStore);
+        LockFreeKeyDirectory competingDirectory = ReadDirectory(competingStore);
+        LockFreeSlotTable slots = ReadSlots(firstStore);
+
+        Assert.Equal(
+            StoreStatus.Success,
+            firstStore.TryReserve(
+                key,
+                payloadLength: 1,
+                descriptor: default,
+                StoreWaitOptions.Infinite,
+                out ValueReservation reservation));
+        ReservationHandle handle = reservation.HandleForEngine;
+        Assert.Equal(
+            StoreStatus.Success,
+            firstDirectory.TryLookup(
+                key,
+                StoreKey.Hash(key),
+                LockFreeOperationBudget.UnboundedScan,
+                out ulong binding,
+                out DirectoryLocation earlierLocation));
+        Assert.Equal(handle.SlotBinding, binding);
+        Assert.Equal(1, earlierLocation.Kind);
+        Assert.Equal(0, earlierLocation.Index % LayoutV2Constants.PrimaryLanesPerBucket);
+
+        IndexBinding decoded = IndexBinding.Decode(binding);
+        int slotIndex = decoded.SlotIndex;
+        DirectoryLocation laterLocation = DirectoryLocation.Decode(DirectoryLocation.Encode(
+            earlierLocation.Kind,
+            earlierLocation.Index + 1,
+            decoded.Generation));
+        Assert.Equal(
+            earlierLocation.Index / LayoutV2Constants.PrimaryLanesPerBucket,
+            laterLocation.Index / LayoutV2Constants.PrimaryLanesPerBucket);
+
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+        WriteDirectoryCell(firstDirectory, earlierLocation, binding: 0);
+        WriteDirectoryCell(firstDirectory, laterLocation, binding);
+        ulong prepared = DirectoryOperation.Encode(
+            intent: 2,
+            phase: 1,
+            targetKind: 0,
+            targetIndex: 0,
+            decoded.Generation);
+        AtomicControlWord.StoreRelease(ref slots.Slot(slotIndex).DirectoryLocation, 0);
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryOperation,
+            unchecked((long)prepared));
+        WriteCanonicalMutation(firstDirectory, CanonicalBucket, binding);
+
+        firstScheduler.PauseAt(
+            LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> firstTask =
+            UnlinkAsync(firstDirectory, binding, firstScheduler);
+        Assert.True(firstScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(binding, ReadDirectoryCell(firstDirectory, laterLocation));
+
+        // The second helper starts later but finds the earlier scan lane. Both
+        // helpers have now recovered a different exact target while the shared
+        // location remains empty.
+        WriteDirectoryCell(firstDirectory, earlierLocation, binding);
+        competingScheduler.PauseAt(
+            LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> competingTask =
+            UnlinkAsync(competingDirectory, binding, competingScheduler);
+        Assert.True(competingScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+
+        var firstResumed = false;
+        var competingResumed = false;
+        try
+        {
+            // Arm the descriptor-selection pause before releasing the first
+            // publisher, leaving no scheduler gap after its Location CAS.
+            firstScheduler.ContinueAndPauseAt(
+                LockFreeCheckpointId.DirectoryAfterLocationValidation);
+            firstResumed = true;
+            Assert.True(firstScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+            Assert.Equal(laterLocation.Value, ReadDirectoryLocation(slots, slotIndex));
+            Assert.Equal(prepared, ReadDirectoryOperation(slots, slotIndex));
+
+            competingScheduler.Continue();
+            competingResumed = true;
+            (StoreStatus competingStatus, string? competingCorruption) =
+                await competingTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.Success, competingStatus);
+            Assert.Null(competingCorruption);
+            Assert.Equal(0UL, ReadDirectoryCell(firstDirectory, earlierLocation));
+
+            firstScheduler.Continue();
+            (StoreStatus firstStatus, string? firstCorruption) =
+                await firstTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.Success, firstStatus);
+            Assert.Null(firstCorruption);
+        }
+        finally
+        {
+            if (!firstResumed || !firstTask.IsCompleted)
+            {
+                firstScheduler.Continue();
+            }
+
+            if (!competingResumed)
+            {
+                competingScheduler.Continue();
+            }
+        }
+
+        Assert.Equal(0UL, ReadDirectoryCell(firstDirectory, earlierLocation));
+        Assert.Equal(0UL, ReadDirectoryCell(firstDirectory, laterLocation));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(0UL, ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(0UL, firstDirectory.ReadCanonicalMutation(CanonicalBucket));
+        AssertDirectoryDrained(firstDirectory);
+        Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+        AssertAllSlotCapacityReusable(firstStore, keys, RaceSlotCount);
+    }
+
+    [Fact]
+    public async Task DelayedInsertCleanupAndLatePublisherConvergeAfterTargetSelection()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = GenerateBucketPairCollisions(count: RaceSlotCount + 2, RaceSlotCount);
+        byte[] key = keys[0];
+        string name = $"sms-v2-unlink-target-handoff-{Guid.NewGuid():N}";
+        using var insertScheduler = new ControlledLockFreeScheduler();
+        using var firstScheduler = new ControlledLockFreeScheduler();
+        using var lateScheduler = new ControlledLockFreeScheduler();
+        using MemoryStore insertStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.CreateNew,
+            insertScheduler);
+        using MemoryStore firstStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.OpenExisting,
+            firstScheduler);
+        using MemoryStore lateStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.OpenExisting,
+            lateScheduler);
+        LockFreeKeyDirectory insertDirectory = ReadDirectory(insertStore);
+        LockFreeKeyDirectory firstDirectory = ReadDirectory(firstStore);
+        LockFreeKeyDirectory lateDirectory = ReadDirectory(lateStore);
+        LockFreeSlotTable slots = ReadSlots(insertStore);
+
+        Assert.Equal(
+            StoreStatus.Success,
+            insertStore.TryReserve(
+                key,
+                payloadLength: 1,
+                descriptor: default,
+                StoreWaitOptions.Infinite,
+                out ValueReservation reservation));
+        ReservationHandle handle = reservation.HandleForEngine;
+        Assert.Equal(
+            StoreStatus.Success,
+            insertDirectory.TryLookup(
+                key,
+                StoreKey.Hash(key),
+                LockFreeOperationBudget.UnboundedScan,
+                out ulong binding,
+                out DirectoryLocation selectedLocation));
+        Assert.Equal(handle.SlotBinding, binding);
+        Assert.Equal(1, selectedLocation.Kind);
+        Assert.Equal(0, selectedLocation.Index % LayoutV2Constants.PrimaryLanesPerBucket);
+
+        IndexBinding decoded = IndexBinding.Decode(binding);
+        int slotIndex = decoded.SlotIndex;
+        DirectoryLocation lateLocation = DirectoryLocation.Decode(DirectoryLocation.Encode(
+            selectedLocation.Kind,
+            selectedLocation.Index + 1,
+            decoded.Generation));
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+        ulong insertTargetSelected = DirectoryOperation.Encode(
+            intent: 1,
+            phase: 2,
+            selectedLocation.Kind,
+            selectedLocation.Index,
+            decoded.Generation);
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryOperation,
+            unchecked((long)insertTargetSelected));
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryLocation,
+            unchecked((long)selectedLocation.Value));
+        WriteDirectoryCell(insertDirectory, selectedLocation, binding);
+        WriteDirectoryCell(insertDirectory, lateLocation, binding: 0);
+        WriteCanonicalMutation(insertDirectory, CanonicalBucket, binding);
+
+        insertScheduler.PauseAt(
+            LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> delayedInsert = Task.Run(() =>
+        {
+            _ = LockFreeCorruptionTrace.Consume();
+            InstrumentedLockFreeCheckpoint checkpoint =
+                insertScheduler.CreateInstrumentedCheckpoint();
+            StoreStatus status = insertDirectory.HelpMutation(
+                CanonicalBucket,
+                LockFreeOperationBudget.UnboundedScan,
+                ref checkpoint,
+                maxSteps: 1);
+            return (status, LockFreeCorruptionTrace.Consume());
+        });
+        Assert.True(insertScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+
+        firstScheduler.PauseAt(LockFreeCheckpointId.DirectoryAfterLocationValidation);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> firstTask =
+            UnlinkAsync(firstDirectory, binding, firstScheduler);
+        Assert.True(firstScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+        DirectoryOperation prepared = DirectoryOperation.Decode(
+            ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(2, prepared.Intent);
+        Assert.Equal(1, prepared.Phase);
+        Assert.Equal(selectedLocation.Value, ReadDirectoryLocation(slots, slotIndex));
+
+        var insertResumed = false;
+        var firstResumed = false;
+        var lateResumed = false;
+        Task<(StoreStatus Status, string? CorruptionOrigin)>? lateTask = null;
+        try
+        {
+            // The old Insert snapshot dispatches cancellation after U/Prepared
+            // took ownership. It exact-clears A and Location A but cannot
+            // replace the newer descriptor.
+            insertScheduler.Continue();
+            insertResumed = true;
+            (StoreStatus insertStatus, string? insertCorruption) =
+                await delayedInsert.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.StoreBusy, insertStatus);
+            Assert.Null(insertCorruption);
+            Assert.Equal(0UL, ReadDirectoryCell(insertDirectory, selectedLocation));
+            Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+            Assert.Equal(prepared.Value, ReadDirectoryOperation(slots, slotIndex));
+
+            // A second Prepared helper recovers B and publishes it, then stays
+            // paused before post-CAS source validation.
+            WriteDirectoryCell(insertDirectory, lateLocation, binding);
+            lateScheduler.PauseAt(
+                LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation);
+            lateTask = UnlinkAsync(lateDirectory, binding, lateScheduler);
+            Assert.True(lateScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+            lateScheduler.ContinueAndPauseAt(
+                LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation);
+            lateResumed = true;
+            Assert.True(lateScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+            Assert.Equal(lateLocation.Value, ReadDirectoryLocation(slots, slotIndex));
+            Assert.Equal(prepared.Value, ReadDirectoryOperation(slots, slotIndex));
+
+            // The first helper now selects A while B is the published location,
+            // then pauses as TargetSelected before reading that conflicting
+            // witness. This is the exact terminal-tolerance window.
+            firstScheduler.ContinueAndPauseAt(
+                LockFreeCheckpointId.DirectoryAfterUnlinkOperationValidationBeforeLocationRead);
+            firstResumed = true;
+            Assert.True(firstScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+            DirectoryOperation selected = DirectoryOperation.Decode(
+                ReadDirectoryOperation(slots, slotIndex));
+            Assert.Equal(2, selected.Intent);
+            Assert.Equal(2, selected.Phase);
+            Assert.Equal(selectedLocation.Kind, selected.Kind);
+            Assert.Equal(selectedLocation.Index, selected.Index);
+            Assert.Equal(lateLocation.Value, ReadDirectoryLocation(slots, slotIndex));
+
+            firstScheduler.Continue();
+            (StoreStatus firstStatus, string? firstCorruption) =
+                await firstTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.Success, firstStatus);
+            Assert.Null(firstCorruption);
+
+            lateScheduler.Continue();
+            (StoreStatus lateStatus, string? lateCorruption) =
+                await lateTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.Success, lateStatus);
+            Assert.Null(lateCorruption);
+        }
+        finally
+        {
+            if (!insertResumed)
+            {
+                insertScheduler.Continue();
+            }
+
+            if (!firstResumed || !firstTask.IsCompleted)
+            {
+                firstScheduler.Continue();
+            }
+
+            if (lateTask is not null && (!lateResumed || !lateTask.IsCompleted))
+            {
+                lateScheduler.Continue();
+            }
+        }
+
+        Assert.Equal(0UL, ReadDirectoryCell(insertDirectory, selectedLocation));
+        Assert.Equal(0UL, ReadDirectoryCell(insertDirectory, lateLocation));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(0UL, ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(0UL, insertDirectory.ReadCanonicalMutation(CanonicalBucket));
+        AssertDirectoryDrained(insertDirectory);
+        Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+        AssertAllSlotCapacityReusable(insertStore, keys, RaceSlotCount);
+    }
+
+    [Fact]
+    public async Task PreparedUnlinkPublisherDelayedBeforeLocationCasWithdrawsLatePublication()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = GenerateBucketPairCollisions(count: RaceSlotCount + 2, RaceSlotCount);
+        byte[] key = keys[0];
+        string name = $"sms-v2-unlink-late-location-cas-{Guid.NewGuid():N}";
+        using var publisherScheduler = new ControlledLockFreeScheduler();
+        using MemoryStore publisherStore = CreateInstrumentedStore(
+            name,
+            RaceSlotCount,
+            OpenMode.CreateNew,
+            publisherScheduler);
+        using MemoryStore completingStore = OpenStore(name, RaceSlotCount);
+        LockFreeKeyDirectory publisherDirectory = ReadDirectory(publisherStore);
+        LockFreeKeyDirectory completingDirectory = ReadDirectory(completingStore);
+        LockFreeSlotTable slots = ReadSlots(publisherStore);
+
+        Assert.Equal(
+            StoreStatus.Success,
+            publisherStore.TryReserve(
+                key,
+                payloadLength: 1,
+                descriptor: default,
+                StoreWaitOptions.Infinite,
+                out ValueReservation reservation));
+        ReservationHandle handle = reservation.HandleForEngine;
+        Assert.Equal(
+            StoreStatus.Success,
+            publisherDirectory.TryLookup(
+                key,
+                StoreKey.Hash(key),
+                LockFreeOperationBudget.UnboundedScan,
+                out ulong binding,
+                out DirectoryLocation location));
+        Assert.Equal(handle.SlotBinding, binding);
+
+        IndexBinding decoded = IndexBinding.Decode(binding);
+        int slotIndex = decoded.SlotIndex;
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+        ulong prepared = DirectoryOperation.Encode(
+            intent: 2,
+            phase: 1,
+            targetKind: 0,
+            targetIndex: 0,
+            decoded.Generation);
+        AtomicControlWord.StoreRelease(ref slots.Slot(slotIndex).DirectoryLocation, 0);
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryOperation,
+            unchecked((long)prepared));
+        WriteDirectoryCell(publisherDirectory, location, binding);
+        WriteCanonicalMutation(publisherDirectory, CanonicalBucket, binding);
+
+        publisherScheduler.PauseAt(
+            LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas);
+        Task<(StoreStatus Status, string? CorruptionOrigin)> delayedPublisher =
+            UnlinkAsync(publisherDirectory, binding, publisherScheduler);
+        Assert.True(publisherScheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.Success,
+            completingDirectory.TryUnlink(binding, LockFreeOperationBudget.UnboundedScan));
+        Assert.Null(LockFreeCorruptionTrace.Consume());
+        Assert.Equal(0UL, ReadDirectoryCell(publisherDirectory, location));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(0UL, ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(0UL, publisherDirectory.ReadCanonicalMutation(CanonicalBucket));
+
+        var resumed = false;
+        try
+        {
+            publisherScheduler.Continue();
+            resumed = true;
+            (StoreStatus publisherStatus, string? publisherCorruption) =
+                await delayedPublisher.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(StoreStatus.Success, publisherStatus);
+            Assert.Null(publisherCorruption);
+        }
+        finally
+        {
+            if (!resumed)
+            {
+                publisherScheduler.Continue();
+            }
+        }
+
+        // The delayed stale CAS briefly installed Location C after unlink was
+        // terminal; its post-CAS reconciliation must remove that exact word.
+        Assert.Equal(0UL, ReadDirectoryCell(publisherDirectory, location));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(0UL, ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(0UL, publisherDirectory.ReadCanonicalMutation(CanonicalBucket));
+        AssertDirectoryDrained(publisherDirectory);
+        Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+        AssertAllSlotCapacityReusable(publisherStore, keys, RaceSlotCount);
+    }
+
+    [Theory]
+    [InlineData(CompetingUnlinkTarget.ExactBinding)]
+    [InlineData(CompetingUnlinkTarget.Empty)]
+    [InlineData(CompetingUnlinkTarget.ValidReplacement)]
+    [InlineData(CompetingUnlinkTarget.Malformed)]
+    [InlineData(CompetingUnlinkTarget.OutOfRange)]
+    public void TargetSelectedUnlinkClassifiesAnotherSameGenerationLocationExactly(
+        CompetingUnlinkTarget competingTarget)
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        byte[][] keys = GenerateBucketPairCollisions(count: RaceSlotCount + 2, RaceSlotCount);
+        byte[] key = keys[0];
+        using MemoryStore store = CreateStore(
+            $"sms-v2-unlink-location-terminal-{Guid.NewGuid():N}",
+            RaceSlotCount);
+        LockFreeKeyDirectory directory = ReadDirectory(store);
+        LockFreeSlotTable slots = ReadSlots(store);
+
+        Assert.Equal(
+            StoreStatus.Success,
+            store.TryReserve(
+                key,
+                payloadLength: 1,
+                descriptor: default,
+                StoreWaitOptions.Infinite,
+                out ValueReservation reservation));
+        ReservationHandle handle = reservation.HandleForEngine;
+        Assert.Equal(
+            StoreStatus.Success,
+            directory.TryLookup(
+                key,
+                StoreKey.Hash(key),
+                LockFreeOperationBudget.UnboundedScan,
+                out ulong binding,
+                out DirectoryLocation selectedLocation));
+        Assert.Equal(handle.SlotBinding, binding);
+        Assert.Equal(1, selectedLocation.Kind);
+
+        IndexBinding decoded = IndexBinding.Decode(binding);
+        int slotIndex = decoded.SlotIndex;
+        DirectoryLocation lateLocation = DirectoryLocation.Decode(DirectoryLocation.Encode(
+            selectedLocation.Kind,
+            selectedLocation.Index + 1,
+            decoded.Generation));
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+        WriteDirectoryCell(directory, selectedLocation, binding);
+        ulong lateTarget = competingTarget switch
+        {
+            CompetingUnlinkTarget.ExactBinding => binding,
+            CompetingUnlinkTarget.Empty => 0,
+            CompetingUnlinkTarget.ValidReplacement => IndexBinding.Encode(
+                (decoded.SlotIndex + 1) % RaceSlotCount,
+                decoded.Generation),
+            CompetingUnlinkTarget.Malformed => ulong.MaxValue,
+            CompetingUnlinkTarget.OutOfRange => IndexBinding.Encode(
+                RaceSlotCount,
+                decoded.Generation),
+            _ => throw new ArgumentOutOfRangeException(nameof(competingTarget)),
+        };
+        WriteDirectoryCell(directory, lateLocation, lateTarget);
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryLocation,
+            unchecked((long)lateLocation.Value));
+        AtomicControlWord.StoreRelease(
+            ref slots.Slot(slotIndex).DirectoryOperation,
+            unchecked((long)DirectoryOperation.Encode(
+                intent: 2,
+                phase: 2,
+                selectedLocation.Kind,
+                selectedLocation.Index,
+                decoded.Generation)));
+        WriteCanonicalMutation(directory, CanonicalBucket, binding);
+
+        _ = LockFreeCorruptionTrace.Consume();
+        StoreStatus unlinkStatus = directory.TryUnlink(
+            binding,
+            LockFreeOperationBudget.UnboundedScan);
+        string? corruptionOrigin = LockFreeCorruptionTrace.Consume();
+        if (competingTarget is
+            CompetingUnlinkTarget.Malformed or CompetingUnlinkTarget.OutOfRange)
+        {
+            Assert.Equal(StoreStatus.CorruptStore, unlinkStatus);
+            Assert.NotNull(corruptionOrigin);
+            Assert.Equal(lateTarget, ReadDirectoryCell(directory, lateLocation));
+            return;
+        }
+
+        Assert.Equal(StoreStatus.Success, unlinkStatus);
+        Assert.Null(corruptionOrigin);
+        Assert.Equal(0UL, ReadDirectoryCell(directory, selectedLocation));
+        Assert.Equal(lateTarget == binding ? 0UL : lateTarget, ReadDirectoryCell(directory, lateLocation));
+        Assert.Equal(0UL, ReadDirectoryLocation(slots, slotIndex));
+        Assert.Equal(0UL, ReadDirectoryOperation(slots, slotIndex));
+        Assert.Equal(0UL, directory.ReadCanonicalMutation(CanonicalBucket));
+        if (lateTarget != 0 && lateTarget != binding)
+        {
+            // The valid replacement was injected as a stand-in only; exact
+            // unlink cleanup must preserve it, and the test withdraws it before
+            // checking capacity recovery.
+            WriteDirectoryCell(directory, lateLocation, binding: 0);
+        }
+
+        AssertDirectoryDrained(directory);
+
+        Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+        AssertAllSlotCapacityReusable(store, keys, RaceSlotCount);
+    }
 
     [Fact]
     public async Task TentativeExplicitReserveCannotCauseDuplicateUnlessAHelperFirstOrdersReserved()
@@ -1123,6 +1876,21 @@ public sealed class LockFreeInsertCancellationRaceTests
             return (status, reservation, LockFreeCorruptionTrace.Consume());
         });
 
+    private static Task<(StoreStatus Status, string? CorruptionOrigin)> UnlinkAsync(
+        LockFreeKeyDirectory directory,
+        ulong binding,
+        ControlledLockFreeScheduler scheduler) =>
+        Task.Run(() =>
+        {
+            _ = LockFreeCorruptionTrace.Consume();
+            InstrumentedLockFreeCheckpoint checkpoint = scheduler.CreateInstrumentedCheckpoint();
+            StoreStatus status = directory.TryUnlink(
+                binding,
+                LockFreeOperationBudget.UnboundedScan,
+                ref checkpoint);
+            return (status, LockFreeCorruptionTrace.Consume());
+        });
+
     private static Task<(StoreStatus Status, long CopiedBytes, string? CorruptionOrigin)>
         PublishAsync(
             MemoryStore store,
@@ -1238,6 +2006,72 @@ public sealed class LockFreeInsertCancellationRaceTests
     private static LockFreeSlotTable ReadSlots(MemoryStore store) =>
         ReadPrivate<LockFreeSlotTable>(ReadPrivate<object>(store, "_engine"), "_slots");
 
+    private static ulong ReadDirectoryOperation(LockFreeSlotTable slots, int slotIndex) =>
+        unchecked((ulong)AtomicControlWord.LoadAcquire(
+            ref slots.Slot(slotIndex).DirectoryOperation));
+
+    private static ulong ReadDirectoryLocation(LockFreeSlotTable slots, int slotIndex) =>
+        unchecked((ulong)AtomicControlWord.LoadAcquire(
+            ref slots.Slot(slotIndex).DirectoryLocation));
+
+    private static ulong ReadDirectoryCell(
+        LockFreeKeyDirectory directory,
+        DirectoryLocation location) =>
+        unchecked((ulong)AtomicControlWord.LoadAcquire(ref DirectoryCell(directory, location)));
+
+    private static void WriteDirectoryCell(
+        LockFreeKeyDirectory directory,
+        DirectoryLocation location,
+        ulong binding) =>
+        AtomicControlWord.StoreRelease(
+            ref DirectoryCell(directory, location),
+            unchecked((long)binding));
+
+    private static void WriteCanonicalMutation(
+        LockFreeKeyDirectory directory,
+        int canonicalBucket,
+        ulong binding) =>
+        AtomicControlWord.StoreRelease(
+            ref CanonicalMutation(directory, canonicalBucket),
+            unchecked((long)binding));
+
+    private static unsafe ref long DirectoryCell(
+        LockFreeKeyDirectory directory,
+        DirectoryLocation location)
+    {
+        ISharedStoreRegion region = ReadPrivate<ISharedStoreRegion>(directory, "_region");
+        StoreLayoutV2 layout = ReadPrivate<StoreLayoutV2>(directory, "_layout");
+        long offset = location.Kind switch
+        {
+            1 => PrimaryCellOffset(layout, checked((int)location.Index)),
+            2 => layout.OverflowDirectoryOffset + (location.Index * layout.OverflowStride),
+            _ => throw new ArgumentOutOfRangeException(nameof(location)),
+        };
+        return ref *(long*)(region.Pointer + offset);
+    }
+
+    private static unsafe ref long CanonicalMutation(
+        LockFreeKeyDirectory directory,
+        int canonicalBucket)
+    {
+        ISharedStoreRegion region = ReadPrivate<ISharedStoreRegion>(directory, "_region");
+        StoreLayoutV2 layout = ReadPrivate<StoreLayoutV2>(directory, "_layout");
+        long offset = layout.PrimaryDirectoryOffset
+            + ((long)canonicalBucket * layout.PrimaryBucketStride)
+            + sizeof(long);
+        return ref *(long*)(region.Pointer + offset);
+    }
+
+    private static long PrimaryCellOffset(StoreLayoutV2 layout, int absoluteCellIndex)
+    {
+        int bucket = absoluteCellIndex / LayoutV2Constants.PrimaryLanesPerBucket;
+        int lane = absoluteCellIndex % LayoutV2Constants.PrimaryLanesPerBucket;
+        return layout.PrimaryDirectoryOffset
+            + ((long)bucket * layout.PrimaryBucketStride)
+            + (2 * sizeof(long))
+            + (lane * sizeof(long));
+    }
+
     private static T ReadPrivate<T>(object owner, string fieldName)
     {
         FieldInfo field = owner.GetType().GetField(
@@ -1300,6 +2134,23 @@ public sealed class LockFreeInsertCancellationRaceTests
     private static bool IsSupportedLockFreeHost() =>
         (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
         && RuntimeInformation.ProcessArchitecture == Architecture.X64;
+
+    public enum TargetAfterCancellation
+    {
+        Empty,
+        ValidReplacement,
+        Malformed,
+        OutOfRange,
+    }
+
+    public enum CompetingUnlinkTarget
+    {
+        ExactBinding,
+        Empty,
+        ValidReplacement,
+        Malformed,
+        OutOfRange,
+    }
 
     private sealed class RejectedCandidateRetryGate : IDisposable
     {

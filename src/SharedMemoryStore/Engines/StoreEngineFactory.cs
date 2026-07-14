@@ -28,25 +28,22 @@ internal static class StoreEngineFactory
         }
     }
 
-    internal static StoreOpenStatus TryWrapLockFree(
+    internal static StoreOpenStatus TryCreateLockFreeUnderColdGate(
         SharedMemoryStoreOptions options,
         StoreWaitOptions waitOptions,
+        long waitStartTimestamp,
         MemoryMappedStoreRegion region,
         ISharedStoreSynchronization coldSynchronization,
-        out MemoryStore? store)
+        RegionOpenDisposition disposition,
+        out IStoreEngine? engine)
     {
-        store = null;
-        StoreOpenStatus status = LockFreeStoreEngine.TryCreateOrOpen(
+        return LockFreeStoreEngine.TryCreateOrOpenUnderColdGate(
             options,
             waitOptions,
+            waitStartTimestamp,
             region,
             coldSynchronization,
-            out var engine);
-        if (status == StoreOpenStatus.Success && engine is not null)
-        {
-            store = WrapOwnedEngine(engine);
-        }
-
-        return status;
+            disposition,
+            out engine);
     }
 }

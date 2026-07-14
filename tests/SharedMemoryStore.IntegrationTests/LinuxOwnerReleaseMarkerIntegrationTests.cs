@@ -272,7 +272,7 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task FailedOpenAfterMappingUsesTheSameBoundedReleaseMarkerPath()
+    public async Task OpenBlockedBeforeMappingDoesNotPublishOwnerOrReleaseMarker()
     {
         if (!IsQualifiedLinuxHost())
         {
@@ -286,7 +286,6 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
         using var anchor = IntegrationStoreFactory.Create(createOptions);
         var anchorOwner = Assert.Single(ReadOwnerLines(resource.LinuxOwnersPath));
         LinuxFileLockHolder? operationLock = null;
-        LinuxFileLockHolder? lifecycleLock = null;
         Store? next = null;
 
         try
@@ -302,23 +301,19 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
                 return status;
             });
 
-            await WaitForOwnerCountAsync(resource.LinuxOwnersPath, expectedCount: 2);
-            lifecycleLock = LinuxFileLockHolder.Acquire(resource.LinuxLifecycleLockPath);
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+            Assert.False(failedOpen.IsCompleted);
+            Assert.Equal([anchorOwner], ReadOwnerLines(resource.LinuxOwnersPath));
+            Assert.Empty(ReadFinalizedMarkers(resource));
             Assert.Equal(StoreOpenStatus.StoreBusy, await failedOpen.WaitAsync(TimeSpan.FromSeconds(3)));
 
-            var marker = Assert.Single(ReadFinalizedMarkers(resource));
-            Assert.NotEqual(anchorOwner, marker.Owner);
-            Assert.Equal(LinuxSharedMemoryDirectory.PrivateFileMode, File.GetUnixFileMode(marker.Path));
-            Assert.Equal(
-                LinuxOwnerAnchorState.Missing,
-                LinuxOwnerAnchor.Probe(resource.LinuxOwnersPath, ParseOwnerToken(marker.Owner)));
+            Assert.Equal([anchorOwner], ReadOwnerLines(resource.LinuxOwnersPath));
+            Assert.Empty(ReadFinalizedMarkers(resource));
             Assert.Equal(
                 LinuxOwnerAnchorState.Locked,
                 LinuxOwnerAnchor.Probe(resource.LinuxOwnersPath, ParseOwnerToken(anchorOwner)));
             Assert.Equal(StoreStatus.Success, anchor.TryPublish([3], [5]));
 
-            lifecycleLock.Dispose();
-            lifecycleLock = null;
             operationLock.Dispose();
             operationLock = null;
 
@@ -326,13 +321,11 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
             Assert.NotNull(next);
             var ownersAfter = ReadOwnerLines(resource.LinuxOwnersPath);
             Assert.Contains(anchorOwner, ownersAfter, StringComparer.Ordinal);
-            Assert.DoesNotContain(marker.Owner, ownersAfter, StringComparer.Ordinal);
             Assert.Empty(GetFinalizedMarkerPaths(resource));
             Assert.Equal(StoreStatus.Success, anchor.TryRemove([3]));
         }
         finally
         {
-            lifecycleLock?.Dispose();
             operationLock?.Dispose();
             next?.Dispose();
         }

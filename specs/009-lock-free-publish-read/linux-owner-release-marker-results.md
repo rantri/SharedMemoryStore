@@ -1,5 +1,27 @@
 # Linux Owner-Release Marker Qualification
 
+## Current cold-open transaction supersession (2026-07-14)
+
+The original runs below established bounded release-marker fallback after a
+mapped handle existed. A later structural review found that failed-open safety
+also requires cross-process coordination before any mapping: otherwise an older
+client can expose a zero region before entering its lifecycle lock and a newer
+opener can mistake those bytes for initialization authority.
+
+The current implementation acquires `.lifecycle` and then `.lock` before
+mapping, retains both through physical-disposition-aware header work and
+participant registration, and releases them before any failed-open mapped-owner
+cleanup. Only the physical creator initializes a zero header. The former test
+named "Public failed open after mapping uses the bounded marker path" has been
+replaced by `OpenBlockedBeforeMappingDoesNotPublishOwnerOrReleaseMarker`; the
+current five-test Linux owner-release-marker suite passed 5/5. The expanded
+profile/open matrix and exact-once cleanup tests also passed as part of the full
+295/295 Linux Integration aggregate.
+
+The historical results below remain useful evidence for marker durability,
+mode, reconciliation, and bounded close behavior; their failed-open ordering is
+not the current protocol.
+
 **Date**: 2026-07-13
 **Result**: PASS on Linux x64
 

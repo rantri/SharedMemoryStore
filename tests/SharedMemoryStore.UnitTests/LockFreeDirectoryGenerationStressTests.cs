@@ -166,6 +166,22 @@ public sealed class LockFreeDirectoryGenerationStressTests
         LocationPublication(
             "insert-overflow-after-binding-validation-before-location-publication",
             DirectoryTarget.Overflow),
+        LocationPublication(
+            "insert-primary-after-empty-location-source-revalidation-before-publication-cas",
+            DirectoryTarget.Primary,
+            LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas),
+        LocationPublication(
+            "insert-overflow-after-empty-location-source-revalidation-before-publication-cas",
+            DirectoryTarget.Overflow,
+            LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas),
+        LocationPublication(
+            "insert-primary-after-location-publication-before-source-revalidation",
+            DirectoryTarget.Primary,
+            LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation),
+        LocationPublication(
+            "insert-overflow-after-location-publication-before-source-revalidation",
+            DirectoryTarget.Overflow,
+            LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation),
 
         Spill(
             "insert-overflow-before-present-cas",
@@ -198,6 +214,8 @@ public sealed class LockFreeDirectoryGenerationStressTests
         LockFreeCheckpointId.DirectoryAfterLocationValidation,
         LockFreeCheckpointId.DirectoryAfterUnlinkOperationValidationBeforeLocationRead,
         LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation,
+        LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas,
+        LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation,
         LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch,
         LockFreeCheckpointId.DirectoryAfterInsertBindingChangedStateValidationBeforeReservedPublication,
         LockFreeCheckpointId.DirectoryBeforeSpillSummaryPublicationCas,
@@ -424,6 +442,7 @@ public sealed class LockFreeDirectoryGenerationStressTests
         using var controller = new CheckpointPauseController();
         using MemoryStore delayedStore = CreateInstrumentedStore(name, slotCount, controller);
         using MemoryStore helperStore = OpenHelperStore(name, slotCount);
+        using MemoryStore reuseStore = OpenHelperStore(name, slotCount);
         using var delayedActor = new DelayedActor(delayedStore);
         LockFreeKeyDirectory directory = ReadDirectory(helperStore);
         LockFreeSlotTable slots = ReadSlots(helperStore);
@@ -528,7 +547,11 @@ public sealed class LockFreeDirectoryGenerationStressTests
                 }
 
                 helperValue[0] = newMarker;
-                StoreStatus republish = helperStore.TryPublish(
+                // Keep completion/recovery and exact-slot reuse on distinct
+                // participants.  This deterministically models the sustained
+                // three-or-more-process helper churn that exposed the delayed
+                // location-publication source-loss race.
+                StoreStatus republish = reuseStore.TryPublish(
                     newKey,
                     helperValue,
                     default,
@@ -577,12 +600,12 @@ public sealed class LockFreeDirectoryGenerationStressTests
                 }
 
                 RequireMissing(
-                    helperStore,
+                    reuseStore,
                     oldKey,
                     evidence,
                     $"{transition.Name}/{repetition}: old generation remained visible");
                 RequirePublishedValue(
-                    helperStore,
+                    reuseStore,
                     newKey,
                     newMarker,
                     evidence,
@@ -599,7 +622,7 @@ public sealed class LockFreeDirectoryGenerationStressTests
                 }
 
                 RequireExactStatus(
-                    helperStore.TryRemove(newKey, StoreWaitOptions.Infinite),
+                    reuseStore.TryRemove(newKey, StoreWaitOptions.Infinite),
                     StoreStatus.Success,
                     evidence,
                     $"{transition.Name}/{repetition}: remove later generation");
@@ -1136,12 +1159,14 @@ public sealed class LockFreeDirectoryGenerationStressTests
 
     private static TransitionCase LocationPublication(
         string name,
-        DirectoryTarget target) =>
+        DirectoryTarget target,
+        LockFreeCheckpointId checkpoint =
+            LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation) =>
         new(
             name,
             DelayedOperation.Insert,
             target,
-            LockFreeCheckpointId.DirectoryAfterLocationPublisherBindingValidation,
+            checkpoint,
             CheckpointOccurrence: 1,
             ExpectedPhase: 2);
 

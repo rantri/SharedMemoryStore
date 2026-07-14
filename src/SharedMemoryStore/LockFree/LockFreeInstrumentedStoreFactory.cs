@@ -1,6 +1,7 @@
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.Engines;
 using SharedMemoryStore.Options;
+using System.Diagnostics;
 
 namespace SharedMemoryStore.LockFree;
 
@@ -28,31 +29,66 @@ internal static class LockFreeInstrumentedStoreFactory
             return validation;
         }
 
-        StoreOpenStatus mapped = SharedStorePlatform.TryOpen(
+        long waitStartTimestamp = Stopwatch.GetTimestamp();
+        StoreOpenStatus mapped = SharedStorePlatform.TryBeginOpen(
             options,
             StoreWaitOptions.Default,
-            out var region,
-            out var synchronization);
-        if (mapped != StoreOpenStatus.Success || region is null || synchronization is null)
+            waitStartTimestamp,
+            out SharedStoreOpenScope? openScope);
+        if (mapped != StoreOpenStatus.Success || openScope is null)
         {
             return mapped;
         }
 
-        StoreOpenStatus status = LockFreeStoreEngine<InstrumentedLockFreeCheckpoint>.TryCreateOrOpen(
-            options,
-            StoreWaitOptions.Default,
-            region,
-            synchronization,
-            checkpoint,
-            out var engine);
-        if (status == StoreOpenStatus.Success && engine is not null)
+        LockFreeStoreEngine<InstrumentedLockFreeCheckpoint>? engine = null;
+        StoreOpenStatus status;
+        try
+        {
+            using (openScope)
+            {
+                status = LockFreeStoreEngine<InstrumentedLockFreeCheckpoint>.TryCreateOrOpenUnderColdGate(
+                    options,
+                    StoreWaitOptions.Default,
+                    waitStartTimestamp,
+                    openScope.Region,
+                    openScope.Synchronization,
+                    openScope.Disposition,
+                    checkpoint,
+                    out engine);
+                if (status == StoreOpenStatus.Success && engine is not null)
+                {
+                    openScope.TransferResourceOwnership();
+                }
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            engine?.Dispose();
+            return StoreOpenStatus.AccessDenied;
+        }
+        catch
+        {
+            engine?.Dispose();
+            return StoreOpenStatus.MappingFailed;
+        }
+
+        if (status != StoreOpenStatus.Success || engine is null)
+        {
+            return status;
+        }
+
+        try
         {
             store = StoreEngineFactory.WrapOwnedEngine(engine);
             return StoreOpenStatus.Success;
         }
-
-        region.Dispose();
-        synchronization.Dispose();
-        return status;
+        catch (UnauthorizedAccessException)
+        {
+            return StoreOpenStatus.AccessDenied;
+        }
+        catch
+        {
+            return StoreOpenStatus.MappingFailed;
+        }
     }
 }

@@ -25,8 +25,32 @@ participant registration occur while the existing named synchronization
 resource is held. This preserves serialization with already released v1
 clients. Participant retirement is an aligned-atomic layout-v2 participant
 protocol transition and does not enter that named resource. The mapping is not
-Ready and no handle is returned until all sections have been initialized and
-the participant record is Active.
+Ready during creation, and no handle is returned until all sections have been
+initialized and the participant record is Active.
+
+Physical creation ownership, rather than `OpenMode` or an observed zero magic,
+authorizes initialization. A cold-open attempt records whether its physical
+mapping call created a new region or opened an existing one. Only the former may
+clear and initialize the header. An existing zero header is never written by an
+opener: `CreateOrOpen` reports `StoreBusy`, because an older creator may still be
+between mapping and synchronization acquisition under resource protocol 1,
+while `OpenExisting` reports `IncompatibleLayout`. `CreateNew` reports
+`AlreadyExists` without mapping the existing payload.
+
+On Windows, the named mutex is acquired before the physical mapping is created
+or opened and remains held through header work and participant registration. On
+Linux, `.lifecycle` is acquired first; release-marker reconciliation and stale
+resource deletion complete before `.lock` is opened and acquired. The mapping,
+private owner-anchor lock, owner-line commit, header work, and participant
+registration then occur while both gates are held. Release order is `.lock`
+followed by `.lifecycle`. This ordering prevents unlinking a held POSIX lock file
+and splitting later participants onto a different inode. Failed-open mapping
+and owner cleanup run only after both gates have been released.
+
+The caller's original wait and cancellation budget covers the complete cold
+transaction, including both gates, mapping, header work, and participant
+registration. A deadline or cancellation observed before mapping or owner
+publication prevents those side effects.
 
 Linux owner registration and cleanup remain protected by `.lifecycle`. Every
 open layout-v2 handle writes one live v1-compatible owner line:

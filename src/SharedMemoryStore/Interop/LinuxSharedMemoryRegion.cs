@@ -34,38 +34,17 @@ internal static class LinuxSharedMemoryRegion
         {
             try
             {
-                LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(resourceName.LinuxRegionPath) ?? ".");
-                ReconcileReleaseMarkers(resourceName);
-                OwnerSnapshot ownerSnapshot = ReadOwnerSnapshot(resourceName);
-                List<string> committedOwners = ownerSnapshot.CommittedOwners;
-                // A live witness makes the existing sidecar an already-committed
-                // conservative owner set. It need not be rewritten or fully
-                // reclassified merely to attach another handle. When no owner is
-                // live, commit the filtered empty set before stale-anchor cleanup.
-                if (!ownerSnapshot.HasLiveOwner)
-                {
-                    WriteOwners(resourceName.LinuxOwnersPath, committedOwners);
-                }
-
-                SweepUnreferencedOwnerAnchors(resourceName.LinuxOwnersPath, committedOwners);
-                var hasLiveResource = File.Exists(resourceName.LinuxRegionPath)
-                    && ownerSnapshot.HasLiveOwner;
-                if (!hasLiveResource)
-                {
-                    DeleteStaleResources(resourceName);
-                    committedOwners = [];
-                }
-
-                return options.OpenMode switch
-                {
-                    OpenMode.CreateNew when hasLiveResource => StoreOpenStatus.AlreadyExists,
-                    OpenMode.OpenExisting when !hasLiveResource => StoreOpenStatus.NotFound,
-                    OpenMode.CreateNew => CreateRegion(resourceName, options, committedOwners, out region),
-                    OpenMode.OpenExisting => OpenExistingRegion(resourceName, options, committedOwners, out region),
-                    _ => hasLiveResource
-                        ? OpenExistingRegion(resourceName, options, committedOwners, out region)
-                        : CreateRegion(resourceName, options, committedOwners, out region)
-                };
+                PrepareOpen(
+                    resourceName,
+                    out List<string> committedOwners,
+                    out bool hasLiveResource);
+                return OpenPreparedRegion(
+                    resourceName,
+                    options,
+                    committedOwners,
+                    hasLiveResource,
+                    out region,
+                    out _);
             }
             catch (UnauthorizedAccessException)
             {
@@ -99,7 +78,6 @@ internal static class LinuxSharedMemoryRegion
                 Share = FileShare.ReadWrite | FileShare.Delete,
                 UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
             });
-            File.SetUnixFileMode(resourceName.LinuxRegionPath, LinuxSharedMemoryDirectory.PrivateFileMode);
         }
         catch (IOException) when (File.Exists(resourceName.LinuxRegionPath))
         {
@@ -108,6 +86,9 @@ internal static class LinuxSharedMemoryRegion
 
         try
         {
+            File.SetUnixFileMode(
+                resourceName.LinuxRegionPath,
+                LinuxSharedMemoryDirectory.PrivateFileMode);
             stream.SetLength(options.TotalBytes);
             return CreateMappedRegion(
                 resourceName,
@@ -141,7 +122,17 @@ internal static class LinuxSharedMemoryRegion
             FileMode.Open,
             FileAccess.ReadWrite,
             FileShare.ReadWrite | FileShare.Delete);
-        File.SetUnixFileMode(resourceName.LinuxRegionPath, LinuxSharedMemoryDirectory.PrivateFileMode);
+        try
+        {
+            File.SetUnixFileMode(
+                resourceName.LinuxRegionPath,
+                LinuxSharedMemoryDirectory.PrivateFileMode);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
 
         // Always map the existing file at its actual capacity. Header validation decides
         // whether the requested dimensions/profile are compatible; the requested size must
@@ -227,6 +218,223 @@ internal static class LinuxSharedMemoryRegion
             stream.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Begins a Linux cold-open transaction. The retained lifecycle lock is
+    /// acquired before the ordinary operation lock, so stale-resource cleanup
+    /// cannot unlink and replace a lock file while the returned scope holds it.
+    /// Both locks remain held across mapped initialization/validation.
+    /// </summary>
+    internal static StoreOpenStatus TryBeginColdOpen(
+        PlatformResourceName resourceName,
+        SharedMemoryStoreOptions options,
+        StoreWaitOptions waitOptions,
+        long waitStartTimestamp,
+        out SharedStoreOpenScope? scope)
+    {
+        scope = null;
+        LinuxFileLock? lifecycleLock = null;
+        LinuxSharedStoreSynchronization? synchronization = null;
+        MemoryMappedStoreRegion? region = null;
+        bool synchronizationEntered = false;
+
+        try
+        {
+            StoreStatus remainingStatus = SharedStorePlatform.TryGetRemainingWaitOptions(
+                waitOptions,
+                waitStartTimestamp,
+                out StoreWaitOptions remainingWait);
+            if (remainingStatus != StoreStatus.Success)
+            {
+                return ToOpenStatus(remainingStatus);
+            }
+
+            StoreStatus lifecycleLockStatus = LinuxFileLock.TryAcquire(
+                resourceName.LinuxLifecycleLockPath,
+                remainingWait,
+                out lifecycleLock);
+            if (lifecycleLockStatus != StoreStatus.Success || lifecycleLock is null)
+            {
+                return ToOpenStatus(lifecycleLockStatus);
+            }
+
+            PrepareOpen(
+                resourceName,
+                out List<string> committedOwners,
+                out bool hasLiveResource);
+
+            remainingStatus = SharedStorePlatform.TryGetRemainingWaitOptions(
+                waitOptions,
+                waitStartTimestamp,
+                out remainingWait);
+            if (remainingStatus != StoreStatus.Success)
+            {
+                return ToOpenStatus(remainingStatus);
+            }
+
+            if (options.OpenMode == OpenMode.CreateNew && hasLiveResource)
+            {
+                return StoreOpenStatus.AlreadyExists;
+            }
+
+            if (options.OpenMode == OpenMode.OpenExisting && !hasLiveResource)
+            {
+                return StoreOpenStatus.NotFound;
+            }
+
+            // Open the ordinary lock only after stale-resource deletion has
+            // completed under .lifecycle. Unlinking a held POSIX lock file would
+            // split future participants onto a different inode.
+            synchronization = new LinuxSharedStoreSynchronization(resourceName);
+            StoreStatus enterStatus = synchronization.TryEnter(remainingWait);
+            if (enterStatus != StoreStatus.Success)
+            {
+                return ToOpenStatus(enterStatus);
+            }
+
+            synchronizationEntered = true;
+
+            // The ordinary lock wait is part of the same end-to-end open
+            // budget. Do not map the region or publish an owner marker after
+            // that wait consumed the deadline (or cancellation was observed).
+            remainingStatus = SharedStorePlatform.TryGetRemainingWaitOptions(
+                waitOptions,
+                waitStartTimestamp,
+                out _);
+            if (remainingStatus != StoreStatus.Success)
+            {
+                return ToOpenStatus(remainingStatus);
+            }
+
+            StoreOpenStatus openStatus = OpenPreparedRegion(
+                resourceName,
+                options,
+                committedOwners,
+                hasLiveResource,
+                out region,
+                out RegionOpenDisposition disposition);
+            if (openStatus != StoreOpenStatus.Success || region is null)
+            {
+                return openStatus;
+            }
+
+            scope = new SharedStoreOpenScope(
+                region,
+                synchronization,
+                lifecycleLock,
+                disposition);
+            region = null;
+            synchronization = null;
+            lifecycleLock = null;
+            synchronizationEntered = false;
+            return StoreOpenStatus.Success;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StoreOpenStatus.AccessDenied;
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return StoreOpenStatus.UnsupportedPlatform;
+        }
+        catch
+        {
+            return StoreOpenStatus.MappingFailed;
+        }
+        finally
+        {
+            try
+            {
+                if (synchronizationEntered)
+                {
+                    synchronization?.Exit();
+                }
+            }
+            finally
+            {
+                try
+                {
+                    lifecycleLock?.Dispose();
+                }
+                finally
+                {
+                    try
+                    {
+                        // The region callback may acquire .lifecycle, so mapping
+                        // cleanup follows lifecycle release on every failure.
+                        region?.Dispose();
+                    }
+                    finally
+                    {
+                        synchronization?.Dispose();
+                    }
+                }
+            }
+        }
+    }
+
+    private static void PrepareOpen(
+        PlatformResourceName resourceName,
+        out List<string> committedOwners,
+        out bool hasLiveResource)
+    {
+        LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(resourceName.LinuxRegionPath) ?? ".");
+        ReconcileReleaseMarkers(resourceName);
+        OwnerSnapshot ownerSnapshot = ReadOwnerSnapshot(resourceName);
+        committedOwners = ownerSnapshot.CommittedOwners;
+        // A live witness makes the existing sidecar an already-committed
+        // conservative owner set. It need not be rewritten or fully
+        // reclassified merely to attach another handle. When no owner is
+        // live, commit the filtered empty set before stale-anchor cleanup.
+        if (!ownerSnapshot.HasLiveOwner)
+        {
+            WriteOwners(resourceName.LinuxOwnersPath, committedOwners);
+        }
+
+        SweepUnreferencedOwnerAnchors(resourceName.LinuxOwnersPath, committedOwners);
+        hasLiveResource = File.Exists(resourceName.LinuxRegionPath)
+            && ownerSnapshot.HasLiveOwner;
+        if (!hasLiveResource)
+        {
+            DeleteStaleResources(resourceName);
+            committedOwners = [];
+        }
+    }
+
+    private static StoreOpenStatus OpenPreparedRegion(
+        PlatformResourceName resourceName,
+        SharedMemoryStoreOptions options,
+        IReadOnlyList<string> committedOwners,
+        bool hasLiveResource,
+        out MemoryMappedStoreRegion? region,
+        out RegionOpenDisposition disposition)
+    {
+        region = null;
+        disposition = default;
+        if (options.OpenMode == OpenMode.CreateNew && hasLiveResource)
+        {
+            return StoreOpenStatus.AlreadyExists;
+        }
+
+        if (options.OpenMode == OpenMode.OpenExisting && !hasLiveResource)
+        {
+            return StoreOpenStatus.NotFound;
+        }
+
+        bool createNew = options.OpenMode == OpenMode.CreateNew
+            || (options.OpenMode == OpenMode.CreateOrOpen && !hasLiveResource);
+        StoreOpenStatus status = createNew
+            ? CreateRegion(resourceName, options, committedOwners, out region)
+            : OpenExistingRegion(resourceName, options, committedOwners, out region);
+        if (status == StoreOpenStatus.Success)
+        {
+            disposition = createNew
+                ? RegionOpenDisposition.CreatedNew
+                : RegionOpenDisposition.OpenedExisting;
+        }
+
+        return status;
     }
 
     private static string CreateOwnerRecord(out Guid ownerToken)

@@ -11,6 +11,8 @@ public sealed class LockFreeCheckpointCoverageTests
         "DirectoryAfterLocationValidation",
         "DirectoryAfterUnlinkOperationValidationBeforeLocationRead",
         "DirectoryAfterLocationPublisherBindingValidation",
+        "DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas",
+        "DirectoryAfterLocationPublicationBeforeSourceRevalidation",
         "DirectoryAfterCurrentOperationRevalidationBeforeDispatch",
         "DirectoryAfterInsertBindingChangedStateValidationBeforeReservedPublication",
         "DirectoryAfterInsertCompletionStateValidationBeforeLocationRead",

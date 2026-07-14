@@ -76,6 +76,22 @@ fail-closed signal, not OS synchronization, and it never returns to `Ready`.
 Ordinary success, caller-input failure, contention, cancellation, and legal
 concurrent lifecycle observations never change the store state.
 
+### Cold-open initialization authority
+
+Physical creation disposition is transient process-local state, not a mapped
+header field. Each cold attempt records either `CreatedNew` or
+`OpenedExisting`. Only `CreatedNew` authorizes `Zero -> Initializing` and the
+initial writes that follow it; an open mode, requested profile or dimensions,
+and observed zero bytes are not ownership evidence.
+
+An `OpenedExisting` zero header is never modified. `CreateNew` reports
+`AlreadyExists`, `CreateOrOpen` reports `StoreBusy`, and `OpenExisting` reports
+`IncompatibleLayout`. The cold transaction retains its ordered platform gates
+through initialization or validation and participant registration, then either
+transfers mapped-resource ownership exactly once or releases those gates before
+failed-open owner cleanup. One caller wait/cancellation budget covers the whole
+transaction.
+
 ## Participant Registry V2
 
 One 64-byte participant record represents one open `MemoryStore` handle.
@@ -331,9 +347,11 @@ cannot match a later lifecycle, even when intent/phase/target values repeat.
 
 Generation dominance is asymmetric. A helper for generation `G` may clear its
 exact `G` word or a strictly older residue after revalidating its exact binding
-and operation. An observed generation greater than `G` proves slot reuse and is
-never cleanup authority. Because all-zero remains the unversioned empty value,
-a delayed `0 -> tagged(G)` CAS can briefly install only its own older residue;
+and operation. A generation greater than `G` proves benign reuse only when the
+old canonical tuple has moved; a future location enclosed by an otherwise
+stable exact `G` tuple is malformed and is preserved while corruption is
+reported. Because all-zero remains the unversioned empty value, a delayed
+`0 -> tagged(G)` CAS can briefly install only its own older residue;
 postvalidation withdraws that exact word and a current later generation may
 exact-clear it. No older helper may clear or replace a later generation's
 nonzero word.
@@ -347,6 +365,19 @@ validation re-reads the exact operation and slot generation before reporting a
 failure. An overflow `Empty(binding)` created by exact cancellation is a legal
 terminal version for that insertion and prevents an older setter from
 re-publishing `Present(binding)`.
+
+Location publication is validated as one joint tuple: canonical mutation,
+operation, location, slot control, immutable directory binding, and selected or
+competing target cells. A repeated invalid tuple is terminal only after stable
+double collection plus exact no-op atomic confirmation; movement restarts or
+ends the stale helper. During canceling `Insert -> Unlink/Prepared` handoff, a
+cleared target or structurally valid replacement is progress, while a stable
+malformed or out-of-range target is corruption. The first valid Prepared unlink
+location wins; a loser exact-clears only its distinct old binding. A later
+TargetSelected unlink may exact-clean a same-generation alternate location and
+old-binding cells while preserving replacements. Post-CAS source loss withdraws
+only the publisher's exact old target/location and cannot erase a committed
+Insert successor.
 
 For `ExplicitReservation`, the exact
 `Initializing(g,p) -> Reserved(g,p)` CAS is the public reserve ordering point.

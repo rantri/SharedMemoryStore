@@ -51,6 +51,74 @@ qualification harnesses.
   manifest/file-set/log/path binding, reparse rejection, and completion
   revalidation.
 
+### Cold-open initialization-authority closure
+
+A final structural review found a High-severity cold-path race: an opener could
+map an already-created zeroed region before acquiring cross-process lifecycle
+coordination, infer initialization authority from its open mode, and overwrite
+the physical creator's eventual header. This did not put an OS lock on any hot
+operation, but it made concurrent create/open unsafe.
+
+The closed implementation now treats physical creation as the only
+initialization authority. `SharedStoreOpenScope` owns the ordered cold
+transaction and carries an explicit `CreatedNew`/`OpenedExisting` disposition
+through header initialization or validation and participant registration. The
+Windows named gate is acquired before mapping. Linux acquires `.lifecycle`,
+reconciles and removes only proven-stale artifacts, then acquires `.lock`
+before mapping, owner publication, and engine construction. The original
+wait/cancellation budget covers the whole transaction, and failure releases the
+ordered gates before mapped-owner cleanup can re-enter lifecycle coordination.
+
+The profile/open matrix now proves that every legacy/lock-free and open-mode
+combination preserves an existing zero header, that a held cold scope blocks
+before any physical mapping or owner publication, that an opposite-profile
+sentinel is preserved, and that cleanup transfers/disposes ownership exactly
+once. Focused Linux owner-marker, profile-open, and wait-policy tests passed.
+Independent re-review found no unresolved High, Medium, or concrete Low issue.
+
+### Directory handoff and delayed-helper closure
+
+The first full Linux tiny-operation diagnostic on commit `d834146` is preserved
+at `artifacts/lock-free-os-validation/009-pre-final-linux-x64.json`. Acquire and
+release passed, and the first publish/remove trial passed, but later trials
+latched corruption and then recorded exactly 5,379,795,214
+`Publish.CorruptStore` results. The first traces led to
+`LockFreeKeyDirectory.HelpMutation` and `TryPublishExactLocation`. Root-cause
+analysis showed that delayed helpers treated legal cancellation and
+same-generation location handoffs as a stable malformed store.
+
+The corrected protocol revalidates the canonical mutation, operation, location,
+slot control, immutable directory binding, and relevant target cells as one
+joint tuple before latching corruption. A stable invalid tuple requires two
+identical collections plus exact no-op CAS confirmation. Canceling Insert
+handoffs, first-publisher arbitration for `Unlink/Prepared`, valid alternate
+locations after `Unlink/TargetSelected`, post-CAS withdrawal, old residue, and
+future-generation observations now have explicit generation-fenced outcomes.
+Malformed stable tuples remain fail-closed. Checkpoints 66 and 67 cover the two
+new publication/revalidation windows and extend the canonical catalog to 67.
+
+Deterministic unit schedules cover exact, empty, valid replacement, malformed,
+out-of-range, alternate-location, post-CAS, and real-reuse outcomes. The
+canonical crash matrix passed 67/67 on Windows x64 and Linux x64; the final
+8-process churn regression passed on both platforms. A longer pre-correction
+cross-platform churn run contributed 498,742,938 public API calls with no
+failure, and the final focused runs remained clean after the adjacent fixes.
+Independent re-review found no High or Medium issue. It retained one
+non-blocking Low observation: a crash immediately after an old-generation
+zero-to-tagged location CAS may leave non-visible generation-fenced residue
+until recovery or reuse cleanup; that residue cannot project bytes or overwrite
+a future nonzero word.
+
+### Current pre-qualification aggregate
+
+On the resulting unchanged worktree, both Windows x64 and Linux x64 Release
+aggregates passed with zero skips: solution build 0 warnings/0 errors, Unit
+415/415, Contract 117/117, Integration 295/295, Interop 75/75, and
+Linearizability 83/83, for 985/985 tests per platform. Documentation validation,
+`git diff --check`, and qualification `ValidateOnly` also passed on both
+platforms. These are pre-qualification results and do not replace the immutable
+final evidence gate.
+
 ### Projection lifetime race closure
 
 The final projection re-review found and closed the raw-visibility failure in
@@ -71,9 +139,9 @@ The closed implementation now:
   than mapped corruption;
 - keeps `ValueLease` profile-neutral and one-pass by making both engines own
   invalid-token projection semantics, including legacy post-release guards; and
-- appends checkpoint 65 for the metadata/control revalidation window, routes it
+- appended checkpoint 65 for the metadata/control revalidation window, routed it
   through the crash agent and canonical catalog, raises the PR recovery count to
-  65, and adds non-Participant/non-Disposal checkpoint IDs 62, 63, and 65 to the
+  65, and added non-Participant/non-Disposal checkpoint IDs 62, 63, and 65 to the
   exact suspension configuration.
 
 Independent reviewer executions on the resulting worktree passed:
@@ -84,10 +152,12 @@ Independent reviewer executions on the resulting worktree passed:
 - 2/2 cross-process raw-visibility integration cases after the final one-pass
   getter change.
 
-The focused implementation validation additionally completed the current
-65/65 canonical checkpoint crash catalog. These worktree results close the
-projection review with **no unresolved High or Medium finding**; they do not
-claim or replace the immutable final release evidence.
+At that intermediate projection-review stage, focused implementation validation
+completed the then-current 65/65 canonical checkpoint crash catalog. The later
+directory closure above extends and revalidates the current catalog at 67/67.
+These worktree results close the projection review with **no unresolved High or
+Medium finding**; they do not claim or replace the immutable final release
+evidence.
 
 The focused results above establish closure of the review findings; they are not
 a substitute for the immutable final qualification artifacts below.

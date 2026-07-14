@@ -727,7 +727,44 @@ internal sealed unsafe class LockFreeKeyDirectory
                     out _);
                 if (bindingStatus == CurrentSlotStatus.Invalid)
                 {
-                    return CorruptFrom(nameof(LockFreeKeyDirectory));
+                    // The operation comparison above is intentionally allowed to
+                    // lose to a newer helper phase.  Do not turn a split
+                    // operation/slot snapshot into terminal corruption unless the
+                    // exact canonical mutation, exact operation, location, control,
+                    // and immutable binding tuple all remain stable together.
+                    ulong observedLocation = unchecked((ulong)AtomicControlWord.LoadAcquire(
+                        ref slot.DirectoryLocation));
+                    ExactCanonicalSourceStatus sourceStatus = RevalidateExactCanonicalSource(
+                        canonicalBucketIndex,
+                        mutationRaw,
+                        ref slot,
+                        operationRaw,
+                        operation,
+                        requiredLocationRaw: observedLocation,
+                        publicationLocationRaw: null,
+                        sourceMetadataValid: true);
+                    if (sourceStatus == ExactCanonicalSourceStatus.Invalid)
+                    {
+                        return CorruptFrom(nameof(LockFreeKeyDirectory));
+                    }
+
+                    if (sourceStatus == ExactCanonicalSourceStatus.Stale)
+                    {
+                        StoreStatus cleanup = TryClearBindingReference(
+                            ref mutation,
+                            mutationRaw,
+                            out _);
+                        if (cleanup != StoreStatus.Success)
+                        {
+                            return cleanup;
+                        }
+                    }
+
+                    // Current means the first Invalid observation was transient;
+                    // Advanced means the exact source was legitimately consumed;
+                    // Retry means the tuple kept moving.  In every case the outer
+                    // loop must take a fresh canonical snapshot.
+                    continue;
                 }
 
                 if (bindingStatus == CurrentSlotStatus.Stale)
@@ -1259,8 +1296,11 @@ internal sealed unsafe class LockFreeKeyDirectory
                 operation.Index,
                 operation.Generation);
             StoreStatus locationPublication = TryPublishExactLocation(
+                canonicalBucketIndex,
                 ref slot,
                 binding,
+                operationRaw,
+                operation,
                 locationRaw,
                 ref checkpoint,
                 out bool locationPublished);
@@ -1271,10 +1311,14 @@ internal sealed unsafe class LockFreeKeyDirectory
 
             if (!locationPublished)
             {
-                return TryClearBindingReference(
-                    ref cell.Value,
-                    binding,
-                    out _);
+                // Losing the exact operation source is not proof that the
+                // claimed cell is abandoned.  Another helper may already have
+                // published this same binding and advanced the descriptor; in
+                // that case clearing the cell makes a committed key disappear
+                // and permits a second same-key insert to report success.
+                // Cancellation/recovery owns abandoned-cell cleanup while its
+                // exact generation is still canonical.
+                return StoreStatus.Success;
             }
 
             var changed = DirectoryOperation.Encode(
@@ -1659,8 +1703,11 @@ internal sealed unsafe class LockFreeKeyDirectory
 
                 ulong recoveredLocation = location.Value;
                 StoreStatus locationPublication = TryPublishExactLocation(
+                    canonicalBucketIndex,
                     ref slot,
                     binding,
+                    operationRaw,
+                    operation,
                     recoveredLocation,
                     ref checkpoint,
                     out bool locationPublished);
@@ -1678,48 +1725,58 @@ internal sealed unsafe class LockFreeKeyDirectory
             }
             else if (!TryDecodeLocation(locationRaw, out location))
             {
-                currentOperation = ClassifyCurrentOperation(
+                ExactCanonicalSourceStatus malformedSource = RevalidateExactCanonicalSource(
+                    canonicalBucketIndex,
                     binding,
                     ref slot,
                     operationRaw,
                     operation,
-                    out _);
-                return currentOperation == StoreStatus.Success
-                    ? CorruptHere()
-                    : currentOperation == StoreStatus.NotFound
-                        ? StoreStatus.Success
-                        : currentOperation;
+                    requiredLocationRaw: locationRaw,
+                    publicationLocationRaw: null,
+                    sourceMetadataValid: false);
+                return CompleteLocationSourceLoss(
+                    malformedSource,
+                    ref slot,
+                    binding,
+                    operation,
+                    exactLocation: locationRaw,
+                    cleanupExactLocation: false);
             }
 
             if (location.Generation != operation.Generation)
             {
-                // A later generation proves that this helper lost the slot
-                // after its last exact-operation validation. It must never
-                // erase the new lifecycle's location. An older residue can be
-                // removed only while the exact operation is still current;
-                // the value-tagged CAS then remains safe if reuse wins next.
-                currentOperation = ClassifyCurrentOperation(
+                bool olderLocationValid = location.Generation < operation.Generation
+                    && TryGetTargetCell(location.Kind, location.Index, out _);
+                ExactCanonicalSourceStatus generationSource = RevalidateExactCanonicalSource(
+                    canonicalBucketIndex,
                     binding,
                     ref slot,
                     operationRaw,
                     operation,
-                    out _);
-                if (location.Generation < operation.Generation
-                    && currentOperation == StoreStatus.Success)
+                    requiredLocationRaw: locationRaw,
+                    publicationLocationRaw: null,
+                    sourceMetadataValid: olderLocationValid);
+                if (generationSource != ExactCanonicalSourceStatus.Current)
                 {
-                    StoreStatus locationCleanup = TryClearLocationReference(
-                        ref slot.DirectoryLocation,
-                        locationRaw,
-                        out _);
-                    if (locationCleanup != StoreStatus.Success)
-                    {
-                        return locationCleanup;
-                    }
+                    return CompleteLocationSourceLoss(
+                        generationSource,
+                        ref slot,
+                        binding,
+                        operation,
+                        exactLocation: locationRaw,
+                        cleanupExactLocation: false);
                 }
 
-                if (currentOperation is not (StoreStatus.Success or StoreStatus.NotFound))
+                // Current is possible only for a structurally valid older
+                // residue. A future location with an otherwise exact old-G
+                // tuple is impossible and was classified Invalid above.
+                StoreStatus locationCleanup = TryClearLocationReference(
+                    ref slot.DirectoryLocation,
+                    locationRaw,
+                    out _);
+                if (locationCleanup != StoreStatus.Success)
                 {
-                    return currentOperation;
+                    return locationCleanup;
                 }
 
                 return StoreStatus.Success;
@@ -1791,62 +1848,133 @@ internal sealed unsafe class LockFreeKeyDirectory
             {
                 if (!TryDecodeLocation(observedLocation, out var otherLocation))
                 {
-                    currentOperation = ClassifyCurrentOperation(
+                    ExactCanonicalSourceStatus malformedSource = RevalidateExactCanonicalSource(
+                        canonicalBucketIndex,
                         binding,
                         ref slot,
                         operationRaw,
                         operation,
-                        out _);
-                    return currentOperation == StoreStatus.Success
-                        ? CorruptHere()
-                        : currentOperation == StoreStatus.NotFound
-                            ? StoreStatus.Success
-                            : currentOperation;
+                        requiredLocationRaw: observedLocation,
+                        publicationLocationRaw: null,
+                        sourceMetadataValid: false);
+                    return CompleteLocationSourceLoss(
+                        malformedSource,
+                        ref slot,
+                        binding,
+                        operation,
+                        expectedLocation,
+                        cleanupExactLocation: false);
                 }
 
                 if (otherLocation.Generation != operation.Generation)
                 {
-                    // Future-generation metadata belongs to a reused slot.
-                    // Older residue is removable only under a fresh exact
-                    // operation validation and an exact-value CAS.
-                    currentOperation = ClassifyCurrentOperation(
+                    bool olderLocationValid = otherLocation.Generation < operation.Generation
+                        && TryGetTargetCell(otherLocation.Kind, otherLocation.Index, out _);
+                    ExactCanonicalSourceStatus generationSource = RevalidateExactCanonicalSource(
+                        canonicalBucketIndex,
                         binding,
                         ref slot,
                         operationRaw,
                         operation,
-                        out _);
-                    if (otherLocation.Generation < operation.Generation
-                        && currentOperation == StoreStatus.Success)
+                        requiredLocationRaw: observedLocation,
+                        publicationLocationRaw: null,
+                        sourceMetadataValid: olderLocationValid);
+                    if (generationSource != ExactCanonicalSourceStatus.Current)
                     {
-                        StoreStatus staleLocationCleanup = TryClearLocationReference(
-                            ref slot.DirectoryLocation,
-                            observedLocation,
-                            out _);
-                        if (staleLocationCleanup != StoreStatus.Success)
-                        {
-                            return staleLocationCleanup;
-                        }
+                        return CompleteLocationSourceLoss(
+                            generationSource,
+                            ref slot,
+                            binding,
+                            operation,
+                            expectedLocation,
+                            cleanupExactLocation: false);
                     }
 
-                    if (currentOperation is not (StoreStatus.Success or StoreStatus.NotFound))
+                    StoreStatus staleLocationCleanup = TryClearLocationReference(
+                        ref slot.DirectoryLocation,
+                        observedLocation,
+                        out _);
+                    if (staleLocationCleanup != StoreStatus.Success)
                     {
-                        return currentOperation;
+                        return staleLocationCleanup;
                     }
 
                     return StoreStatus.Success;
                 }
 
-                currentOperation = ClassifyCurrentOperation(
+                bool otherTargetValid = TryGetTargetCell(
+                    otherLocation.Kind,
+                    otherLocation.Index,
+                    out CellReference otherCell);
+                ExactCanonicalSourceStatus conflictSource = RevalidateExactCanonicalSource(
+                    canonicalBucketIndex,
                     binding,
                     ref slot,
                     operationRaw,
                     operation,
+                    requiredLocationRaw: observedLocation,
+                    publicationLocationRaw: expectedLocation,
+                    sourceMetadataValid: otherTargetValid,
+                    publicationTargetMustMatchBinding: false,
+                    secondaryStructuralLocationRaw: observedLocation);
+                if (conflictSource != ExactCanonicalSourceStatus.Current)
+                {
+                    return CompleteLocationSourceLoss(
+                        conflictSource,
+                        ref slot,
+                        binding,
+                        operation,
+                        expectedLocation,
+                        cleanupExactLocation: false);
+                }
+
+                // A delayed Unlink/Prepared publisher may install a second
+                // same-generation location after this descriptor selected its
+                // first target. Both witnesses belong to the same removal. Use
+                // exact comparands for both cells and the observed location, so
+                // a replacement or reused generation is never overwritten.
+                StoreStatus selectedCleanup = TryClearBindingReference(
+                    ref cell.Value,
+                    binding,
                     out _);
-                return currentOperation == StoreStatus.Success
-                    ? CorruptHere()
-                    : currentOperation == StoreStatus.NotFound
-                        ? StoreStatus.Success
-                        : currentOperation;
+                if (selectedCleanup != StoreStatus.Success)
+                {
+                    return selectedCleanup;
+                }
+
+                StoreStatus otherCleanup = TryClearBindingReference(
+                    ref otherCell.Value,
+                    binding,
+                    out _);
+                if (otherCleanup != StoreStatus.Success)
+                {
+                    return otherCleanup;
+                }
+
+                StoreStatus conflictLocationCleanup = TryClearLocationReference(
+                    ref slot.DirectoryLocation,
+                    observedLocation,
+                    out _);
+                if (conflictLocationCleanup != StoreStatus.Success)
+                {
+                    return conflictLocationCleanup;
+                }
+
+                var conflictChanged = DirectoryOperation.Encode(
+                    IntentUnlink,
+                    PhaseBindingChanged,
+                    operation.Kind,
+                    operation.Index,
+                    operation.Generation);
+                ulong observedConflictChanged = unchecked((ulong)AtomicControlWord.CompareExchange(
+                    ref slot.DirectoryOperation,
+                    unchecked((long)conflictChanged),
+                    unchecked((long)operationRaw)));
+                return ValidateOperationCasObservation(
+                    ref slot.DirectoryOperation,
+                    operationRaw,
+                    conflictChanged,
+                    observedConflictChanged);
             }
 
             LockFreeCheckpoint.Reach(
@@ -2752,35 +2880,73 @@ internal sealed unsafe class LockFreeKeyDirectory
     }
 
     private StoreStatus TryPublishExactLocation<TCheckpoint>(
+        int canonicalBucketIndex,
         ref ValueSlotMetadataV2 slot,
         ulong binding,
+        ulong operationRaw,
+        DirectoryOperation operation,
         ulong exactLocation,
         ref TCheckpoint checkpoint,
         out bool published)
         where TCheckpoint : struct, ILockFreeCheckpointStrategy<TCheckpoint>
     {
         published = false;
-        if (!TryDecodeBinding(binding, out var decodedBinding)
-            || !TryDecodeLocation(exactLocation, out var decodedLocation)
-            || decodedBinding.Generation != decodedLocation.Generation)
+        IndexBinding decodedBinding = default;
+        DirectoryOperation decodedOperation = default;
+        DirectoryLocation decodedLocation = default;
+        bool metadataValid = TryDecodeBinding(binding, out decodedBinding)
+            && TryDecodeOperation(operationRaw, out decodedOperation)
+            && decodedOperation.Value == operation.Value
+            && decodedOperation.Value == operationRaw
+            && TryDecodeLocation(exactLocation, out decodedLocation)
+            && decodedBinding.Generation == decodedLocation.Generation
+            && operation.Generation == decodedBinding.Generation
+            && ((operation.Intent == IntentInsert
+                    && operation.Phase == PhaseTargetSelected
+                    && operation.Kind == decodedLocation.Kind
+                    && operation.Index == decodedLocation.Index)
+                || (operation.Intent == IntentUnlink
+                    && operation.Phase == PhasePrepared));
+        ExactCanonicalSourceStatus sourceStatus = RevalidateExactCanonicalSource(
+            canonicalBucketIndex,
+            binding,
+            ref slot,
+            operationRaw,
+            operation,
+            requiredLocationRaw: null,
+            publicationLocationRaw: exactLocation,
+            sourceMetadataValid: metadataValid);
+        if (sourceStatus != ExactCanonicalSourceStatus.Current)
         {
-            return CorruptFrom(nameof(LockFreeKeyDirectory));
+            return CompleteLocationSourceLoss(
+                sourceStatus,
+                ref slot,
+                binding,
+                operation,
+                exactLocation,
+                cleanupExactLocation: false);
         }
 
         for (var attempt = 0; attempt < DefaultRetryBudget; attempt++)
         {
-            CurrentSlotStatus bindingStatus = TryReadCurrentSlotStatus(
+            sourceStatus = RevalidateExactCanonicalSource(
+                canonicalBucketIndex,
                 binding,
                 ref slot,
-                out _,
-                out _);
-            if (bindingStatus != CurrentSlotStatus.Current)
+                operationRaw,
+                operation,
+                requiredLocationRaw: null,
+                publicationLocationRaw: exactLocation,
+                sourceMetadataValid: true);
+            if (sourceStatus != ExactCanonicalSourceStatus.Current)
             {
-                return bindingStatus == CurrentSlotStatus.Invalid
-                    ? CorruptFrom(nameof(LockFreeKeyDirectory))
-                    : bindingStatus == CurrentSlotStatus.Retry
-                        ? StoreStatus.StoreBusy
-                        : StoreStatus.Success;
+                return CompleteLocationSourceLoss(
+                    sourceStatus,
+                    ref slot,
+                    binding,
+                    operation,
+                    exactLocation,
+                    cleanupExactLocation: false);
             }
 
             LockFreeCheckpoint.Reach(
@@ -2789,84 +2955,163 @@ internal sealed unsafe class LockFreeKeyDirectory
             ulong observed = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryLocation));
             if (observed == exactLocation)
             {
-                bindingStatus = TryReadCurrentSlotStatus(binding, ref slot, out _, out _);
-                if (bindingStatus == CurrentSlotStatus.Current)
+                sourceStatus = RevalidateExactCanonicalSource(
+                    canonicalBucketIndex,
+                    binding,
+                    ref slot,
+                    operationRaw,
+                    operation,
+                    requiredLocationRaw: exactLocation,
+                    publicationLocationRaw: exactLocation,
+                    sourceMetadataValid: true);
+                if (sourceStatus == ExactCanonicalSourceStatus.Current)
                 {
                     published = true;
                     return StoreStatus.Success;
                 }
 
-                return bindingStatus == CurrentSlotStatus.Invalid
-                    ? CorruptFrom(nameof(LockFreeKeyDirectory))
-                    : bindingStatus == CurrentSlotStatus.Retry
-                        ? StoreStatus.StoreBusy
-                        : StoreStatus.Success;
+                return CompleteLocationSourceLoss(
+                    sourceStatus,
+                    ref slot,
+                    binding,
+                    operation,
+                    exactLocation,
+                    cleanupExactLocation: sourceStatus == ExactCanonicalSourceStatus.Stale
+                        || (sourceStatus == ExactCanonicalSourceStatus.Advanced
+                            && operation.Intent == IntentUnlink
+                            && operation.Phase == PhasePrepared));
             }
 
             if (observed == 0)
             {
+                sourceStatus = RevalidateExactCanonicalSource(
+                    canonicalBucketIndex,
+                    binding,
+                    ref slot,
+                    operationRaw,
+                    operation,
+                    requiredLocationRaw: 0,
+                    publicationLocationRaw: exactLocation,
+                    sourceMetadataValid: true);
+                if (sourceStatus != ExactCanonicalSourceStatus.Current)
+                {
+                    return CompleteLocationSourceLoss(
+                        sourceStatus,
+                        ref slot,
+                        binding,
+                        operation,
+                        exactLocation,
+                        cleanupExactLocation: false);
+                }
+
+                LockFreeCheckpoint.Reach(
+                    ref checkpoint,
+                    LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas);
+
                 ulong exchanged = unchecked((ulong)AtomicControlWord.CompareExchange(
                     ref slot.DirectoryLocation,
                     unchecked((long)exactLocation),
                     comparand: 0));
                 if (exchanged == 0)
                 {
-                    bindingStatus = TryReadCurrentSlotStatus(binding, ref slot, out _, out _);
-                    if (bindingStatus == CurrentSlotStatus.Current)
+                    LockFreeCheckpoint.Reach(
+                        ref checkpoint,
+                        LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation);
+                    sourceStatus = RevalidateExactCanonicalSource(
+                        canonicalBucketIndex,
+                        binding,
+                        ref slot,
+                        operationRaw,
+                        operation,
+                        requiredLocationRaw: exactLocation,
+                        publicationLocationRaw: exactLocation,
+                        sourceMetadataValid: true);
+                    if (sourceStatus == ExactCanonicalSourceStatus.Current)
                     {
                         published = true;
                         return StoreStatus.Success;
                     }
 
-                    if (bindingStatus == CurrentSlotStatus.Invalid)
-                    {
-                        return CorruptFrom(nameof(LockFreeKeyDirectory));
-                    }
-
-                    StoreStatus locationCleanup = TryClearLocationReference(
-                        ref slot.DirectoryLocation,
+                    return CompleteLocationSourceLoss(
+                        sourceStatus,
+                        ref slot,
+                        binding,
+                        operation,
                         exactLocation,
-                        out _);
-                    if (locationCleanup != StoreStatus.Success)
-                    {
-                        return locationCleanup;
-                    }
-
-                    return bindingStatus == CurrentSlotStatus.Retry
-                        ? StoreStatus.StoreBusy
-                        : StoreStatus.Success;
+                        cleanupExactLocation: sourceStatus == ExactCanonicalSourceStatus.Stale
+                            || (sourceStatus == ExactCanonicalSourceStatus.Advanced
+                                && operation.Intent == IntentUnlink
+                                && operation.Phase == PhasePrepared));
                 }
 
                 continue;
             }
 
-            if (!TryDecodeLocation(observed, out var existing))
+            bool observedLocationValid = TryDecodeLocation(observed, out var existing);
+            bool sameGenerationUnlinkWinner = observedLocationValid
+                && existing.Generation == decodedBinding.Generation
+                && operation.Intent == IntentUnlink
+                && operation.Phase == PhasePrepared
+                && TryGetTargetCell(existing.Kind, existing.Index, out _);
+            bool observedMetadataValid = observedLocationValid
+                && (existing.Generation < decodedBinding.Generation
+                    || sameGenerationUnlinkWinner);
+            sourceStatus = RevalidateExactCanonicalSource(
+                canonicalBucketIndex,
+                binding,
+                ref slot,
+                operationRaw,
+                operation,
+                requiredLocationRaw: observed,
+                publicationLocationRaw: exactLocation,
+                sourceMetadataValid: observedMetadataValid,
+                secondaryStructuralLocationRaw: sameGenerationUnlinkWinner
+                    ? observed
+                    : null);
+            if (sourceStatus != ExactCanonicalSourceStatus.Current)
             {
-                return CorruptFrom(nameof(LockFreeKeyDirectory));
+                return CompleteLocationSourceLoss(
+                    sourceStatus,
+                    ref slot,
+                    binding,
+                    operation,
+                    exactLocation,
+                    cleanupExactLocation: false);
             }
 
-            if (existing.Generation == decodedBinding.Generation)
+            // Unlink/Prepared does not yet encode a selected target. Independent
+            // helpers may therefore recover different exact cells while the
+            // location word is still zero. The first valid location publisher
+            // is the arbitration winner even if its target has since become
+            // empty or contains another structurally valid binding: a helper
+            // may already be paused immediately before selecting that target.
+            // Withdraw only this helper's distinct recovered binding and let
+            // the winner drive the descriptor. Insert/TargetSelected already
+            // names one exact target, so its different same-generation location
+            // remains structural corruption.
+            if (sameGenerationUnlinkWinner)
             {
-                return CorruptFrom(nameof(LockFreeKeyDirectory));
+                if (!TryGetTargetCell(
+                        decodedLocation.Kind,
+                        decodedLocation.Index,
+                        out CellReference proposedTarget))
+                {
+                    return CorruptFrom(nameof(LockFreeKeyDirectory));
+                }
+
+                return TryClearBindingReference(
+                    ref proposedTarget.Value,
+                    binding,
+                    out _);
             }
 
-            bindingStatus = TryReadCurrentSlotStatus(binding, ref slot, out _, out _);
-            if (bindingStatus == CurrentSlotStatus.Invalid)
+            // The stable exact source proof above deliberately includes the
+            // observed location. Reaching this branch therefore means damaged
+            // same-generation metadata was not a CAS loss or later lifecycle.
+            if (!observedLocationValid
+                || existing.Generation >= decodedBinding.Generation)
             {
                 return CorruptFrom(nameof(LockFreeKeyDirectory));
-            }
-
-            if (existing.Generation > decodedBinding.Generation
-                || bindingStatus != CurrentSlotStatus.Current)
-            {
-                // A future location can only belong to a lifecycle that reused
-                // this slot after our validation. Never clear it. Older
-                // residue is cleaned only while the exact binding remains
-                // current; the exact-value CAS is safe if ownership changes
-                // immediately after this check.
-                return bindingStatus == CurrentSlotStatus.Retry
-                    ? StoreStatus.StoreBusy
-                    : StoreStatus.Success;
             }
 
             StoreStatus staleCleanup = TryClearLocationReference(
@@ -2880,6 +3125,280 @@ internal sealed unsafe class LockFreeKeyDirectory
         }
 
         return StoreStatus.StoreBusy;
+    }
+
+    /// <summary>
+    /// Re-proves the complete source of a delayed directory helper without
+    /// publishing the terminal corruption latch.  A source word that moved is
+    /// ordinary lock-free progress; a later slot generation is stale work.  An
+    /// invalid result is returned only after no-op CAS confirmation of every
+    /// atomic source word and a second immutable-binding read.
+    /// </summary>
+    private ExactCanonicalSourceStatus RevalidateExactCanonicalSource(
+        int canonicalBucketIndex,
+        ulong bindingRaw,
+        ref ValueSlotMetadataV2 slot,
+        ulong expectedOperationRaw,
+        DirectoryOperation expectedOperation,
+        ulong? requiredLocationRaw,
+        ulong? publicationLocationRaw,
+        bool sourceMetadataValid,
+        bool publicationTargetMustMatchBinding = true,
+        ulong? secondaryStructuralLocationRaw = null)
+    {
+        if ((uint)canonicalBucketIndex >= (uint)_layout.PrimaryBucketCount)
+        {
+            return ExactCanonicalSourceStatus.Invalid;
+        }
+
+        bool bindingValid = TryDecodeBinding(bindingRaw, out IndexBinding binding)
+            && binding.SlotIndex < _layout.SlotCount;
+        bool targetValid = true;
+        CellReference target = default;
+        if (publicationLocationRaw is ulong publicationRaw)
+        {
+            targetValid = bindingValid
+                && TryDecodeLocation(publicationRaw, out DirectoryLocation publicationLocation)
+                && publicationLocation.Generation == binding.Generation
+                && TryGetTargetCell(publicationLocation.Kind, publicationLocation.Index, out target);
+        }
+
+        bool secondaryTargetValid = true;
+        CellReference secondaryTarget = default;
+        if (secondaryStructuralLocationRaw is ulong secondaryRaw)
+        {
+            secondaryTargetValid = bindingValid
+                && TryDecodeLocation(secondaryRaw, out DirectoryLocation secondaryLocation)
+                && secondaryLocation.Generation == binding.Generation
+                && TryGetTargetCell(
+                    secondaryLocation.Kind,
+                    secondaryLocation.Index,
+                    out secondaryTarget);
+        }
+
+        ref long mutation = ref BucketMutation(canonicalBucketIndex);
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            ulong mutation1 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref mutation));
+            ulong operation1 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation));
+            ulong location1 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryLocation));
+            ulong control1 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.Control));
+            ulong directoryBinding1 = Volatile.Read(ref slot.DirectoryBinding);
+            ulong target1 = publicationLocationRaw.HasValue && targetValid
+                ? unchecked((ulong)AtomicControlWord.LoadAcquire(ref target.Value))
+                : bindingRaw;
+            ulong secondaryTarget1 = secondaryStructuralLocationRaw.HasValue
+                && secondaryTargetValid
+                ? unchecked((ulong)AtomicControlWord.LoadAcquire(ref secondaryTarget.Value))
+                : 0;
+
+            ulong secondaryTarget2 = secondaryStructuralLocationRaw.HasValue
+                && secondaryTargetValid
+                ? unchecked((ulong)AtomicControlWord.LoadAcquire(ref secondaryTarget.Value))
+                : 0;
+            ulong target2 = publicationLocationRaw.HasValue && targetValid
+                ? unchecked((ulong)AtomicControlWord.LoadAcquire(ref target.Value))
+                : bindingRaw;
+            ulong directoryBinding2 = Volatile.Read(ref slot.DirectoryBinding);
+            ulong control2 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.Control));
+            ulong location2 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryLocation));
+            ulong operation2 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation));
+            ulong mutation2 = unchecked((ulong)AtomicControlWord.LoadAcquire(ref mutation));
+            if (mutation1 != mutation2
+                || operation1 != operation2
+                || location1 != location2
+                || control1 != control2
+                || directoryBinding1 != directoryBinding2
+                || target1 != target2
+                || secondaryTarget1 != secondaryTarget2)
+            {
+                continue;
+            }
+
+            if (mutation1 != bindingRaw
+                || operation1 != expectedOperationRaw
+                || (requiredLocationRaw.HasValue && location1 != requiredLocationRaw.Value))
+            {
+                return ExactCanonicalSourceStatus.Advanced;
+            }
+
+            ExactCanonicalSourceStatus result;
+            bool publicationTargetStructurallyValid = !publicationLocationRaw.HasValue
+                || target1 == 0
+                || IsStructurallyValidCleanupWinner(
+                    target1,
+                    CleanupReferenceKind.Binding);
+            bool secondaryTargetStructurallyValid = !secondaryStructuralLocationRaw.HasValue
+                || secondaryTarget1 == 0
+                || IsStructurallyValidCleanupWinner(
+                    secondaryTarget1,
+                    CleanupReferenceKind.Binding);
+            if (!sourceMetadataValid
+                || !bindingValid
+                || !targetValid
+                || !secondaryTargetValid
+                || !publicationTargetStructurallyValid
+                || !secondaryTargetStructurallyValid)
+            {
+                result = ExactCanonicalSourceStatus.Invalid;
+            }
+            else
+            {
+                ControlBindingStatus controlStatus = ClassifyControlBinding(
+                    control1,
+                    binding.Generation);
+                result = controlStatus switch
+                {
+                    ControlBindingStatus.Stale => ExactCanonicalSourceStatus.Stale,
+                    ControlBindingStatus.Invalid => ExactCanonicalSourceStatus.Invalid,
+                    _ when directoryBinding1 != bindingRaw => ExactCanonicalSourceStatus.Invalid,
+                    // PrepareOperation may replace an exact Insert descriptor
+                    // with Unlink/Prepared while a previously validated insert
+                    // cancellation helper is delayed.  That old helper can
+                    // then exact-clear the target before this unlink location
+                    // publisher resumes.  The same witness rule applies to an
+                    // Insert publisher racing its cancellation: empty, or a
+                    // structurally valid new binding that claimed the cleared
+                    // cell, is ordinary progress in a canceling lifecycle.  A
+                    // stable malformed or out-of-range target word still fails
+                    // closed below.
+                    _ when publicationTargetMustMatchBinding
+                        && publicationLocationRaw.HasValue
+                        && target1 != bindingRaw
+                        && IsInsertCancellationState((int)(control1 & 0x7UL))
+                        && (expectedOperation.Intent == IntentInsert
+                            || (expectedOperation.Intent == IntentUnlink
+                                && expectedOperation.Phase == PhasePrepared))
+                        && (target1 == 0
+                            || IsStructurallyValidCleanupWinner(
+                                target1,
+                                CleanupReferenceKind.Binding)) =>
+                        ExactCanonicalSourceStatus.Advanced,
+                    _ when publicationTargetMustMatchBinding
+                        && publicationLocationRaw.HasValue
+                        && target1 != bindingRaw =>
+                        ExactCanonicalSourceStatus.Invalid,
+                    _ => ExactCanonicalSourceStatus.Current,
+                };
+            }
+
+            if (result != ExactCanonicalSourceStatus.Invalid)
+            {
+                return result;
+            }
+
+            // Invalid is terminal only when the exact tuple survives atomic
+            // confirmation.  A CAS loss is progress and must be retried without
+            // touching the winner's generation.
+            if (unchecked((ulong)AtomicControlWord.CompareExchange(
+                    ref mutation,
+                    unchecked((long)mutation1),
+                    unchecked((long)mutation1))) != mutation1
+                || unchecked((ulong)AtomicControlWord.CompareExchange(
+                    ref slot.DirectoryOperation,
+                    unchecked((long)operation1),
+                    unchecked((long)operation1))) != operation1
+                || unchecked((ulong)AtomicControlWord.CompareExchange(
+                    ref slot.DirectoryLocation,
+                    unchecked((long)location1),
+                    unchecked((long)location1))) != location1
+                || unchecked((ulong)AtomicControlWord.CompareExchange(
+                    ref slot.Control,
+                    unchecked((long)control1),
+                    unchecked((long)control1))) != control1
+                || (publicationLocationRaw.HasValue
+                    && targetValid
+                    && unchecked((ulong)AtomicControlWord.CompareExchange(
+                        ref target.Value,
+                        unchecked((long)target1),
+                        unchecked((long)target1))) != target1)
+                || (secondaryStructuralLocationRaw.HasValue
+                    && secondaryTargetValid
+                    && unchecked((ulong)AtomicControlWord.CompareExchange(
+                        ref secondaryTarget.Value,
+                        unchecked((long)secondaryTarget1),
+                        unchecked((long)secondaryTarget1))) != secondaryTarget1)
+                || Volatile.Read(ref slot.DirectoryBinding) != directoryBinding1
+                || unchecked((ulong)AtomicControlWord.LoadAcquire(ref mutation)) != mutation1
+                || unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation)) != operation1
+                || unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryLocation)) != location1
+                || unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.Control)) != control1
+                || (publicationLocationRaw.HasValue
+                    && targetValid
+                    && unchecked((ulong)AtomicControlWord.LoadAcquire(ref target.Value)) != target1)
+                || (secondaryStructuralLocationRaw.HasValue
+                    && secondaryTargetValid
+                    && unchecked((ulong)AtomicControlWord.LoadAcquire(ref secondaryTarget.Value))
+                        != secondaryTarget1))
+            {
+                continue;
+            }
+
+            return ExactCanonicalSourceStatus.Invalid;
+        }
+
+        return ExactCanonicalSourceStatus.Retry;
+    }
+
+    private StoreStatus CompleteLocationSourceLoss(
+        ExactCanonicalSourceStatus sourceStatus,
+        ref ValueSlotMetadataV2 slot,
+        ulong binding,
+        DirectoryOperation operation,
+        ulong exactLocation,
+        bool cleanupExactLocation)
+    {
+        if (sourceStatus == ExactCanonicalSourceStatus.Invalid)
+        {
+            return CorruptFrom(nameof(LockFreeKeyDirectory));
+        }
+
+        if (sourceStatus == ExactCanonicalSourceStatus.Retry)
+        {
+            return StoreStatus.StoreBusy;
+        }
+
+        // Every successor of an exact Unlink/Prepared source removes this
+        // binding. A publisher that loses that source therefore withdraws its
+        // recovered target even when it never won DirectoryLocation. This also
+        // closes the late 0->location CAS window after another helper has
+        // already completed unlink. Exact CAS preserves replacements and slot
+        // reuse; Insert successors deliberately do not use this rule because
+        // BindingChanged/Complete may represent a committed publication.
+        if (operation.Intent == IntentUnlink
+            && operation.Phase == PhasePrepared
+            && sourceStatus is ExactCanonicalSourceStatus.Advanced
+                or ExactCanonicalSourceStatus.Stale)
+        {
+            if (!TryDecodeLocation(exactLocation, out DirectoryLocation location)
+                || !TryGetTargetCell(location.Kind, location.Index, out CellReference target))
+            {
+                return CorruptFrom(nameof(LockFreeKeyDirectory));
+            }
+
+            StoreStatus targetCleanup = TryClearBindingReference(
+                ref target.Value,
+                binding,
+                out _);
+            if (targetCleanup != StoreStatus.Success)
+            {
+                return targetCleanup;
+            }
+        }
+
+        if (cleanupExactLocation)
+        {
+            StoreStatus cleanup = TryClearLocationReference(
+                ref slot.DirectoryLocation,
+                exactLocation,
+                out _);
+            if (cleanup != StoreStatus.Success)
+            {
+                return cleanup;
+            }
+        }
+
+        return StoreStatus.Success;
     }
 
     private StoreStatus TryFindExactBindingLocation(
@@ -4711,6 +5230,15 @@ internal sealed unsafe class LockFreeKeyDirectory
     private enum CurrentSlotStatus
     {
         Current,
+        Stale,
+        Retry,
+        Invalid,
+    }
+
+    private enum ExactCanonicalSourceStatus
+    {
+        Current,
+        Advanced,
         Stale,
         Retry,
         Invalid,

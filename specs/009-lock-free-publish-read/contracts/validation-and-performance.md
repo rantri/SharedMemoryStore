@@ -52,7 +52,21 @@ Required families include:
   restoration after abort/reclaim;
 - normal reservation recovery preserving every live Active owner, plus the
   administrative current-process override only under the documented
-  process-wide writer/writable-view quiescence precondition.
+  process-wide writer/writable-view quiescence precondition;
+- Insert cancellation handed to `Unlink/Prepared`, with a delayed location
+  publisher classifying target states that are exact old binding, empty, valid
+  in-range replacement, malformed, and mapping-out-of-range;
+- two `Unlink/Prepared` helpers recovering distinct same-generation cells, with
+  the first valid location publication winning and the loser clearing only its
+  exact recovered binding, plus `Unlink/TargetSelected` observing each of exact,
+  empty, valid replacement, malformed, and out-of-range target state at a
+  same-generation alternate location;
+- source loss immediately after a location CAS, both before terminal Unlink and
+  after a committed Insert successor, proving exact old target/location cleanup
+  without successor loss; and
+- older location residue, true future-generation reuse, and a future location
+  enclosed by an otherwise exact stable old-generation tuple, including a
+  forced no-op-confirmation race that must retry rather than report corruption.
 
 Every pair is scheduled immediately before and after each ordering point. Only
 the outcome sets in the feature spec are accepted.
@@ -351,7 +365,10 @@ new material public semantic choice.
    location matches the exact mutation/slot generation. A spill summary is
    Present before its cell, changes only by exact version CAS, reaches versioned
    Empty only after a stable full scan, and cannot be cleared or resurrected by
-   delayed helpers after later generations.
+   delayed helpers after later generations. Directory-location handoff schedules
+   pass joint-tuple/no-op confirmation, first-publisher arbitration, alternate
+   location cleanup, and post-CAS source-loss rollback without false corruption
+   or removal of a committed successor or valid replacement.
 4. **Reclamation**: pause/crash cannot reclaim live ownership, mutate through a
    stale token, leak safely recoverable capacity, or block unrelated progress.
 5. **Platform**: raw Release visibility passes and steady-state code never

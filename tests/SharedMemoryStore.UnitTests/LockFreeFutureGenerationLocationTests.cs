@@ -18,7 +18,7 @@ public sealed unsafe class LockFreeFutureGenerationLocationTests
     private const ulong KeyHash = 0xd6e8_feb8_6659_fd93UL;
 
     [Fact]
-    public void PreparedUnlinkHelperDoesNotClearFutureGenerationLocation()
+    public void PreparedUnlinkHelperRejectsStableFutureGenerationLocation()
     {
         if (!IsSupportedHost())
         {
@@ -54,13 +54,17 @@ public sealed unsafe class LockFreeFutureGenerationLocationTests
             futureLocation,
             LockFreeSlotTable.ReclaimingState);
 
-        _ = directory.HelpMutation(canonicalBucket, maxSteps: 1);
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.CorruptStore,
+            directory.HelpMutation(canonicalBucket, maxSteps: 1));
+        Assert.NotNull(LockFreeCorruptionTrace.Consume());
 
         AssertLocation(slots, futureLocation);
     }
 
     [Fact]
-    public void TargetSelectedUnlinkHelperDoesNotClearFutureGenerationLocation()
+    public void TargetSelectedUnlinkHelperRejectsStableFutureGenerationLocation()
     {
         if (!IsSupportedHost())
         {
@@ -97,13 +101,17 @@ public sealed unsafe class LockFreeFutureGenerationLocationTests
             LockFreeSlotTable.ReclaimingState);
         SetPrimaryCell(region, layout, targetIndex, binding);
 
-        _ = directory.HelpMutation(canonicalBucket, maxSteps: 1);
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.CorruptStore,
+            directory.HelpMutation(canonicalBucket, maxSteps: 1));
+        Assert.NotNull(LockFreeCorruptionTrace.Consume());
 
         AssertLocation(slots, futureLocation);
     }
 
     [Fact]
-    public void TargetSelectedInsertHelperDoesNotReplaceFutureGenerationLocation()
+    public void TargetSelectedInsertHelperRejectsStableFutureGenerationLocation()
     {
         if (!IsSupportedHost())
         {
@@ -140,7 +148,11 @@ public sealed unsafe class LockFreeFutureGenerationLocationTests
             LockFreeSlotTable.InitializingState);
         SetPrimaryCell(region, layout, targetIndex, binding);
 
-        _ = directory.HelpMutation(canonicalBucket, maxSteps: 1);
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.CorruptStore,
+            directory.HelpMutation(canonicalBucket, maxSteps: 1));
+        Assert.NotNull(LockFreeCorruptionTrace.Consume());
 
         AssertLocation(slots, futureLocation);
     }

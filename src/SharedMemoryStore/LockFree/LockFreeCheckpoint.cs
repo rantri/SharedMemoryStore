@@ -73,7 +73,9 @@ internal enum LockFreeCheckpointId
     DirectoryAfterCancelLocationClearBeforeDescriptorRejection = 62,
     ReclaimAfterLeaseScanBeforeOwnershipCas = 63,
     ParticipantBeforeReclaimGenerationAdvanceCas = 64,
-    ProjectAfterMetadataReadBeforeControlRevalidation = 65
+    ProjectAfterMetadataReadBeforeControlRevalidation = 65,
+    DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas = 66,
+    DirectoryAfterLocationPublicationBeforeSourceRevalidation = 67
 }
 
 internal enum LockFreeCheckpointFamily
@@ -476,7 +478,17 @@ internal static class LockFreeCheckpointCatalog
                 LockFreeCheckpointFamily.Project,
                 LockFreePauseClassification.BoundedOwnership, LockFreeCrashClassification.ExplicitRecovery,
                 LockFreeRaceClassification.ProjectionLifetime,
-                "After lease projection metadata is read and before its exact slot control is revalidated.")
+                "After lease projection metadata is read and before its exact slot control is revalidated."),
+            After(LockFreeCheckpointId.DirectoryAfterEmptyLocationSourceRevalidationBeforePublicationCas,
+                LockFreeCheckpointFamily.Directory,
+                LockFreePauseClassification.BoundedOwnership, LockFreeCrashClassification.Helpable,
+                LockFreeRaceClassification.ValidationWindow,
+                "After an empty location and its exact publication source are revalidated, immediately before the zero-to-location CAS."),
+            After(LockFreeCheckpointId.DirectoryAfterLocationPublicationBeforeSourceRevalidation,
+                LockFreeCheckpointFamily.Directory,
+                LockFreePauseClassification.PublishedState, LockFreeCrashClassification.Helpable,
+                LockFreeRaceClassification.ValidationWindow, orderingPoint: true,
+                "Immediately after a zero-to-location CAS succeeds and before the publisher revalidates its exact source.")
         });
 
     internal static IReadOnlyList<LockFreeCheckpointEntry> Entries => Catalog;

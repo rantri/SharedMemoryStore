@@ -122,6 +122,34 @@ benign when the same operation is canceling; it remains corruption if the exact
 insert is still current in a non-cancel state because re-publishing that version
 would recreate ABA.
 
+A directory-location publisher treats its authorization as one joint tuple:
+the canonical mutation, exact operation, current location, slot control,
+immutable directory binding, and selected or competing target cells. Terminal
+invalid classification requires two stable acquire collections followed by
+exact no-op compare/exchange confirmation of every atomic tuple member and a
+fresh immutable-binding read. Any loss or movement is ordinary progress or a
+budgeted retry.
+
+Cancellation may replace a validated Insert descriptor with `Unlink/Prepared`
+before the old insert helper exact-clears its target. The delayed unlink
+publisher treats target zero or a structurally valid different in-range binding
+as progress and preserves the replacement; a stable malformed or out-of-range
+word is corruption. Because Prepared does not name a target, independent unlink
+helpers may recover different cells. The first valid location CAS wins; each
+loser exact-clears only its distinct recovered old binding and follows the
+winner. After `Unlink/TargetSelected`, a same-generation alternate location from
+a delayed Prepared publisher is legal: helpers exact-clean the selected and
+alternate old-binding witnesses plus the alternate location, while preserving
+any replacement binding. A malformed alternate remains corruption.
+
+If an unlink publisher loses its exact operation source after its location CAS,
+it withdraws only its exact old target and location. An exact committed Insert
+successor or another valid replacement remains untouched. A strictly older
+location is exact-cleanable residue. A future-generation location is treated as
+reuse only when another member proves that the old tuple moved; a future
+location enclosed by the stable exact old-generation tuple is corruption and is
+preserved for diagnosis.
+
 Ordering is intent-specific. For `ExplicitReservation`, the exact
 `Initializing -> Reserved` CAS is the public `TryReserve` ordering point and
 Reserved owns the key. For `AtomicPublication`, that CAS is only an internal
@@ -319,7 +347,9 @@ unlink/reclaim/reuse or summary replacement won the window; the operation
 charges ordinary contention and restarts from a fresh lookup or maintenance
 retry. Corruption is permitted only when the same exact reference word encloses
 the repeated invalid slot snapshot. This is joint validation, not a new atomic
-multi-word primitive.
+multi-word primitive. Directory-location publishers extend that source proof to
+the complete canonical/operation/location/control/binding/target tuple and use
+the no-op confirmation rule above before terminal invalid classification.
 
 Every slot control accepted by directory logic must also satisfy the complete
 wire shape. `Initializing` and `Reserved` carry a configured structurally valid

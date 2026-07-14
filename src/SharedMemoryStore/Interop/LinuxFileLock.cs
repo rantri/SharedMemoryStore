@@ -244,8 +244,16 @@ internal sealed class LinuxFileLock : IDisposable
             Share = FileShare.ReadWrite | FileShare.Delete,
             UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
         });
-        File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
-        return stream;
+        try
+        {
+            File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
     }
 
     private static LocalLockEntry AcquireLocalLockEntry(string path)

@@ -40,6 +40,12 @@ same public name. `OpenExisting` never creates a parallel mapping. Dimension or
 feature mismatch within the requested major returns `IncompatibleLayout` or the
 existing precise capacity/options result before unsafe access.
 
+An existing all-zero/unpublished header is not treated as an empty store.
+Physical creation, rather than `OpenMode`, profile, dimensions, or zero magic,
+is the sole initialization authority. Every profile pairing preserves the
+existing bytes and reports `AlreadyExists` for `CreateNew`, `StoreBusy` for
+`CreateOrOpen`, or `IncompatibleLayout` for `OpenExisting`.
+
 New C# 2.0 legacy-profile code uses a header-sized probe and returns
 `IncompatibleLayout` for `SMS2` independently of requested dimensions. Immutable
 released binaries have a safety, not exact-status, guarantee: they never return
@@ -54,9 +60,21 @@ intentional fail-closed discovery.
 
 Resource protocol 2 changes participation:
 
-- create/zero-header initialization/header validation still enters the existing
-  Windows named synchronization object or Linux `.lock` record lock so old and
-  new creators serialize;
+- one cold transaction covers physical discovery/creation, header
+  initialization or validation, owner publication, and participant registration
+  under the caller's original wait/cancellation budget;
+- Windows acquires the existing named synchronization object before creating,
+  opening, or mapping the region and retains it through the complete cold
+  transaction;
+- Linux acquires `.lifecycle`, reconciles markers and deletes only proven stale
+  resources, then opens/acquires `.lock` before mapping, owner-anchor locking,
+  owner-line commit, header work, and participant registration; release is
+  `.lock` followed by `.lifecycle`;
+- failed-open mapped-resource and owner cleanup occurs only after those gates
+  are released, because owner cleanup may re-enter `.lifecycle`; a contender
+  rejected before mapping publishes no owner line or release marker;
+- only the attempt whose physical operation created a new region may initialize
+  a zero header; an opened-existing zero header has the fixed outcomes above;
 - Linux owner registration/final cleanup remains under `.lifecycle`;
 - every v2 Linux handle continues writing a resource-naming-v1-compatible live
   `.owners` line in addition to its mapped participant record, preventing an old

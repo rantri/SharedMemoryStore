@@ -411,6 +411,31 @@ longer advance, the helper rolls back only that exact old binding. A stale
 helper may therefore leave recognizable old-generation residue for another
 caller to clear, but it cannot overwrite or unlink a later lifecycle.
 
+Directory-location publication adds no wire state. Its validation tuple is the
+canonical mutation word, exact operation word, current location word, slot
+control, immutable directory binding, and selected or competing target cells.
+A terminal invalid classification requires two identical acquire collections of
+that tuple, exact no-op compare/exchanges confirming every atomic member, and a
+fresh immutable-binding read; any lost comparison is progress and requires
+retry rather than corruption.
+
+When cancellation hands an Insert to `Unlink/Prepared`, an empty target or a
+structurally valid different in-range binding is legal target-loss progress;
+malformed or out-of-range target state is corruption. The first valid
+`Unlink/Prepared` location publisher wins, and a loser exact-clears only its
+distinct recovered old binding. `Unlink/TargetSelected` may observe a valid
+same-generation alternate location and exact-cleans both old-binding witnesses
+and that alternate location while preserving empty cells and valid replacement
+bindings. If the source is lost after a location CAS, the publisher withdraws
+only its exact old target and location; it never removes a committed Insert
+successor or another valid replacement.
+
+Strictly older location residue is exact-cleanable. A future location is benign
+reuse only when another member of the old tuple has moved; a future location
+inside the confirmed exact old-generation tuple is corruption and is preserved
+for diagnosis. These rules change validation and helping only; all offsets and
+operation/location encodings remain unchanged.
+
 `protocol/layout-v2.0.md` and fixtures reproduce these authoritative offsets and
 encodings; tests reject drift before implementation proceeds.
 
@@ -474,11 +499,15 @@ mapped field, shared counter, named primitive, or OS synchronization.
 
 ## Initialization and corruption
 
-Creation zeroes/initializes every atomic word, slot generation, participant and
-lease-record incarnation, fixed offset, and Store ID before publishing `Ready`. A process
-crash while the cold named lifecycle lock is held follows existing platform
-abandonment handling; the next opener validates or reinitializes only an
-unpublished zero/initializing mapping it can safely own.
+The cold attempt that physically creates the region zeroes/initializes every
+atomic word, slot generation, participant and lease-record incarnation, fixed
+offset, and Store ID before publishing `Ready`. Physical creation disposition,
+not open mode or observed zero bytes, is the sole initialization authority. An
+opener of an existing zero header never writes it: `CreateNew` reports
+`AlreadyExists`, `CreateOrOpen` reports `StoreBusy`, and `OpenExisting` reports
+`IncompatibleLayout`. Platform abandonment and stale-resource cleanup may make
+a later attempt the physical creator, but opening an extant unpublished region
+does not. See `protocol/resource-naming-v2.md` for the ordered cold transaction.
 
 Impossible bounds, overlapping sections, unsupported features, misalignment,
 invalid/reserved operation or location bits, generation mismatches, or

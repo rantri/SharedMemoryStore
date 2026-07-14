@@ -135,96 +135,134 @@ public sealed unsafe class MemoryStore : IDisposable
         }
 
         var waitStartTimestamp = Stopwatch.GetTimestamp();
-        var mappingStatus = SharedStorePlatform.TryOpen(options, waitOptions, out var region, out var synchronization);
-        if (mappingStatus != StoreOpenStatus.Success || region is null || synchronization is null)
+        StoreOpenStatus mappingStatus = SharedStorePlatform.TryBeginOpen(
+            options,
+            waitOptions,
+            waitStartTimestamp,
+            out SharedStoreOpenScope? openScope);
+        if (mappingStatus != StoreOpenStatus.Success || openScope is null)
         {
             return mappingStatus;
         }
 
         if (options.Profile == StoreProfile.LockFree)
         {
-            if (!TryGetRemainingWaitOptions(
-                    waitOptions,
-                    waitStartTimestamp,
-                    out StoreWaitOptions remainingWait,
-                    out StoreStatus remainingStatus))
-            {
-                region.Dispose();
-                synchronization.Dispose();
-                return ToOpenStatus(remainingStatus);
-            }
-
             StoreOpenStatus lockFreeStatus;
+            IStoreEngine? engine = null;
             try
             {
-                lockFreeStatus = StoreEngineFactory.TryWrapLockFree(
-                    options,
-                    remainingWait,
-                    region,
-                    synchronization,
-                    out store);
+                using (openScope)
+                {
+                    lockFreeStatus = StoreEngineFactory.TryCreateLockFreeUnderColdGate(
+                        options,
+                        waitOptions,
+                        waitStartTimestamp,
+                        openScope.Region,
+                        openScope.Synchronization,
+                        openScope.Disposition,
+                        out engine);
+                    if (lockFreeStatus == StoreOpenStatus.Success && engine is not null)
+                    {
+                        openScope.TransferResourceOwnership();
+                    }
+                }
             }
             catch (UnauthorizedAccessException)
             {
+                engine?.Dispose();
                 lockFreeStatus = StoreOpenStatus.AccessDenied;
             }
             catch (Exception)
             {
+                engine?.Dispose();
                 lockFreeStatus = StoreOpenStatus.MappingFailed;
             }
 
-            if (lockFreeStatus != StoreOpenStatus.Success)
+            if (lockFreeStatus != StoreOpenStatus.Success || engine is null)
             {
-                region.Dispose();
-                synchronization.Dispose();
                 store = null;
+                return lockFreeStatus;
             }
 
-            return lockFreeStatus;
+            try
+            {
+                // Facade construction occurs only after the platform gates are
+                // released. Its failure cleanup may dispose the Linux region
+                // and enter .lifecycle through exact-owner release.
+                store = StoreEngineFactory.WrapOwnedEngine(engine);
+                return StoreOpenStatus.Success;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                store = null;
+                return StoreOpenStatus.AccessDenied;
+            }
+            catch (Exception)
+            {
+                store = null;
+                return StoreOpenStatus.MappingFailed;
+            }
         }
 
-        MemoryStore candidate;
+        StoreStatus legacyRemainingStatus = SharedStorePlatform.TryGetRemainingWaitOptions(
+            waitOptions,
+            waitStartTimestamp,
+            out _);
+        if (legacyRemainingStatus != StoreStatus.Success)
+        {
+            openScope.Dispose();
+            return ToOpenStatus(legacyRemainingStatus);
+        }
+
+        MemoryStore? candidate = null;
+        StoreOpenStatus initializeStatus;
         try
         {
-            candidate = new MemoryStore(region, synchronization, layout, options.EnableLeaseRecovery);
+            using (openScope)
+            {
+                candidate = new MemoryStore(
+                    openScope.Region,
+                    openScope.Synchronization,
+                    layout,
+                    options.EnableLeaseRecovery);
+                openScope.TransferResourceOwnership();
+                initializeStatus = candidate.InitializeOrValidate(
+                    options,
+                    openScope.Disposition);
+            }
         }
         catch (UnauthorizedAccessException)
         {
-            region.Dispose();
-            synchronization.Dispose();
+            candidate?.DisposeUninitialized();
             return StoreOpenStatus.AccessDenied;
         }
         catch (Exception)
         {
-            region.Dispose();
-            synchronization.Dispose();
+            candidate?.DisposeUninitialized();
             return StoreOpenStatus.MappingFailed;
-        }
-
-        StoreOpenStatus initializeStatus;
-        if (!candidate.TryEnterStoreLock(waitOptions.RemainingSince(waitStartTimestamp), out var lockStatus))
-        {
-            candidate.DisposeUninitialized();
-            return ToOpenStatus(lockStatus);
-        }
-
-        try
-        {
-            initializeStatus = candidate.InitializeOrValidate(options);
-        }
-        finally
-        {
-            candidate.ExitStoreLock();
         }
 
         if (initializeStatus != StoreOpenStatus.Success)
         {
-            candidate.Dispose();
+            candidate.DisposeUninitialized();
             return initializeStatus;
         }
 
-        store = StoreEngineFactory.WrapLegacy(candidate);
-        return StoreOpenStatus.Success;
+        try
+        {
+            store = StoreEngineFactory.WrapLegacy(candidate);
+            return StoreOpenStatus.Success;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            store = null;
+            return StoreOpenStatus.AccessDenied;
+        }
+        catch (Exception)
+        {
+            store = null;
+            return StoreOpenStatus.MappingFailed;
+        }
     }
 
     /// <summary>
@@ -1017,22 +1055,12 @@ public sealed unsafe class MemoryStore : IDisposable
                 return;
             }
 
-            var lockTaken = TryEnterStoreLock(StoreWaitOptions.Default, out _);
-            if (lockTaken)
-            {
-                try
-                {
-                    DisposeCore();
-                }
-                finally
-                {
-                    ExitStoreLock();
-                }
-            }
-            else
-            {
-                DisposeCore();
-            }
+            // TryBeginDispose has closed local entry and drained every active
+            // operation, so teardown does not need the ordinary cross-process
+            // operation lock. Releasing the mapping while holding that lock
+            // would invert Linux open ordering (.lifecycle -> .lock), because
+            // exact-owner cleanup enters .lifecycle after unmapping.
+            DisposeCore();
         }
         finally
         {
@@ -1865,7 +1893,9 @@ public sealed unsafe class MemoryStore : IDisposable
         }
     }
 
-    private StoreOpenStatus InitializeOrValidate(SharedMemoryStoreOptions options)
+    private StoreOpenStatus InitializeOrValidate(
+        SharedMemoryStoreOptions options,
+        RegionOpenDisposition disposition)
     {
         // Existing regions are mapped at their actual backing capacity so an
         // opposite-profile header can be rejected without first projecting the
@@ -1877,7 +1907,7 @@ public sealed unsafe class MemoryStore : IDisposable
         }
 
         ref var header = ref Header;
-        if (options.OpenMode == OpenMode.CreateNew || header.Magic == 0)
+        if (disposition == RegionOpenDisposition.CreatedNew)
         {
             if (options.OpenMode == OpenMode.OpenExisting)
             {
@@ -1897,6 +1927,22 @@ public sealed unsafe class MemoryStore : IDisposable
             _slots.Initialize();
             _leases.Initialize();
             return StoreOpenStatus.Success;
+        }
+
+        if (options.OpenMode == OpenMode.CreateNew)
+        {
+            return StoreOpenStatus.AlreadyExists;
+        }
+
+        if (header.Magic == 0)
+        {
+            // An existing unpublished mapping may belong to an older creator
+            // that exposed the region before entering the ordinary gate. This
+            // opener has no proof of initialization ownership and must not
+            // mutate it.
+            return options.OpenMode == OpenMode.CreateOrOpen
+                ? StoreOpenStatus.StoreBusy
+                : StoreOpenStatus.IncompatibleLayout;
         }
 
         if (header.Magic != LayoutConstants.Magic

@@ -33,16 +33,29 @@ public sealed class LockFreeNoOperationLockIntegrationTests
         Assert.NotNull(region);
 
         var synchronization = new CountingThrowingSynchronization();
-        StoreOpenStatus open = LockFreeStoreEngine.TryCreateOrOpen(
-            options,
-            StoreWaitOptions.Default,
-            region!,
-            synchronization,
-            out IStoreEngine? engine);
-        if (open != StoreOpenStatus.Success || engine is null)
+        Assert.Equal(
+            StoreStatus.Success,
+            synchronization.TryEnter(StoreWaitOptions.Default));
+        IStoreEngine? engine;
+        StoreOpenStatus open;
+        using (var openScope = new SharedStoreOpenScope(
+                   region!,
+                   synchronization,
+                   outerLifecycleGate: null,
+                   RegionOpenDisposition.CreatedNew))
         {
-            region!.Dispose();
-            synchronization.Dispose();
+            open = LockFreeStoreEngine.TryCreateOrOpenUnderColdGate(
+                options,
+                StoreWaitOptions.Default,
+                System.Diagnostics.Stopwatch.GetTimestamp(),
+                region!,
+                synchronization,
+                RegionOpenDisposition.CreatedNew,
+                out engine);
+            if (open == StoreOpenStatus.Success && engine is not null)
+            {
+                openScope.TransferResourceOwnership();
+            }
         }
 
         Assert.Equal(StoreOpenStatus.Success, open);
@@ -71,6 +84,47 @@ public sealed class LockFreeNoOperationLockIntegrationTests
         Assert.Equal(1, synchronization.EnterCount);
         Assert.Equal(1, synchronization.ExitCount);
         Assert.Equal(1, synchronization.DisposeCount);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void FailedColdOpenScopeReleasesGatesBeforeMappedOwnerCleanupExactlyOnce()
+    {
+        var events = new List<string>();
+        var synchronization = new RecordingSynchronization(events);
+        var outerLifecycle = new RecordingDisposable(events, "lifecycle-exit");
+        Assert.Equal(
+            StoreStatus.Success,
+            synchronization.TryEnter(StoreWaitOptions.NoWait));
+
+        var mapping = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateNew(
+            mapName: null,
+            capacity: 4096,
+            System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite);
+        var accessor = mapping.CreateViewAccessor(
+            0,
+            4096,
+            System.IO.MemoryMappedFiles.MemoryMappedFileAccess.ReadWrite);
+        MemoryMappedStoreRegion region = MemoryMappedStoreRegion.Create(
+            mapping,
+            accessor,
+            () => events.Add("region-owner-cleanup"));
+        var scope = new SharedStoreOpenScope(
+            region,
+            synchronization,
+            outerLifecycle,
+            RegionOpenDisposition.CreatedNew);
+
+        scope.Dispose();
+        scope.Dispose();
+
+        Assert.Equal(
+            ["enter", "exit", "lifecycle-exit", "region-owner-cleanup", "sync-dispose"],
+            events);
+        Assert.Equal(1, synchronization.EnterCount);
+        Assert.Equal(1, synchronization.ExitCount);
+        Assert.Equal(1, synchronization.DisposeCount);
+        Assert.Equal(1, outerLifecycle.DisposeCount);
     }
 
     [Fact]
@@ -240,6 +294,64 @@ public sealed class LockFreeNoOperationLockIntegrationTests
         public void Exit() => Interlocked.Increment(ref _exitCount);
 
         public void Dispose() => Interlocked.Increment(ref _disposeCount);
+    }
+
+    private sealed class RecordingSynchronization : ISharedStoreSynchronization
+    {
+        private readonly List<string> _events;
+        private int _enterCount;
+        private int _exitCount;
+        private int _disposeCount;
+
+        internal RecordingSynchronization(List<string> events)
+        {
+            _events = events;
+        }
+
+        internal int EnterCount => _enterCount;
+
+        internal int ExitCount => _exitCount;
+
+        internal int DisposeCount => _disposeCount;
+
+        public StoreStatus TryEnter(StoreWaitOptions waitOptions)
+        {
+            _enterCount++;
+            _events.Add("enter");
+            return StoreStatus.Success;
+        }
+
+        public void Exit()
+        {
+            _exitCount++;
+            _events.Add("exit");
+        }
+
+        public void Dispose()
+        {
+            _disposeCount++;
+            _events.Add("sync-dispose");
+        }
+    }
+
+    private sealed class RecordingDisposable : IDisposable
+    {
+        private readonly List<string> _events;
+        private readonly string _event;
+
+        internal RecordingDisposable(List<string> events, string @event)
+        {
+            _events = events;
+            _event = @event;
+        }
+
+        internal int DisposeCount { get; private set; }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+            _events.Add(_event);
+        }
     }
 
     private sealed class NamedSynchronizationBlocker : IDisposable

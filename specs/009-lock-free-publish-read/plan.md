@@ -79,12 +79,18 @@ same-host writers; explicit recovery only; and layout-v2 required feature mask
 `7` (versioned spill summary, publication intent at slot offset 52, and exact
 Linux PID-namespace identity at header offset 264/participant offset 32).
 Named/file locking remains permitted only for bounded cold create/open/close
-coordination. Each managed Linux handle additionally holds a private regular-file
-`flock` anchor after mapping and before its owner-sidecar line is committed. The
-anchor is liveness evidence, never a data-operation lock; cleanup removes only a
-canonical unreferenced anchor proven regular and unlocked through a separately
-opened `O_NOFOLLOW` descriptor. Locked, nonregular, malformed, inaccessible, or
-otherwise ambiguous artifacts are retained.
+coordination. One cold-open scope owns those gates and the mapped resources
+until initialization or validation and participant registration finish. On
+Windows the named gate precedes mapping. On Linux `.lifecycle` precedes
+reconciliation and stale deletion, `.lock` precedes mapping, and release occurs
+in reverse order before failed-open owner cleanup. Only the physical creator
+initializes an unpublished header; an opener never treats zero bytes or
+`OpenMode` as creation authority. Each managed Linux handle additionally holds
+a private regular-file `flock` anchor after mapping and before its owner-sidecar
+line is committed. The anchor is liveness evidence, never a data-operation lock;
+cleanup removes only a canonical unreferenced anchor proven regular and unlocked
+through a separately opened `O_NOFOLLOW` descriptor. Locked, nonregular,
+malformed, inaccessible, or otherwise ambiguous artifacts are retained.
 Every v2 operation also acquire-loads the aligned store control before a new
 mapped projection or mutation. This is one ordinary shared-memory atomic read,
 not a process-held critical section. Only revalidated persistent mapped
@@ -162,8 +168,9 @@ Public MemoryStore / ValueReservation / ValueLease
                               |--> atomic directory + slot + lease protocols
                               |--> participant registry/recovery classification
                               `--> memory-map and cold-lifecycle platform adapters
-                                     |--> Windows mapping/named lifecycle gate
-                                     `--> Linux mapping/sidecar + owner anchor
+                                     |--> cold-open scope + creation disposition
+                                     |--> Windows named gate -> mapping
+                                     `--> Linux lifecycle -> lock -> mapping/owner
 
 Tests/benchmarks --> public facade + internal deterministic checkpoint seam
 Protocol docs ----> every language implementation (C# v2 now; C++/Python reject)
@@ -174,7 +181,14 @@ one concrete engine. Public reservation and lease structs continue to call back
 through that facade, but carry profile-neutral lifecycle and record incarnation
 tokens. The lock-free engine depends on fixed-width protocol primitives; those
 primitives do not depend on diagnostics, test orchestration, or public wrappers.
-Platform-specific process-start/liveness classification remains isolated.
+Platform-specific process-start/liveness classification remains isolated. A
+`SharedStoreOpenScope` retains the ordered platform gates across mapping,
+header work, and participant registration and reports a local
+`RegionOpenDisposition`; engines may initialize only `CreatedNew`. Successful
+construction transfers the region and synchronization resource exactly once,
+while failed construction releases the inner and outer gates before disposing
+resources whose owner cleanup can re-enter lifecycle coordination. Facade
+construction occurs only after those gates are released.
 On Linux, a handle acquires its per-owner anchor while the per-store lifecycle
 gate is held, commits the exact `PID:start:token` sidecar line, and keeps the
 anchor locked until its mapped view is gone and the line is absent or covered by
@@ -243,7 +257,12 @@ src/SharedMemoryStore/
 |   `-- SharedRecordsV2.cs
 |-- Lifecycle/
 |   `-- StoreLifecycleGate.cs            # Nonblocking operation entry
-`-- Interop/                             # Existing mapping/liveness adapters
+`-- Interop/
+    |-- SharedStorePlatform.cs           # Platform cold-open entry
+    |-- SharedStoreOpenScope.cs          # Gate/resource transaction owner
+    |-- RegionOpenDisposition.cs         # Created-new versus opened-existing proof
+    |-- WindowsSharedMemoryRegion.cs
+    `-- LinuxSharedMemoryRegion.cs
 tests/
 |-- SharedMemoryStore.UnitTests/         # State machine, layout, retry, rollover
 |-- SharedMemoryStore.ContractTests/     # API, status, package/profile contracts
@@ -268,8 +287,12 @@ outside the package.
 1. Freeze legacy behavior with characterization and public API snapshots.
 2. Add profile/participant sizing, layout-v2 records and participant registry,
    atomic codecs, and cross-process aligned-atomic litmus tests before exposing
-   data operations. Slot/lease claim controls atomically embed a participant
-   token; no post-claim identity window is permitted.
+   data operations. Establish the cold-open transaction first: acquire platform
+   coordination before mapping, carry physical creation disposition through
+   header work, initialize only a newly created region, register the handle
+   before release, and clean up failed opens only after ordered gate release.
+   Slot/lease claim controls atomically embed a participant token; no post-claim
+   identity window is permitted.
 3. Implement reserve/commit/acquire/remove/release/reuse for one key with
    deterministic checkpoints and a reference-model checker. Every helper phase,
    directory-location publication, and cleanup uses a generation-tagged exact
@@ -282,6 +305,16 @@ outside the package.
    reclassify the exact slot after validation windows: a concurrent transition
    to `Aborting`/`Reclaiming` routes to cancellation cleanup, while a changed
    operation or generation ends the stale helper without a corruption result.
+   The C# directory-location publisher proves terminal invalid state from two
+   stable forward/reverse collections of the canonical mutation, operation,
+   location, control, immutable binding, and target tuple, followed by exact
+   no-op CAS confirmation. Cancellation target loss accepts empty or valid
+   replacement progress; `Unlink/Prepared` uses first-location-wins arbitration;
+   `Unlink/TargetSelected` cleans same-generation alternate locations; and
+   post-location-CAS source loss withdraws only exact old target/location state.
+   Older residue remains exact-cleanable, while a future location is reuse only
+   after another old-tuple member moves and is corruption inside a confirmed old
+   tuple. This is a helping/validation change with no wire-encoding change.
    The exclusive claimant writes immutable `PublicationIntent` before
    release-publishing the current-generation `Insert/Prepared` metadata-ready
    marker, which precedes canonical mutation and directory-cell discoverability.

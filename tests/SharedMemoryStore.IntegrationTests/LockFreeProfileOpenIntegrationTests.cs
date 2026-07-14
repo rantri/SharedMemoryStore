@@ -105,6 +105,7 @@ public sealed class LockFreeProfileOpenIntegrationTests
             openMode: openMode);
 
         using var legacy = IntegrationStoreFactory.Create(legacyOptions);
+        Assert.Equal(StoreStatus.Success, legacy.TryPublish([0xA1], [0x5A]));
 
         var status = Store.TryCreateOrOpen(oversizedLockFreeOptions, out var incompatible);
 
@@ -113,6 +114,7 @@ public sealed class LockFreeProfileOpenIntegrationTests
         Assert.Null(incompatible);
         Assert.Equal(StoreProfile.Legacy, legacy.Profile);
         Assert.Equal(1, legacy.ProtocolInfo.LayoutMajorVersion);
+        AssertPublishedValue(legacy, [0xA1], [0x5A]);
     }
 
     [Theory]
@@ -146,6 +148,7 @@ public sealed class LockFreeProfileOpenIntegrationTests
             openMode: openMode);
 
         using var lockFree = IntegrationStoreFactory.Create(lockFreeOptions);
+        Assert.Equal(StoreStatus.Success, lockFree.TryPublish([0xA2], [0x5B]));
 
         var status = Store.TryCreateOrOpen(oversizedLegacyOptions, out var incompatible);
 
@@ -153,6 +156,7 @@ public sealed class LockFreeProfileOpenIntegrationTests
         Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
         Assert.Null(incompatible);
         AssertLockFreeProtocol(lockFree);
+        AssertPublishedValue(lockFree, [0xA2], [0x5B]);
     }
 
     [Theory]
@@ -173,12 +177,193 @@ public sealed class LockFreeProfileOpenIntegrationTests
         var requestedOptions = CreateOptions(requestedProfile, name, OpenMode.CreateNew, participantRecordCount: 2);
 
         using var existing = IntegrationStoreFactory.Create(existingOptions);
+        Assert.Equal(StoreStatus.Success, existing.TryPublish([0xA3], [0x5C]));
 
         var status = Store.TryCreateOrOpen(requestedOptions, out var duplicate);
 
         duplicate?.Dispose();
         Assert.Equal(StoreOpenStatus.AlreadyExists, status);
         Assert.Null(duplicate);
+        AssertPublishedValue(existing, [0xA3], [0x5C]);
+    }
+
+    [Theory]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [Trait("Category", "Integration")]
+    public void ExistingZeroHeaderIsNeverInitializedByAnOpener(
+        StoreProfile physicalSizingProfile,
+        StoreProfile requestedProfile,
+        OpenMode requestedMode)
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        string name = $"sms-zero-header-ownership-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions rawCreate = CreateOptions(
+            physicalSizingProfile,
+            name,
+            OpenMode.CreateNew,
+            participantRecordCount: 2);
+        SharedMemoryStoreOptions requested = CreateOptions(
+            requestedProfile,
+            name,
+            requestedMode,
+            participantRecordCount: 2);
+        PlatformResourceName resource = PlatformResourceName.Create(name);
+
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            SharedStorePlatform.TryOpenRegion(
+                rawCreate,
+                StoreWaitOptions.Default,
+                out MemoryMappedStoreRegion? rawRegion));
+        Assert.NotNull(rawRegion);
+
+        try
+        {
+            byte[] prefixBefore = ReadPrefix(rawRegion!, 512);
+            Assert.All(prefixBefore, static value => Assert.Equal(0, value));
+            string[] ownersBefore = OperatingSystem.IsLinux()
+                ? ReadOwnerLines(resource.LinuxOwnersPath)
+                : [];
+
+            StoreOpenStatus status = Store.TryCreateOrOpen(
+                requested,
+                StoreWaitOptions.NoWait,
+                out Store? rejected);
+
+            rejected?.Dispose();
+            StoreOpenStatus expected = requestedMode switch
+            {
+                OpenMode.CreateNew => StoreOpenStatus.AlreadyExists,
+                OpenMode.CreateOrOpen => StoreOpenStatus.StoreBusy,
+                _ => StoreOpenStatus.IncompatibleLayout
+            };
+            Assert.Equal(expected, status);
+            Assert.Null(rejected);
+            Assert.Equal(prefixBefore, ReadPrefix(rawRegion!, prefixBefore.Length));
+            if (OperatingSystem.IsLinux())
+            {
+                Assert.Equal(
+                    ownersBefore.OrderBy(static line => line, StringComparer.Ordinal),
+                    ReadOwnerLines(resource.LinuxOwnersPath).OrderBy(static line => line, StringComparer.Ordinal));
+            }
+        }
+        finally
+        {
+            rawRegion!.Dispose();
+        }
+
+        SharedMemoryStoreOptions missing = CreateOptions(
+            requestedProfile,
+            name,
+            OpenMode.OpenExisting,
+            participantRecordCount: 2);
+        Assert.Equal(StoreOpenStatus.NotFound, Store.TryCreateOrOpen(missing, out Store? absent));
+        Assert.Null(absent);
+    }
+
+    [Theory]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateNew)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.OpenExisting)]
+    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [Trait("Category", "Integration")]
+    public void ColdGateIsAcquiredBeforeAnyPhysicalMappingProbe(
+        StoreProfile creatorProfile,
+        StoreProfile contenderProfile,
+        OpenMode contenderMode)
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        string name = $"sms-cold-gate-before-map-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions creator = CreateOptions(
+            creatorProfile,
+            name,
+            OpenMode.CreateNew,
+            participantRecordCount: 2);
+        SharedMemoryStoreOptions contender = CreateOptions(
+            contenderProfile,
+            name,
+            contenderMode,
+            participantRecordCount: 2);
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            SharedStorePlatform.TryBeginOpen(
+                creator,
+                StoreWaitOptions.Default,
+                started,
+                out SharedStoreOpenScope? heldScope));
+        Assert.NotNull(heldScope);
+
+        using (heldScope)
+        {
+            (StoreOpenStatus Status, Store? Store) result = default;
+            Exception? contenderFailure = null;
+            using var contenderFinished = new ManualResetEventSlim(initialState: false);
+            var contenderThread = new Thread(() =>
+                {
+                    try
+                    {
+                        StoreOpenStatus status = Store.TryCreateOrOpen(
+                            contender,
+                            StoreWaitOptions.NoWait,
+                            out Store? opened);
+                        result = (status, opened);
+                    }
+                    catch (Exception exception)
+                    {
+                        contenderFailure = exception;
+                    }
+                    finally
+                    {
+                        contenderFinished.Set();
+                    }
+                })
+            {
+                IsBackground = true,
+                Name = "SharedMemoryStore cold gate-before-map contender"
+            };
+            contenderThread.Start();
+            Assert.True(contenderFinished.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Null(contenderFailure);
+
+            result.Store?.Dispose();
+            Assert.Equal(StoreOpenStatus.StoreBusy, result.Status);
+            Assert.Null(result.Store);
+            if (OperatingSystem.IsLinux())
+            {
+                Assert.Single(ReadOwnerLines(PlatformResourceName.Create(name).LinuxOwnersPath));
+            }
+        }
+
+        using Store recreated = IntegrationStoreFactory.Create(creator);
+        Assert.Equal(creatorProfile, recreated.Profile);
     }
 
     [Fact]
@@ -351,6 +536,19 @@ public sealed class LockFreeProfileOpenIntegrationTests
         Assert.Equal(2, store.ProtocolInfo.ResourceProtocolVersion);
     }
 
+    private static void AssertPublishedValue(Store store, byte[] key, byte[] expectedValue)
+    {
+        Assert.Equal(StoreStatus.Success, store.TryAcquire(key, out ValueLease lease));
+        try
+        {
+            Assert.Equal(expectedValue, lease.ValueSpan.ToArray());
+        }
+        finally
+        {
+            Assert.Equal(StoreStatus.Success, lease.Release());
+        }
+    }
+
     private static string[] ReadOwnerLines(string path)
     {
         Assert.True(File.Exists(path));
@@ -382,5 +580,13 @@ public sealed class LockFreeProfileOpenIntegrationTests
         stream.SetLength(length);
         stream.Flush(flushToDisk: true);
         Assert.Equal(length, stream.Length);
+    }
+
+    private static unsafe byte[] ReadPrefix(MemoryMappedStoreRegion region, int requestedLength)
+    {
+        int length = checked((int)Math.Min(region.Capacity, requestedLength));
+        var result = new byte[length];
+        new ReadOnlySpan<byte>(region.Pointer, length).CopyTo(result);
+        return result;
     }
 }
