@@ -2217,6 +2217,13 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     }
     [int]$assertions = 2
 
+    $oddMedian = Get-MedianValue ([double[]]@(30.0, 10.0, 20.0))
+    $evenMedian = Get-MedianValue ([double[]]@(40.0, 10.0, 30.0, 20.0))
+    if ($oddMedian -ne 20.0 -or $evenMedian -ne 25.0) {
+        throw 'Linux OS performance verifier self-test did not compute canonical odd/even medians.'
+    }
+    $assertions++
+
     $tampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     $tamperedLockFreeRun = @($tampered.Runs | Where-Object {
         [string]$_.Profile -ceq 'LockFree' `
@@ -4007,10 +4014,11 @@ function Get-MedianValue {
         throw 'Cannot compute a median for an empty evidence set.'
     }
     $sorted = @($Values | Sort-Object)
+    $middleIndex = [int][Math]::Floor($sorted.Count / 2.0)
     if (($sorted.Count % 2) -eq 0) {
-        return ([double]$sorted[$sorted.Count / 2 - 1] + [double]$sorted[$sorted.Count / 2]) / 2.0
+        return ([double]$sorted[$middleIndex - 1] + [double]$sorted[$middleIndex]) / 2.0
     }
-    return [double]$sorted[[int]($sorted.Count / 2)]
+    return [double]$sorted[$middleIndex]
 }
 
 function Assert-ProbeSummaryConsistency {
