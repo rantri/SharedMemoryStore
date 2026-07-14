@@ -52,6 +52,36 @@ public sealed class LockFreeRemoveStateTests
     }
 
     [Fact]
+    public async Task AcquireAfterNoLeaseClassificationCannotEscapeBeforeReclaimOwnership()
+    {
+        using var scheduler = new ControlledLockFreeScheduler();
+        using var store = CreateInstrumentedStore(scheduler);
+        Assert.Equal(StoreStatus.Success, store.TryPublish([1], [7, 8]));
+        scheduler.PauseAt(LockFreeCheckpointId.ReclaimAfterLeaseScanBeforeOwnershipCas);
+
+        StoreStatus removeStatus = default;
+        var remove = Task.Run(() => removeStatus = store.TryRemove([1]));
+        Assert.True(
+            scheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)),
+            "Remove never reached its sole lease scan before reclaim ownership.");
+
+        StoreStatus acquireStatus = store.TryAcquire([1], out ValueLease lease);
+
+        Assert.Equal(StoreStatus.NotFound, acquireStatus);
+        Assert.False(lease.IsValid);
+        Assert.Equal(0, lease.ValueSpan.Length);
+
+        scheduler.Continue();
+        await remove.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains(removeStatus, new[] { StoreStatus.Success, StoreStatus.RemovePending });
+        Assert.Equal(StoreStatus.Success, store.TryPublish([1], [9]));
+        Assert.Equal(StoreStatus.Success, store.TryAcquire([1], out ValueLease replacement));
+        Assert.Equal(9, replacement.ValueSpan[0]);
+        Assert.Equal(StoreStatus.Success, replacement.Release());
+    }
+
+    [Fact]
     public void CancellationBeforeLogicalRemovalPreservesPublishedGeneration()
     {
         using var store = CreateStore();

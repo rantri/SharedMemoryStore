@@ -43,6 +43,11 @@
   participant set and made SC-006 platform-relative so its Windows and Linux
   thresholds are both reproducible and achievable without weakening the
   lock-free contract.
+- Convergence profiling later split Linux SC-006 into uncontended latency,
+  eight-process throughput, lock-free self-amplification, absolute p99, and
+  sampled-maximum gates. This avoids treating the serialized legacy file-lock
+  incumbent distribution as a parallel latency oracle while retaining stricter
+  intrinsic, scaling, absolute-tail, and stall evidence.
 - Cross-artifact analysis found that post-claim owner metadata left an
   unrecoverable crash instruction. With user approval, FR-031/FR-035 and the
   assumptions now make configurable participant/open-handle capacity explicit

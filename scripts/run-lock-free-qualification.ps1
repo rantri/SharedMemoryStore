@@ -937,6 +937,36 @@ function Assert-ExactStringSet {
     }
 }
 
+function Assert-LinuxTinySyncTopology {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Context)
+
+    if ((Get-StrictInt64 $Object 'syncKeysPerWorker' $Context 2 2) -ne 2 `
+        -or (Get-StrictInt64 $Object 'syncMaximumWorkerCount' $Context 12 12) -ne 12 `
+        -or (Get-StrictInt64 $Object 'syncCanonicalBucketCount' $Context 16 16) -ne 16) {
+        throw "$Context does not describe the exact two-key/12-worker/16-bucket synchronization topology."
+    }
+
+    $digest = Get-StrictString $Object 'syncKeyCatalogSha256' $Context
+    if ($digest -cne '9A7E93EB1382F2665155971C64C10D4C29039916CD9E314DB72B9906549656D2' `
+        -or $digest -cnotmatch '^[0-9A-F]{64}$') {
+        throw "$Context has the wrong deterministic synchronization-key catalog digest."
+    }
+
+    $assignments = @(Get-RequiredPropertyValue $Object 'syncKeyCanonicalBucketAssignments' $Context)
+    if ($assignments.Count -ne 24) {
+        throw "$Context must contain exactly 24 synchronization-key bucket assignments."
+    }
+    for ($index = 0; $index -lt $assignments.Count; $index++) {
+        [int64]$expected = [Math]::Floor($index / 2)
+        if (-not (Test-IsIntegerNumber $assignments[$index]) `
+            -or [int64]$assignments[$index] -ne $expected) {
+            throw "$Context synchronization-key bucket assignment $index must be $expected."
+        }
+    }
+}
+
 function Assert-QualificationConfiguration {
     Assert-KnownProvenance $repositoryProvenance 'start'
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
@@ -1015,8 +1045,11 @@ function Assert-QualificationConfiguration {
     Assert-ExactStringSet 'lock-free-only performance scenarios' @($config.performanceMatrix.lockFreeOnlyScenarios) @('sticky-overflow-miss')
     $linuxTiny = Get-RequiredPropertyValue $config 'linuxTinyPerformance' 'qualification config'
     $expectedLinuxTinyProperties = @(
-        'mode', 'profiles', 'scenarios', 'processCounts', 'minimumThroughputRatio',
-        'maximumP99Ratio', 'maximumStallMicroseconds')
+        'mode', 'profiles', 'scenarios', 'processCounts', 'syncKeysPerWorker',
+        'syncMaximumWorkerCount', 'syncCanonicalBucketCount', 'syncKeyCatalogSha256',
+        'syncKeyCanonicalBucketAssignments', 'minimumThroughputRatio',
+        'maximumUncontendedP99Ratio', 'maximumScaleP99Ratio',
+        'maximumP99Microseconds', 'maximumStallMicroseconds')
     if ((@($linuxTiny.PSObject.Properties.Name) -join ',') -cne ($expectedLinuxTinyProperties -join ',')) {
         throw "linuxTinyPerformance properties must be exactly [$($expectedLinuxTinyProperties -join ', ')]."
     }
@@ -1025,13 +1058,17 @@ function Assert-QualificationConfiguration {
     }
     Assert-ExactStringSet 'linuxTinyPerformance profiles' @($linuxTiny.profiles) @('Legacy', 'LockFree')
     Assert-ExactStringSet 'linuxTinyPerformance scenarios' @($linuxTiny.scenarios) @('acquire-release', 'publish-remove')
+    [void](Assert-LinuxTinySyncTopology $linuxTiny 'qualification config linuxTinyPerformance')
     $linuxProcessCounts = @($linuxTiny.processCounts)
-    if ($linuxProcessCounts.Count -ne 1 -or -not (Test-IsIntegerNumber $linuxProcessCounts[0]) `
-        -or [int64]$linuxProcessCounts[0] -ne 8 `
+    if ($linuxProcessCounts.Count -ne 2 `
+        -or -not (Test-IsIntegerNumber $linuxProcessCounts[0]) -or [int64]$linuxProcessCounts[0] -ne 1 `
+        -or -not (Test-IsIntegerNumber $linuxProcessCounts[1]) -or [int64]$linuxProcessCounts[1] -ne 8 `
         -or (Get-StrictDouble $linuxTiny 'minimumThroughputRatio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
-        -or (Get-StrictDouble $linuxTiny 'maximumP99Ratio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
+        -or (Get-StrictDouble $linuxTiny 'maximumUncontendedP99Ratio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
+        -or (Get-StrictDouble $linuxTiny 'maximumScaleP99Ratio' 'qualification config linuxTinyPerformance' 3 3) -ne 3 `
+        -or (Get-StrictDouble $linuxTiny 'maximumP99Microseconds' 'qualification config linuxTinyPerformance' 10 10) -ne 10 `
         -or (Get-StrictDouble $linuxTiny 'maximumStallMicroseconds' 'qualification config linuxTinyPerformance' 10000 10000) -ne 10000) {
-        throw 'linuxTinyPerformance must require process count 8, throughput>=1, p99<=1, and every raw lock-free stall<=10000us.'
+        throw 'linuxTinyPerformance must require process counts [1,8], LF1/Legacy1 p99<=1, LF8/Legacy8 throughput>=1, LF8/LF1 p99<=3, LF8 p99<=10us, and every raw lock-free stall<=10000us.'
     }
     if ((Get-StrictInt64 $config.tiers.release 'performanceWarmupSeconds' 'qualification config release tier' 10 10) -ne 10 `
         -or (Get-StrictInt64 $config.tiers.release 'performanceDurationSeconds' 'qualification config release tier' 60 60) -ne 60 `
@@ -1624,7 +1661,8 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
     $expectedCommandTokens = @(
         'SharedMemoryStore.SyncProbe.csproj', '--mode sync', '--profile both',
-        '--process-counts 8', '--warmup 10', '--duration 60', '--trials 3')
+        '--scenario acquire-release,publish-remove', '--process-counts 1,8',
+        '--warmup 10', '--duration 60', '--trials 3')
     foreach ($token in $expectedCommandTokens) {
         if ([string]$row[0].command -cnotlike "*$token*") {
             throw "Linux tiny performance command is missing exact token '$token'."
@@ -1673,14 +1711,22 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
     [void](Get-StrictString $raw 'schemaCompatibility' 'Linux tiny performance raw report')
     $environment = Get-RequiredPropertyValue $raw 'environment' 'Linux tiny performance raw report'
+    $osHost = Get-RequiredPropertyValue $Report 'host' 'Linux OS evidence report'
     if ((Get-StrictString $environment 'repositoryCommit' 'Linux tiny performance environment') -cne
             [string]$Report.provenance.repositoryCommit `
         -or (Get-StrictString $environment 'repositoryWorkingTreeState' 'Linux tiny performance environment') -cne 'clean' `
-        -or (Get-StrictString $environment 'operatingSystem' 'Linux tiny performance environment') -notmatch 'Linux' `
+        -or (Get-StrictString $Report 'platform' 'Linux OS evidence report') -cne 'linux' `
+        -or (Get-StrictString $Report 'architecture' 'Linux OS evidence report') -cne 'x64' `
+        -or (Get-StrictString $environment 'operatingSystem' 'Linux tiny performance environment') -cne
+            (Get-StrictString $osHost 'operatingSystem' 'Linux OS host evidence') `
+        -or (Get-StrictString $environment 'operatingSystemArchitecture' 'Linux tiny performance environment') -cne
+            (Get-StrictString $osHost 'operatingSystemArchitecture' 'Linux OS host evidence') `
         -or (Get-StrictString $environment 'operatingSystemArchitecture' 'Linux tiny performance environment') -cne 'X64' `
+        -or (Get-StrictString $environment 'processArchitecture' 'Linux tiny performance environment') -cne
+            (Get-StrictString $osHost 'processArchitecture' 'Linux OS host evidence') `
         -or (Get-StrictString $environment 'processArchitecture' 'Linux tiny performance environment') -cne 'X64' `
         -or (Get-StrictInt64 $environment 'logicalProcessorCount' 'Linux tiny performance environment' 8 [int32]::MaxValue) -ne
-            (Get-StrictInt64 $Report.host 'logicalProcessorCount' 'Linux OS host evidence' 8 [int32]::MaxValue)) {
+            (Get-StrictInt64 $osHost 'logicalProcessorCount' 'Linux OS host evidence' 8 [int32]::MaxValue)) {
         throw 'Linux tiny performance raw environment does not match its clean Linux OS evidence report.'
     }
     foreach ($property in @('framework', 'runtimeVersion', 'processorIdentifier')) {
@@ -1703,10 +1749,13 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         -or (Get-StrictInt64 $configuration 'durationSeconds' 'Linux tiny performance configuration' 60 60) -ne 60 `
         -or (Get-StrictInt64 $configuration 'warmupSeconds' 'Linux tiny performance configuration' 10 10) -ne 10 `
         -or (Get-StrictInt64 $configuration 'warmupCycles' 'Linux tiny performance configuration' 0 0) -ne 0 `
+        -or (Get-StrictInt64 $configuration 'samplingInterval' 'Linux tiny performance configuration' 64 64) -ne 64 `
+        -or (Get-StrictInt64 $configuration 'maxLatencySamplesPerWorker' 'Linux tiny performance configuration' 65536 65536) -ne 65536 `
         -or (Get-StrictInt64 $configuration 'trials' 'Linux tiny performance configuration' 3 3) -ne 3 `
         -or -not (Get-StrictBoolean $configuration 'affinityRequested' 'Linux tiny performance configuration')) {
         throw 'Linux tiny performance raw configuration is not the exact 10s/60s/3-trial affinity workload.'
     }
+    [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
     if ((@($configuration.profiles) -join ',') -cne 'Legacy,LockFree' `
         -or (@($configuration.scenarios) -join ',') -cne 'acquire-release,publish-remove' `
         -or (@($configuration.scenarioProcessCounts.PSObject.Properties.Name) -join ',') -cne
@@ -1715,22 +1764,28 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
         $counts = @($configuration.scenarioProcessCounts.$scenario)
-        if ($counts.Count -ne 1 -or -not (Test-IsIntegerNumber $counts[0]) -or [int64]$counts[0] -ne 8) {
-            throw "Linux tiny performance '$scenario' process-count matrix must be exactly [8]."
+        if ($counts.Count -ne 2 `
+            -or -not (Test-IsIntegerNumber $counts[0]) -or [int64]$counts[0] -ne 1 `
+            -or -not (Test-IsIntegerNumber $counts[1]) -or [int64]$counts[1] -ne 8) {
+            throw "Linux tiny performance '$scenario' process-count matrix must be exactly [1,8]."
         }
     }
 
     $runs = @($raw.runs)
     $summaries = @($raw.summary)
-    if ($runs.Count -ne 12 -or $summaries.Count -ne 4) {
-        throw "Linux tiny performance raw matrix must contain 12 runs and 4 summaries, actual=$($runs.Count)/$($summaries.Count)."
+    if ($runs.Count -ne 24 -or $summaries.Count -ne 8) {
+        throw "Linux tiny performance raw matrix must contain 24 runs and 8 summaries, actual=$($runs.Count)/$($summaries.Count)."
     }
     $expectedRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $expectedSummaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($profile in @('Legacy', 'LockFree')) {
         foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            [void]$expectedSummaryKeys.Add("$profile|$scenario|8")
-            foreach ($trial in 1..3) { [void]$expectedRunKeys.Add("$profile|$scenario|8|$trial") }
+            foreach ($processCount in @(1, 8)) {
+                [void]$expectedSummaryKeys.Add("$profile|$scenario|$processCount")
+                foreach ($trial in 1..3) {
+                    [void]$expectedRunKeys.Add("$profile|$scenario|$processCount|$trial")
+                }
+            }
         }
     }
     $actualRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -1738,7 +1793,10 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         $context = "Linux tiny run $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
         $profile = Get-StrictString $run 'profile' $context
         $scenario = Get-StrictString $run 'scenario' $context
-        $processCount = Get-StrictInt64 $run 'processCount' $context 8 8
+        $processCount = Get-StrictInt64 $run 'processCount' $context 1 8
+        if ($processCount -notin @(1, 8)) {
+            throw "$context has an unsupported process count."
+        }
         $trial = Get-StrictInt64 $run 'trial' $context 1 3
         $key = "$profile|$scenario|$processCount|$trial"
         if (-not $expectedRunKeys.Contains($key) -or -not $actualRunKeys.Add($key)) {
@@ -1749,11 +1807,11 @@ function Assert-LinuxTinyOsPerformanceEvidence {
             -or (Get-StrictBoolean $run 'oversubscribed' $context)) {
             throw "$context is not a correctness-clean qualification measurement."
         }
-        $readerCount = Get-StrictInt64 $run 'readerProcessCount' $context 0 8
-        $publisherCount = Get-StrictInt64 $run 'publisherProcessCount' $context 0 8
+        $readerCount = Get-StrictInt64 $run 'readerProcessCount' $context 0 $processCount
+        $publisherCount = Get-StrictInt64 $run 'publisherProcessCount' $context 0 $processCount
         $observerCount = Get-StrictInt64 $run 'observerProcessCount' $context 0 0
-        if (($scenario -ceq 'acquire-release' -and ($readerCount -ne 8 -or $publisherCount -ne 0)) `
-            -or ($scenario -ceq 'publish-remove' -and ($readerCount -ne 0 -or $publisherCount -ne 8)) `
+        if (($scenario -ceq 'acquire-release' -and ($readerCount -ne $processCount -or $publisherCount -ne 0)) `
+            -or ($scenario -ceq 'publish-remove' -and ($readerCount -ne 0 -or $publisherCount -ne $processCount)) `
             -or $observerCount -ne 0) {
             throw "$context has the wrong process-role topology."
         }
@@ -1765,7 +1823,16 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         $measuredSeconds = Get-StrictDouble $run 'measuredSeconds' $context 60 [double]::MaxValue
         $wallSeconds = Get-StrictDouble $run 'wallSeconds' $context $measuredSeconds [double]::MaxValue
         [void]$wallSeconds
-        [void](Get-StrictInt64 $run 'sampleCount' $context 1 [int32]::MaxValue)
+        [int64]$minimumWindowSamples = [int64]$processCount * 1024
+        [int64]$maximumWindowSamples = [int64]$processCount * 32768
+        [int64]$minimumTotalSamples = $minimumWindowSamples * 2
+        [int64]$maximumTotalSamples = $maximumWindowSamples * 2
+        $earlySampleCount = Get-StrictInt64 $run 'earlySampleCount' $context $minimumWindowSamples $maximumWindowSamples
+        $lateSampleCount = Get-StrictInt64 $run 'lateSampleCount' $context $minimumWindowSamples $maximumWindowSamples
+        $sampleCount = Get-StrictInt64 $run 'sampleCount' $context $minimumTotalSamples $maximumTotalSamples
+        if ($sampleCount -ne ($earlySampleCount + $lateSampleCount) -or $sampleCount -gt $cycles) {
+            throw "$context sampleCount must equal its early/late windows and cannot exceed completed cycles."
+        }
         Assert-OsDerivedDouble `
             (Get-StrictDouble $run 'apiCallsPerSecond' $context 0 [double]::MaxValue -Positive) `
             ([double]$operations / $measuredSeconds) "$context.apiCallsPerSecond"
@@ -1773,6 +1840,8 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         $p95 = Get-StrictDouble $run 'p95Microseconds' $context 0 [double]::MaxValue
         $p99 = Get-StrictDouble $run 'p99Microseconds' $context 0 [double]::MaxValue
         $maximum = Get-StrictDouble $run 'maxMicroseconds' $context 0 [double]::MaxValue
+        [void](Get-StrictDouble $run 'earlyP99Microseconds' $context 0 [double]::MaxValue -Positive)
+        [void](Get-StrictDouble $run 'lateP99Microseconds' $context 0 [double]::MaxValue -Positive)
         if ($p50 -gt $p95 -or $p95 -gt $p99 -or $p99 -gt $maximum `
             -or ($profile -ceq 'LockFree' -and $maximum -gt
                 (Get-StrictDouble $config.linuxTinyPerformance 'maximumStallMicroseconds' `
@@ -1780,9 +1849,10 @@ function Assert-LinuxTinyOsPerformanceEvidence {
             throw "$context violates p99/maximum ordering or the every-run 10000us lock-free stall gate."
         }
         $assigned = @($run.assignedProcessors)
-        if ($assigned.Count -ne 8 -or @($assigned | Sort-Object -Unique).Count -ne 8 `
-            -or (Get-StrictInt64 $run 'affinityAppliedCount' $context 8 8) -ne 8) {
-            throw "$context lacks complete unique eight-process affinity evidence."
+        if ($assigned.Count -ne $processCount `
+            -or @($assigned | Sort-Object -Unique).Count -ne $processCount `
+            -or (Get-StrictInt64 $run 'affinityAppliedCount' $context $processCount $processCount) -ne $processCount) {
+            throw "$context lacks complete unique $processCount-process affinity evidence."
         }
         foreach ($processor in $assigned) {
             if (-not (Test-IsIntegerNumber $processor) `
@@ -1793,7 +1863,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         }
         $workerCycles = @($run.workerCycles)
         [decimal]$workerCycleTotal = 0
-        if ($workerCycles.Count -ne 8) { throw "$context must contain eight worker-cycle rows." }
+        if ($workerCycles.Count -ne $processCount) {
+            throw "$context must contain exactly $processCount worker-cycle rows."
+        }
         foreach ($workerCycle in $workerCycles) {
             if (-not (Test-IsIntegerNumber $workerCycle) -or [int64]$workerCycle -lt 0) {
                 throw "$context has an invalid worker-cycle row."
@@ -1839,13 +1911,16 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         $context = "Linux tiny summary $($summary.profile)/$($summary.scenario)/$($summary.processCount)"
         $profile = Get-StrictString $summary 'profile' $context
         $scenario = Get-StrictString $summary 'scenario' $context
-        $processCount = Get-StrictInt64 $summary 'processCount' $context 8 8
+        $processCount = Get-StrictInt64 $summary 'processCount' $context 1 8
+        if ($processCount -notin @(1, 8)) {
+            throw "$context has an unsupported process count."
+        }
         $key = "$profile|$scenario|$processCount"
         if (-not $expectedSummaryKeys.Contains($key) -or -not $actualSummaryKeys.Add($key)) {
             throw "$context is unexpected or duplicated."
         }
         $matching = @($runs | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
+            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $processCount
         })
         if ($matching.Count -ne 3 -or (Get-StrictInt64 $summary 'totalFailures' $context 0 0) -ne 0) {
             throw "$context does not summarize exactly three correctness-clean trials."
@@ -1882,49 +1957,83 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         throw 'Linux tiny performance summary tuple set is incomplete.'
     }
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $legacy = @($summaries | Where-Object { [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario })[0]
-        $lockFree = @($summaries | Where-Object { [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario })[0]
-        $legacyRate = Get-StrictDouble $legacy 'medianApiCallsPerSecond' "$scenario legacy summary" 0 [double]::MaxValue -Positive
-        $lockFreeRate = Get-StrictDouble $lockFree 'medianApiCallsPerSecond' "$scenario lock-free summary" 0 [double]::MaxValue -Positive
-        $legacyP99 = Get-StrictDouble $legacy 'medianP99Microseconds' "$scenario legacy summary" 0 [double]::MaxValue -Positive
-        $lockFreeP99 = Get-StrictDouble $lockFree 'medianP99Microseconds' "$scenario lock-free summary" 0 [double]::MaxValue -Positive
-        if (($lockFreeRate / $legacyRate) -lt [double]$config.linuxTinyPerformance.minimumThroughputRatio `
-            -or ($lockFreeP99 / $legacyP99) -gt [double]$config.linuxTinyPerformance.maximumP99Ratio) {
-            throw "Linux tiny performance '$scenario' throughput or p99 regression gate failed."
+        $legacyOne = @($summaries | Where-Object {
+            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        })[0]
+        $lockFreeOne = @($summaries | Where-Object {
+            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        })[0]
+        $legacyEight = @($summaries | Where-Object {
+            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
+        })[0]
+        $lockFreeEight = @($summaries | Where-Object {
+            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
+        })[0]
+        $legacyOneP99 = Get-StrictDouble $legacyOne 'medianP99Microseconds' "$scenario legacy/1p summary" 0 [double]::MaxValue -Positive
+        $lockFreeOneP99 = Get-StrictDouble $lockFreeOne 'medianP99Microseconds' "$scenario lock-free/1p summary" 0 [double]::MaxValue -Positive
+        $legacyEightRate = Get-StrictDouble $legacyEight 'medianApiCallsPerSecond' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
+        $lockFreeEightRate = Get-StrictDouble $lockFreeEight 'medianApiCallsPerSecond' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
+        $lockFreeEightP99 = Get-StrictDouble $lockFreeEight 'medianP99Microseconds' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
+        $uncontendedP99Ratio = $lockFreeOneP99 / $legacyOneP99
+        $throughputRatio = $lockFreeEightRate / $legacyEightRate
+        $scaleP99Ratio = $lockFreeEightP99 / $lockFreeOneP99
+        if (-not [double]::IsFinite($uncontendedP99Ratio) `
+            -or $uncontendedP99Ratio -gt [double]$config.linuxTinyPerformance.maximumUncontendedP99Ratio `
+            -or -not [double]::IsFinite($throughputRatio) `
+            -or $throughputRatio -lt [double]$config.linuxTinyPerformance.minimumThroughputRatio `
+            -or -not [double]::IsFinite($scaleP99Ratio) `
+            -or $scaleP99Ratio -gt [double]$config.linuxTinyPerformance.maximumScaleP99Ratio `
+            -or $lockFreeEightP99 -gt [double]$config.linuxTinyPerformance.maximumP99Microseconds) {
+            throw "Linux tiny performance '$scenario' gate failed: uncontendedP99Ratio=$uncontendedP99Ratio throughputRatio=$throughputRatio scaleP99Ratio=$scaleP99Ratio lockFreeEightP99Microseconds=$lockFreeEightP99."
         }
     }
     $declared = Get-RequiredPropertyValue $performance 'validation' 'Linux tiny performance row evidence'
-    if ((Get-StrictInt64 $declared 'schemaVersion' 'Linux tiny declared validation' 1 1) -ne 1 `
-        -or (Get-StrictInt64 $declared 'runCount' 'Linux tiny declared validation' 12 12) -ne 12 `
-        -or (Get-StrictInt64 $declared 'summaryCount' 'Linux tiny declared validation' 4 4) -ne 4 `
+    $expectedDeclaredProperties = @(
+        'schemaVersion', 'runCount', 'summaryCount', 'warmupSeconds', 'durationSeconds',
+        'trials', 'processCounts', 'minimumThroughputRatio', 'maximumUncontendedP99Ratio',
+        'maximumScaleP99Ratio', 'maximumP99Microseconds', 'maximumStallMicroseconds', 'metrics')
+    if ((@($declared.PSObject.Properties.Name) -join ',') -cne ($expectedDeclaredProperties -join ',')) {
+        throw 'Linux tiny performance row declared validation has unexpected properties or property order.'
+    }
+    $declaredProcessCounts = @(Get-RequiredPropertyValue $declared 'processCounts' 'Linux tiny declared validation')
+    if ($declaredProcessCounts.Count -ne 2 `
+        -or -not (Test-IsIntegerNumber $declaredProcessCounts[0]) -or [int64]$declaredProcessCounts[0] -ne 1 `
+        -or -not (Test-IsIntegerNumber $declaredProcessCounts[1]) -or [int64]$declaredProcessCounts[1] -ne 8 `
+        -or (Get-StrictInt64 $declared 'schemaVersion' 'Linux tiny declared validation' 2 2) -ne 2 `
+        -or (Get-StrictInt64 $declared 'runCount' 'Linux tiny declared validation' 24 24) -ne 24 `
+        -or (Get-StrictInt64 $declared 'summaryCount' 'Linux tiny declared validation' 8 8) -ne 8 `
         -or (Get-StrictInt64 $declared 'warmupSeconds' 'Linux tiny declared validation' 10 10) -ne 10 `
         -or (Get-StrictInt64 $declared 'durationSeconds' 'Linux tiny declared validation' 60 60) -ne 60 `
         -or (Get-StrictInt64 $declared 'trials' 'Linux tiny declared validation' 3 3) -ne 3 `
-        -or (Get-StrictInt64 $declared 'processCount' 'Linux tiny declared validation' 8 8) -ne 8 `
         -or (Get-StrictDouble $declared 'minimumThroughputRatio' 'Linux tiny declared validation' 1 1) -ne 1 `
-        -or (Get-StrictDouble $declared 'maximumP99Ratio' 'Linux tiny declared validation' 1 1) -ne 1 `
+        -or (Get-StrictDouble $declared 'maximumUncontendedP99Ratio' 'Linux tiny declared validation' 1 1) -ne 1 `
+        -or (Get-StrictDouble $declared 'maximumScaleP99Ratio' 'Linux tiny declared validation' 3 3) -ne 3 `
+        -or (Get-StrictDouble $declared 'maximumP99Microseconds' 'Linux tiny declared validation' 10 10) -ne 10 `
         -or (Get-StrictDouble $declared 'maximumStallMicroseconds' 'Linux tiny declared validation' 10000 10000) -ne 10000) {
         throw 'Linux tiny performance row declared validation does not match the recomputed gate.'
     }
     $declaredMetrics = @($declared.metrics)
-    if ($declaredMetrics.Count -ne 4) {
-        throw 'Linux tiny performance row must declare exactly four recomputable metric rows.'
+    if ($declaredMetrics.Count -ne 8) {
+        throw 'Linux tiny performance row must declare exactly eight recomputable metric rows.'
     }
     $actualDeclaredMetricKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($metric in $declaredMetrics) {
         $metricContext = "Linux tiny declared metric $($metric.profile)/$($metric.scenario)/$($metric.processCount)"
         $profile = Get-StrictString $metric 'profile' $metricContext
         $scenario = Get-StrictString $metric 'scenario' $metricContext
-        $metricProcessCount = Get-StrictInt64 $metric 'processCount' $metricContext 8 8
+        $metricProcessCount = Get-StrictInt64 $metric 'processCount' $metricContext 1 8
+        if ($metricProcessCount -notin @(1, 8)) {
+            throw "$metricContext has an unsupported process count."
+        }
         $metricKey = "$profile|$scenario|$metricProcessCount"
         if (-not $expectedSummaryKeys.Contains($metricKey) -or -not $actualDeclaredMetricKeys.Add($metricKey)) {
             throw "$metricContext is unexpected or duplicated."
         }
         $matchingSummary = @($summaries | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
+            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
         })
         $matchingRuns = @($runs | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
+            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
         })
         if ($matchingSummary.Count -ne 1 -or $matchingRuns.Count -ne 3) {
             throw "$metricContext does not identify one exact recomputed summary tuple."
@@ -1955,49 +2064,62 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $summaries = [Collections.Generic.List[object]]::new()
     foreach ($profile in @('Legacy', 'LockFree')) {
         foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            $api = if ($profile -ceq 'Legacy') { 1000.0 } else { 1100.0 }
-            $p99 = if ($profile -ceq 'Legacy') { 100.0 } else { 90.0 }
-            $maximum = if ($profile -ceq 'Legacy') { 500.0 } else { 9000.0 }
-            [int64]$cycles = if ($profile -ceq 'Legacy') { 30000 } else { 33000 }
-            [int64]$operations = $cycles * 2
-            [int64]$workerCycle = $cycles / 8
-            $histogram = if ($scenario -ceq 'acquire-release') {
-                [pscustomobject][ordered]@{ 'Acquire.Success' = $cycles; 'Release.Success' = $cycles }
-            }
-            else {
-                [pscustomobject][ordered]@{ 'Publish.Success' = $cycles; 'Remove.Success' = $cycles }
-            }
-            foreach ($trial in 1..3) {
-                $runs.Add([pscustomobject][ordered]@{
-                    Profile = $profile; Scenario = $scenario; ProcessCount = 8; Trial = $trial
-                    ReaderProcessCount = $(if ($scenario -ceq 'acquire-release') { 8 } else { 0 })
-                    PublisherProcessCount = $(if ($scenario -ceq 'publish-remove') { 8 } else { 0 })
-                    ObserverProcessCount = 0; Cycles = $cycles; Operations = $operations
-                    ApiCallsPerSecond = $api; P50Microseconds = 10.0; P95Microseconds = 50.0
-                    P99Microseconds = $p99; MaxMicroseconds = $maximum
-                    Failures = 0; MeasuredSeconds = 60.0; WallSeconds = 70.0; SampleCount = 100
-                    AffinityAppliedCount = 8
-                    AssignedProcessors = @(8, 9, 10, 11, 12, 13, 14, 15); Oversubscribed = $false
-                    Qualification = 'qualification-measurement'; StatusHistogram = $histogram
-                    WorkerCycles = @($workerCycle, $workerCycle, $workerCycle, $workerCycle,
-                        $workerCycle, $workerCycle, $workerCycle, $workerCycle)
+            foreach ($processCount in @(1, 8)) {
+                $api = if ($profile -ceq 'Legacy') { 1000.0 } else { 1100.0 }
+                $p99 = if ($processCount -eq 1) {
+                    if ($profile -ceq 'Legacy') { 5.0 } else { 4.0 }
+                }
+                else {
+                    if ($profile -ceq 'Legacy') { 3.0 } else { 8.0 }
+                }
+                $maximum = if ($profile -ceq 'Legacy') { 500.0 } else { 9000.0 }
+                [int64]$cycles = if ($profile -ceq 'Legacy') { 30000 } else { 33000 }
+                [int64]$operations = $cycles * 2
+                [int64]$workerCycle = $cycles / $processCount
+                [int64]$windowSamples = [int64]$processCount * 1024
+                $workerCycles = @()
+                for ($worker = 0; $worker -lt $processCount; $worker++) {
+                    $workerCycles += $workerCycle
+                }
+                $histogram = if ($scenario -ceq 'acquire-release') {
+                    [pscustomobject][ordered]@{ 'Acquire.Success' = $cycles; 'Release.Success' = $cycles }
+                }
+                else {
+                    [pscustomobject][ordered]@{ 'Publish.Success' = $cycles; 'Remove.Success' = $cycles }
+                }
+                foreach ($trial in 1..3) {
+                    $runs.Add([pscustomobject][ordered]@{
+                        Profile = $profile; Scenario = $scenario; ProcessCount = $processCount; Trial = $trial
+                        ReaderProcessCount = $(if ($scenario -ceq 'acquire-release') { $processCount } else { 0 })
+                        PublisherProcessCount = $(if ($scenario -ceq 'publish-remove') { $processCount } else { 0 })
+                        ObserverProcessCount = 0; Cycles = $cycles; Operations = $operations
+                        ApiCallsPerSecond = $api; P50Microseconds = 1.0; P95Microseconds = 2.0
+                        P99Microseconds = $p99; MaxMicroseconds = $maximum
+                        EarlyP99Microseconds = $p99; LateP99Microseconds = $p99
+                        Failures = 0; MeasuredSeconds = 60.0; WallSeconds = 70.0
+                        EarlySampleCount = $windowSamples; LateSampleCount = $windowSamples
+                        SampleCount = ($windowSamples * 2); AffinityAppliedCount = $processCount
+                        AssignedProcessors = @(0..($processCount - 1)); Oversubscribed = $false
+                        Qualification = 'qualification-measurement'; StatusHistogram = $histogram
+                        WorkerCycles = @($workerCycles)
+                    })
+                }
+                $summaryHistogram = if ($scenario -ceq 'acquire-release') {
+                    [pscustomobject][ordered]@{
+                        'Acquire.Success' = ($cycles * 3); 'Release.Success' = ($cycles * 3)
+                    }
+                }
+                else {
+                    [pscustomobject][ordered]@{
+                        'Publish.Success' = ($cycles * 3); 'Remove.Success' = ($cycles * 3)
+                    }
+                }
+                $summaries.Add([pscustomobject][ordered]@{
+                    Profile = $profile; Scenario = $scenario; ProcessCount = $processCount
+                    MedianApiCallsPerSecond = $api; MedianP99Microseconds = $p99
+                    MedianMaxMicroseconds = $maximum; TotalFailures = 0; StatusHistogram = $summaryHistogram
                 })
             }
-            $summaryHistogram = if ($scenario -ceq 'acquire-release') {
-                [pscustomobject][ordered]@{
-                    'Acquire.Success' = ($cycles * 3); 'Release.Success' = ($cycles * 3)
-                }
-            }
-            else {
-                [pscustomobject][ordered]@{
-                    'Publish.Success' = ($cycles * 3); 'Remove.Success' = ($cycles * 3)
-                }
-            }
-            $summaries.Add([pscustomobject][ordered]@{
-                Profile = $profile; Scenario = $scenario; ProcessCount = 8
-                MedianApiCallsPerSecond = $api; MedianP99Microseconds = $p99
-                MedianMaxMicroseconds = $maximum; TotalFailures = 0; StatusHistogram = $summaryHistogram
-            })
         }
     }
     $raw = [pscustomobject][ordered]@{
@@ -2005,7 +2127,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
-            OperatingSystem = 'Linux synthetic'; OperatingSystemArchitecture = 'X64'; ProcessArchitecture = 'X64'
+            OperatingSystem = 'Ubuntu 24.04 synthetic'; OperatingSystemArchitecture = 'X64'; ProcessArchitecture = 'X64'
             Framework = '.NET synthetic'; RuntimeVersion = 'synthetic'; LogicalProcessorCount = 8
             ProcessorIdentifier = 'synthetic'; ServerGarbageCollection = $false; StopwatchFrequency = 10000000
         }
@@ -2013,9 +2135,15 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             Mode = 'sync'; DurationSeconds = 60; Trials = 3; Profiles = @('Legacy', 'LockFree')
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
-                'acquire-release' = @(8); 'publish-remove' = @(8)
+                'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
             }
             WarmupCycles = 0; WarmupSeconds = 10; AffinityRequested = $true
+            SamplingInterval = 64; MaxLatencySamplesPerWorker = 65536
+            SyncKeysPerWorker = [int]$config.linuxTinyPerformance.syncKeysPerWorker
+            SyncMaximumWorkerCount = [int]$config.linuxTinyPerformance.syncMaximumWorkerCount
+            SyncCanonicalBucketCount = [int]$config.linuxTinyPerformance.syncCanonicalBucketCount
+            SyncKeyCatalogSha256 = [string]$config.linuxTinyPerformance.syncKeyCatalogSha256
+            SyncKeyCanonicalBucketAssignments = @($config.linuxTinyPerformance.syncKeyCanonicalBucketAssignments)
         }
         Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 3
         SchemaCompatibility = 'synthetic schema-v6 release-runner verifier self-test'
@@ -2031,21 +2159,29 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         $summary = $_
         $matchingRuns = @($runs | Where-Object {
             [string]$_.Profile -ceq [string]$summary.Profile `
-                -and [string]$_.Scenario -ceq [string]$summary.Scenario
+                -and [string]$_.Scenario -ceq [string]$summary.Scenario `
+                -and [int64]$_.ProcessCount -eq [int64]$summary.ProcessCount
         })
         [pscustomobject][ordered]@{
             profile = [string]$summary.Profile
             scenario = [string]$summary.Scenario
-            processCount = 8
+            processCount = [int64]$summary.ProcessCount
             medianApiCallsPerSecond = [double]$summary.MedianApiCallsPerSecond
             medianP99Microseconds = [double]$summary.MedianP99Microseconds
             maximumRawStallMicroseconds = [double](($matchingRuns | Measure-Object MaxMicroseconds -Maximum).Maximum)
         }
     })
     $osReport = [pscustomobject][ordered]@{
+        platform = 'linux'
+        architecture = 'x64'
         configuration = 'Release'
         provenance = [pscustomobject][ordered]@{ repositoryCommit = 'synthetic' }
-        host = [pscustomobject][ordered]@{ logicalProcessorCount = 8 }
+        host = [pscustomobject][ordered]@{
+            operatingSystem = 'Ubuntu 24.04 synthetic'
+            operatingSystemArchitecture = 'X64'
+            processArchitecture = 'X64'
+            logicalProcessorCount = 8
+        }
         testedAssemblies = @(
             [pscustomobject][ordered]@{
                 path = 'benchmarks/SharedMemoryStore.SyncProbe/bin/Release/net10.0/SharedMemoryStore.dll'
@@ -2057,13 +2193,14 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             })
         results = @([pscustomobject][ordered]@{
             name = 'linux-tiny-performance'; required = $true; status = 'pass'
-            command = 'dotnet SharedMemoryStore.SyncProbe.csproj --mode sync --profile both --process-counts 8 --warmup 10 --duration 60 --trials 3'
+            command = 'dotnet SharedMemoryStore.SyncProbe.csproj --mode sync --profile both --scenario acquire-release,publish-remove --process-counts 1,8 --warmup 10 --duration 60 --trials 3'
             performanceEvidence = [pscustomobject][ordered]@{
                 schemaVersion = 1; reportPath = $rawRelativePath; reportSha256 = $rawManifest.sha256
                 validation = [pscustomobject][ordered]@{
-                    schemaVersion = 1; runCount = 12; summaryCount = 4
-                    warmupSeconds = 10; durationSeconds = 60; trials = 3; processCount = 8
-                    minimumThroughputRatio = 1.0; maximumP99Ratio = 1.0
+                    schemaVersion = 2; runCount = 24; summaryCount = 8
+                    warmupSeconds = 10; durationSeconds = 60; trials = 3; processCounts = @(1, 8)
+                    minimumThroughputRatio = 1.0; maximumUncontendedP99Ratio = 1.0
+                    maximumScaleP99Ratio = 3.0; maximumP99Microseconds = 10.0
                     maximumStallMicroseconds = 10000.0; metrics = $declaredMetrics
                 }
             }
@@ -2071,10 +2208,22 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         evidenceManifest = @($rawManifest)
     }
     [void](Assert-LinuxTinyOsPerformanceEvidence $osReport $reportPath)
-    [int]$assertions = 1
+    $hostMismatch = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $hostMismatch.host.operatingSystem = 'Debian synthetic'
+    $rejected = $false
+    try { [void](Assert-LinuxTinyOsPerformanceEvidence $hostMismatch $reportPath) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux OS performance verifier self-test accepted a raw report from a different host OS description.'
+    }
+    [int]$assertions = 2
 
     $tampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $tampered.Runs[6].MaxMicroseconds = 10001.0
+    $tamperedLockFreeRun = @($tampered.Runs | Where-Object {
+        [string]$_.Profile -ceq 'LockFree' `
+            -and [string]$_.Scenario -ceq 'acquire-release' `
+            -and [int64]$_.ProcessCount -eq 1
+    })[0]
+    $tamperedLockFreeRun.MaxMicroseconds = 10001.0
     $tampered | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $tamperedHash = Get-FileSha256 $rawPath
     $osReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
@@ -2084,6 +2233,163 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     try { [void](Assert-LinuxTinyOsPerformanceEvidence $osReport $reportPath) } catch { $rejected = $true }
     if (-not $rejected) {
         throw 'Linux OS performance verifier self-test accepted an over-limit raw lock-free stall.'
+    }
+    $assertions++
+
+    $sampleTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $sampleTamperedOneProcessRun = @($sampleTampered.Runs | Where-Object {
+        [int64]$_.ProcessCount -eq 1
+    })[0]
+    $sampleTamperedOneProcessRun.LateSampleCount = 1023
+    $sampleTamperedOneProcessRun.SampleCount = 2047
+    $sampleTampered | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
+    $tamperedHash = Get-FileSha256 $rawPath
+    $osReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
+    $osReport.evidenceManifest[0].sha256 = $tamperedHash
+    $osReport.evidenceManifest[0].length = (Get-Item -LiteralPath $rawPath).Length
+    $rejected = $false
+    try { [void](Assert-LinuxTinyOsPerformanceEvidence $osReport $reportPath) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux OS performance verifier self-test accepted incoherent early/late sample counts.'
+    }
+    $assertions++
+
+    $assertRawTamperRejected = {
+        param(
+            [Parameter(Mandatory)]$TamperedRaw,
+            [Parameter(Mandatory)]$TamperedOsReport,
+            [Parameter(Mandatory)][string]$FailureMessage)
+
+        $TamperedRaw | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
+        $tamperedHash = Get-FileSha256 $rawPath
+        $TamperedOsReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
+        $TamperedOsReport.evidenceManifest[0].sha256 = $tamperedHash
+        $TamperedOsReport.evidenceManifest[0].length = (Get-Item -LiteralPath $rawPath).Length
+        $wasRejected = $false
+        try {
+            [void](Assert-LinuxTinyOsPerformanceEvidence $TamperedOsReport $reportPath)
+        }
+        catch {
+            $wasRejected = $true
+        }
+        if (-not $wasRejected) {
+            throw $FailureMessage
+        }
+    }
+
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        $uncontendedTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        foreach ($run in @($uncontendedTampered.Runs | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 1
+        })) {
+            $run.P99Microseconds = 6.0
+            $run.EarlyP99Microseconds = 6.0
+            $run.LateP99Microseconds = 6.0
+        }
+        @($uncontendedTampered.Summary | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 1
+        })[0].MedianP99Microseconds = 6.0
+        $uncontendedOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        @($uncontendedOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
+            [string]$_.profile -ceq 'LockFree' `
+                -and [string]$_.scenario -ceq $scenario `
+                -and [int64]$_.processCount -eq 1
+        })[0].medianP99Microseconds = 6.0
+        & $assertRawTamperRejected $uncontendedTampered $uncontendedOsReport `
+            "Linux OS performance verifier self-test accepted an over-limit '$scenario' uncontended p99 ratio."
+        $assertions++
+
+        $scaleTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        foreach ($run in @($scaleTampered.Runs | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 1
+        })) {
+            $run.P99Microseconds = 2.0
+            $run.EarlyP99Microseconds = 2.0
+            $run.LateP99Microseconds = 2.0
+        }
+        @($scaleTampered.Summary | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 1
+        })[0].MedianP99Microseconds = 2.0
+        $scaleOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        @($scaleOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
+            [string]$_.profile -ceq 'LockFree' `
+                -and [string]$_.scenario -ceq $scenario `
+                -and [int64]$_.processCount -eq 1
+        })[0].medianP99Microseconds = 2.0
+        & $assertRawTamperRejected $scaleTampered $scaleOsReport `
+            "Linux OS performance verifier self-test accepted an over-limit '$scenario' scale p99 ratio."
+        $assertions++
+
+        $absoluteTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        foreach ($run in @($absoluteTampered.Runs | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 8
+        })) {
+            $run.P99Microseconds = 11.0
+            $run.EarlyP99Microseconds = 11.0
+            $run.LateP99Microseconds = 11.0
+        }
+        @($absoluteTampered.Summary | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 8
+        })[0].MedianP99Microseconds = 11.0
+        $absoluteOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        @($absoluteOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
+            [string]$_.profile -ceq 'LockFree' `
+                -and [string]$_.scenario -ceq $scenario `
+                -and [int64]$_.processCount -eq 8
+        })[0].medianP99Microseconds = 11.0
+        & $assertRawTamperRejected $absoluteTampered $absoluteOsReport `
+            "Linux OS performance verifier self-test accepted an over-limit '$scenario' absolute p99."
+        $assertions++
+
+        $throughputTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        foreach ($run in @($throughputTampered.Runs | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 8
+        })) {
+            $run.MeasuredSeconds = 120.0
+            $run.WallSeconds = 130.0
+            $run.ApiCallsPerSecond = [double]$run.Operations / 120.0
+        }
+        @($throughputTampered.Summary | Where-Object {
+            [string]$_.Profile -ceq 'LockFree' `
+                -and [string]$_.Scenario -ceq $scenario `
+                -and [int64]$_.ProcessCount -eq 8
+        })[0].MedianApiCallsPerSecond = 550.0
+        $throughputOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        @($throughputOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
+            [string]$_.profile -ceq 'LockFree' `
+                -and [string]$_.scenario -ceq $scenario `
+                -and [int64]$_.processCount -eq 8
+        })[0].medianApiCallsPerSecond = 550.0
+        & $assertRawTamperRejected $throughputTampered $throughputOsReport `
+            "Linux OS performance verifier self-test accepted an under-limit '$scenario' 8-process throughput ratio."
+        $assertions++
+    }
+
+    $topologyTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $topologyTampered.Configuration.SyncKeyCanonicalBucketAssignments[1] = 1
+    $topologyTampered | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
+    $tamperedHash = Get-FileSha256 $rawPath
+    $osReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
+    $osReport.evidenceManifest[0].sha256 = $tamperedHash
+    $osReport.evidenceManifest[0].length = (Get-Item -LiteralPath $rawPath).Length
+    $rejected = $false
+    try { [void](Assert-LinuxTinyOsPerformanceEvidence $osReport $reportPath) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux OS performance verifier self-test accepted a colliding synchronization-key topology.'
     }
     $assertions++
 
@@ -2102,7 +2408,10 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $assertions++
 
     $affinityTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $affinityTampered.Runs[0].AssignedProcessors = @(64, 65, 66, 67, 68, 69, 70, 71)
+    $affinityTamperedEightProcessRun = @($affinityTampered.Runs | Where-Object {
+        [int64]$_.ProcessCount -eq 8
+    })[0]
+    $affinityTamperedEightProcessRun.AssignedProcessors = @(64, 65, 66, 67, 68, 69, 70, 71)
     $affinityTampered | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $tamperedHash = Get-FileSha256 $rawPath
     $osReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
@@ -3399,6 +3708,7 @@ function Assert-ProbeConfigurationEvidence {
         'maxLatencySamplesPerWorker', 'brokerObserverSamplingInterval')) {
         [void](Get-StrictInt64 $configuration $property 'sync probe configuration' 1 [int32]::MaxValue)
     }
+    [void](Assert-LinuxTinySyncTopology $configuration 'sync probe configuration')
     if ((Get-StrictInt64 $configuration 'warmupCycles' 'sync probe configuration' 0 0) -ne 0) {
         Fail-StepValidation 'sync-probe' 'Performance report must identify time-based warmup with warmupCycles=0.'
     }
@@ -3488,7 +3798,7 @@ function Assert-ProbeRowNumericEvidence {
             'readerProcessCount', 'publisherProcessCount', 'observerProcessCount', 'cycles',
             'operations', 'frames', 'bytesWritten', 'bytesRead', 'fullPayloadCopies',
             'measuredThreadAllocatedBytes', 'producerStoreOperationAllocatedBytes', 'failures',
-            'sampleCount', 'affinityAppliedCount')) {
+            'sampleCount', 'earlySampleCount', 'lateSampleCount', 'affinityAppliedCount')) {
             [void](Get-StrictInt64 $run $property $context 0 [int64]::MaxValue)
         }
         foreach ($property in @(
@@ -3591,6 +3901,12 @@ function Assert-ProbeRowNumericEvidence {
         $operations = Get-StrictInt64 $run 'operations' $context 0 [int64]::MaxValue
         if ($operationStatusTotal -ne [decimal]$operations) {
             Fail-StepValidation 'sync-probe' "$context operation-status histogram does not sum to operations."
+        }
+        $sampleCount = Get-StrictInt64 $run 'sampleCount' $context 0 [int64]::MaxValue
+        $earlySampleCount = Get-StrictInt64 $run 'earlySampleCount' $context 0 [int64]::MaxValue
+        $lateSampleCount = Get-StrictInt64 $run 'lateSampleCount' $context 0 [int64]::MaxValue
+        if ($sampleCount -ne ($earlySampleCount + $lateSampleCount)) {
+            Fail-StepValidation 'sync-probe' "$context sampleCount does not equal its early/late sample windows."
         }
         $roleLatency = @(Get-RequiredPropertyValue $run 'roleLatency' $context)
         $actualRoles = [Collections.Generic.List[string]]::new()
@@ -3853,30 +4169,46 @@ function Assert-SyncProbeEvidence {
         ($brokerTwelveRate / $brokerOneRate) 0.8
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $legacy = Get-ProbeSummaryRow $report 'Legacy' $scenario 8
-        $lockFree = Get-ProbeSummaryRow $report 'LockFree' $scenario 8
-        $legacyRate = Get-StrictDouble $legacy 'medianApiCallsPerSecond' "$scenario legacy summary" 0 [double]::MaxValue -Positive
-        $lockFreeRate = Get-StrictDouble $lockFree 'medianApiCallsPerSecond' "$scenario lock-free summary" 0 [double]::MaxValue -Positive
-        $legacyP99 = Get-StrictDouble $legacy 'medianP99Microseconds' "$scenario legacy summary" 0 [double]::MaxValue -Positive
-        $lockFreeP99 = Get-StrictDouble $lockFree 'medianP99Microseconds' "$scenario lock-free summary" 0 [double]::MaxValue -Positive
+        $legacyEight = Get-ProbeSummaryRow $report 'Legacy' $scenario 8
+        $lockFreeEight = Get-ProbeSummaryRow $report 'LockFree' $scenario 8
+        $legacyEightRate = Get-StrictDouble $legacyEight 'medianApiCallsPerSecond' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
+        $lockFreeEightRate = Get-StrictDouble $lockFreeEight 'medianApiCallsPerSecond' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
+        $legacyEightP99 = Get-StrictDouble $legacyEight 'medianP99Microseconds' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
+        $lockFreeEightP99 = Get-StrictDouble $lockFreeEight 'medianP99Microseconds' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
         if ($IsWindows) {
             Assert-AtLeast 'sync-probe' "${scenario}-windows-throughput" `
-                ($lockFreeRate / $legacyRate) 4.0
+                ($lockFreeEightRate / $legacyEightRate) 4.0
             Assert-AtMost 'sync-probe' "${scenario}-windows-p99" `
-                ($lockFreeP99 / $legacyP99) 0.2
+                ($lockFreeEightP99 / $legacyEightP99) 0.2
         }
         elseif ($IsLinux) {
-            Assert-AtLeast 'sync-probe' "${scenario}-linux-throughput" `
-                ($lockFreeRate / $legacyRate) 1.0
-            Assert-AtMost 'sync-probe' "${scenario}-linux-p99" `
-                ($lockFreeP99 / $legacyP99) 1.0
+            $legacyOne = Get-ProbeSummaryRow $report 'Legacy' $scenario 1
+            $lockFreeOne = Get-ProbeSummaryRow $report 'LockFree' $scenario 1
+            $legacyOneP99 = Get-StrictDouble $legacyOne 'medianP99Microseconds' "$scenario legacy/1p summary" 0 [double]::MaxValue -Positive
+            $lockFreeOneP99 = Get-StrictDouble $lockFreeOne 'medianP99Microseconds' "$scenario lock-free/1p summary" 0 [double]::MaxValue -Positive
+            Assert-AtMost 'sync-probe' "${scenario}-linux-uncontended-p99-ratio" `
+                ($lockFreeOneP99 / $legacyOneP99) `
+                (Get-StrictDouble $config.linuxTinyPerformance 'maximumUncontendedP99Ratio' `
+                    'qualification config linuxTinyPerformance' 1 1)
+            Assert-AtLeast 'sync-probe' "${scenario}-linux-8p-throughput-ratio" `
+                ($lockFreeEightRate / $legacyEightRate) `
+                (Get-StrictDouble $config.linuxTinyPerformance 'minimumThroughputRatio' `
+                    'qualification config linuxTinyPerformance' 1 1)
+            Assert-AtMost 'sync-probe' "${scenario}-linux-scale-p99-ratio" `
+                ($lockFreeEightP99 / $lockFreeOneP99) `
+                (Get-StrictDouble $config.linuxTinyPerformance 'maximumScaleP99Ratio' `
+                    'qualification config linuxTinyPerformance' 3 3)
+            Assert-AtMost 'sync-probe' "${scenario}-linux-8p-p99-us" `
+                $lockFreeEightP99 `
+                (Get-StrictDouble $config.linuxTinyPerformance 'maximumP99Microseconds' `
+                    'qualification config linuxTinyPerformance' 10 10)
             foreach ($run in @($report.runs | Where-Object {
                 [string]$_.profile -ceq 'LockFree' `
                     -and [string]$_.scenario -ceq $scenario `
-                    -and [int64]$_.processCount -eq 8
+                    -and [int64]$_.processCount -in @(1, 8)
             })) {
-                Assert-AtMost 'sync-probe' "${scenario}-linux-max-stall-us-trial-$($run.trial)" `
-                    (Get-StrictDouble $run 'maxMicroseconds' "$scenario lock-free trial-$($run.trial)" 0 [double]::MaxValue) `
+                Assert-AtMost 'sync-probe' "${scenario}-linux-max-stall-us-$($run.processCount)p-trial-$($run.trial)" `
+                    (Get-StrictDouble $run 'maxMicroseconds' "$scenario lock-free/$($run.processCount)p trial-$($run.trial)" 0 [double]::MaxValue) `
                     (Get-StrictDouble $config.linuxTinyPerformance 'maximumStallMicroseconds' `
                         'qualification config linuxTinyPerformance' 10000 10000)
             }
@@ -3961,8 +4293,8 @@ try {
         Add-EvidenceResult 'linux-tiny-os-performance-verifier-self-test' 'passed' `
             'exact-raw-matrix-positive-and-integrity-negative-cases-passed' @(
                 "assertions=$linuxPerformanceAssertions",
-                'exact schema/config/tuple/correctness/affinity/median/ratio evidence=accepted',
-                'over-limit stall/duplicate metric/impossible affinity/incoherent cycle/corruption evidence=rejected') @(
+                'exact 24-run/8-summary schema/config/tuple/correctness/affinity/median/schema2-metric evidence=accepted',
+                'uncontended/throughput/scale/absolute p99 gate breaches plus over-limit stall/duplicate metric/impossible affinity/incoherent cycle/corruption evidence=rejected') @(
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'linux-tiny-os-performance-self-test.json')),
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'linux-tiny-os-performance-self-test.evidence/linux-tiny-performance.json')))
         $requiredInputs = @(

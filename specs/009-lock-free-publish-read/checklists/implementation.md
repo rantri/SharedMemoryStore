@@ -33,11 +33,12 @@ allowed. See the complete predicate and SC mapping in
   [`009-final-linux-x64.json`](../../../artifacts/lock-free-os-validation/009-final-linux-x64.json)
   is schema 3 `pass`, qualified x64, every required row passes, and its required
   [`linux-tiny-performance.json`](../../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json)
-  is schema 6 with the exact 2-profile/2-scenario/8-process/3-trial release
+  is schema 6 with the exact 2-profile/2-scenario/1-and-8-process/3-trial release
   matrix, zero failures, `[0,63]` mask-valid complete affinity, coherent paired
   successes per completed cycle, no checksum/corruption evidence, reproducible
-  medians, both Linux no-regression ratios, and every raw lock-free stall at
-  most 10 ms.
+  medians, one-process intrinsic-p99 non-regression, eight-process throughput
+  non-regression, at most 3x lock-free p99 amplification, at most 10 us
+  eight-process p99, and every raw lock-free stall at most 10 ms.
 - [x] Cross-platform provenance is conditionally passed iff PR, nightly,
   release, both OS reports, every sync probe, and start/completion assembly
   manifests identify the identical clean commit, tree, status hash, and source-

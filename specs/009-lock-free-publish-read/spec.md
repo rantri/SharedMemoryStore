@@ -820,9 +820,14 @@ lease duration, churn pattern, and final statuses.
 - **SC-006**: In the 8-process tiny-operation workload,
   the Windows lock-free profile delivers at least 4 times layout-v1.2 aggregate
   throughput and reduces p99 acquire/release and publish/remove latency by at
-  least 80%. On Linux, the lock-free profile does not regress aggregate
-  throughput or p99 latency relative to layout v1.2 and eliminates sampled
-  contention stalls above 10 milliseconds under the same workload.
+  least 80%. On Linux, for both acquire/release and publish/remove, lock-free
+  one-process p99 is no greater than layout-v1.2 one-process p99, lock-free
+  8-process aggregate throughput is no lower than layout v1.2, and lock-free
+  8-process p99 is at most 3 times its own one-process p99 and at most 10
+  microseconds absolute. Every sampled lock-free trial at both process counts
+  has maximum latency at most 10 milliseconds. This separates intrinsic
+  latency and contention amplification from the legacy file-lock incumbent's
+  serialized completion distribution.
 - **SC-007**: Instrumented steady-state validation records zero dependency on a
   process-owned or globally exclusive synchronization owner for successful
   publication, lookup, lease, removal, reclamation, and index-maintenance paths.

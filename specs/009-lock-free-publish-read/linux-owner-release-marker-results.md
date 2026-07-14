@@ -18,12 +18,23 @@ current five-test Linux owner-release-marker suite passed 5/5. The expanded
 profile/open matrix and exact-once cleanup tests also passed as part of the full
 295/295 Linux Integration aggregate.
 
+Each admitted mapped handle locks a private regular-file owner anchor before
+committing its sidecar line. Cleanup opens candidate anchors independently with
+`O_NOFOLLOW`, requires regular-file metadata and an unlocked proof, and treats
+unavailable or ambiguous `statx` evidence conservatively. Tests cover crashes
+before sidecar commit, durable release-marker reconciliation, malformed and
+special-file artifacts, and the blocked-before-mapping window, which publishes
+neither an owner line nor a marker. A 12-process cold-open fan-out is bounded by
+the caller's original finite wait budget. These worktree results are diagnostic;
+the immutable final Linux and release evidence paths remain the qualification
+authority.
+
 The historical results below remain useful evidence for marker durability,
 mode, reconciliation, and bounded close behavior; their failed-open ordering is
 not the current protocol.
 
 **Date**: 2026-07-13
-**Result**: PASS on Linux x64
+**Historical result**: PASS on Linux x64 for the pre-FR-056 protocol
 
 ## Environment
 
@@ -49,7 +60,7 @@ docker run --rm --mount "type=bind,source=$repo,target=/src,readonly" --tmpfs /w
 
 ## Results
 
-The initial required three-test run passed 3/3:
+The initial historical three-test run passed 3/3:
 
 | Test | Duration | Result |
 |---|---:|---|
@@ -57,15 +68,15 @@ The initial required three-test run passed 3/3:
 | Final-owner marker permits `CreateNew` while the releasing process remains alive | 256 ms | PASS |
 | Held `.lifecycle` bounds dispose, preserves sibling use, and removes only the exact ghost | 268 ms | PASS |
 
-After adding malformed-finalized-marker fail-closed coverage, the final run
-at that checkpoint passed 4/4 in 1.5517 seconds. The completed suite then added
-the public failed-open path and passed 5/5 in 2.7571 seconds:
+After adding malformed-finalized-marker fail-closed coverage, the historical run
+at that checkpoint passed 4/4 in 1.5517 seconds. That pre-FR-056 suite then added
+the old failed-after-mapping path and passed 5/5 in 2.7571 seconds:
 
 | Test | Duration | Result |
 |---|---:|---|
 | Concurrent blocked releases publish distinct private markers without loss | 323 ms | PASS |
 | Final-owner marker permits `CreateNew` while the releasing process remains alive | 261 ms | PASS |
-| Public failed open after mapping uses the bounded marker path | 873 ms | PASS |
+| Public failed open after mapping uses the bounded marker path (historical; superseded) | 873 ms | PASS |
 | Malformed finalized marker rejects open and remains present | 1 ms | PASS |
 | Held `.lifecycle` bounds dispose, preserves sibling use, and removes only the exact ghost | 259 ms | PASS |
 
@@ -80,10 +91,12 @@ A neighboring Linux regression run filtered to
 `LockFreeProfileOpenIntegrationTests`, and
 `MultiStoreLifecycleIntegrationTests` passed 17/17 with no skips in one second.
 
-## Conclusion
+## Historical conclusion
 
-Linux close/open-failure region teardown no longer has an infinite lifecycle-lock
-wait. The mapped view is released first, lifecycle acquisition is limited to
-250 milliseconds, and failure publishes a replayable exact-owner marker through
-same-directory temporary-file rename. Reconciliation is idempotent and ordered:
-raw owner-line removal and atomic sidecar rewrite precede marker deletion.
+This checkpoint established that Linux close/open-failure region teardown no
+longer had an infinite lifecycle-lock wait. Its mapped-after-failure ordering is
+superseded by the current blocked-before-mapping cold transaction above. The
+durability conclusion remains applicable: a permitted close fallback publishes
+a replayable exact-owner marker through same-directory temporary-file rename,
+and reconciliation orders raw owner-line removal plus atomic sidecar rewrite
+before marker deletion.

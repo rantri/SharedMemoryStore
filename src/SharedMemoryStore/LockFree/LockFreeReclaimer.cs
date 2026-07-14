@@ -55,7 +55,8 @@ internal sealed class LockFreeReclaimer
     internal StoreStatus TryReclaim<TCheckpoint>(
         ulong exactBinding,
         in LockFreeOperationBudget budget,
-        ref TCheckpoint checkpoint)
+        ref TCheckpoint checkpoint,
+        bool reportRemoveClassification = false)
         where TCheckpoint : struct, ILockFreeCheckpointStrategy<TCheckpoint>
     {
         if (!TryDecode(exactBinding, out int slotIndex, out long generation)
@@ -90,7 +91,26 @@ internal sealed class LockFreeReclaimer
 
             if (hasActiveLease)
             {
+                if (reportRemoveClassification)
+                {
+                    LockFreeCheckpoint.Reach(
+                        ref checkpoint,
+                        LockFreeCheckpointId.RemoveAfterLeaseClassification);
+                }
+
                 return StoreStatus.RemovePending;
+            }
+
+            // The lease scan establishes that claiming Reclaiming would be
+            // safe, but it does not authorize starting new caller-bounded work
+            // after the public deadline/cancellation point. Leaving the slot
+            // in RemoveRequested keeps it universally helpable; the public
+            // remove facade normalizes this terminal budget status to
+            // RemovePending because logical removal already linearized.
+            StoreStatus ownershipBudget = budget.Check();
+            if (ownershipBudget != StoreStatus.Success)
+            {
+                return ownershipBudget;
             }
 
             LockFreeCheckpoint.Reach(

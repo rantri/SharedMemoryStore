@@ -63,9 +63,11 @@ remain layout-v1.2-only and reject v2.
 
 **Performance Goals**: Meet SC-001 through SC-018, including 0 B/op warmed data
 paths; on Windows at least 4x legacy aggregate throughput and 80% lower p99 for
-the eight-process tiny-operation workload; on Linux no aggregate/p99 regression
-and no raw lock-free trial stall above 10 ms in the exact three-by-60-second
-eight-process acquire/release and publish/remove matrix; scale the broker-directed 1.3 MB workload from
+the eight-process tiny-operation workload; on Linux no uncontended p99 or
+eight-process throughput regression, at most 3x lock-free one-to-eight-process
+p99 amplification, at most 10 microseconds eight-process p99, and no raw
+lock-free trial stall above 10 ms in the exact three-by-60-second one/eight-
+process acquire/release and publish/remove matrix; scale the broker-directed 1.3 MB workload from
 6 to 12 readers without a store-wide lock; and retain early/late churn p99
 within 2x.
 

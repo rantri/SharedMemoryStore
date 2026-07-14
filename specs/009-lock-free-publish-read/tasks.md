@@ -182,7 +182,7 @@ operations, recover, fill to capacity, and replay stale tokens after reuse.
 - [X] T058 [US4] Implement participant-token exact-CAS reservation recovery/help/reporting and bounded cancellation handoff in `src/SharedMemoryStore/LockFree/LockFreeRecovery.cs` until T053 passes
 - [X] T059 [US4] Implement participant-token exact-CAS lease claim/active recovery, record-incarnation fencing, reclaim help, reporting, and bounded cancellation handoff in `src/SharedMemoryStore/LockFree/LockFreeRecovery.cs` until T054 passes
 - [X] T060 [US4] Complete and harden participant `Active -> Closing -> Reclaiming`, all-resource token cleanup, stable zero-reference proof, record reuse/retirement helping, and local dispose ordering in `src/SharedMemoryStore/LockFree/LockFreeStoreEngine.cs`, `src/SharedMemoryStore/LockFree/LockFreeParticipantRegistry.cs`, and `src/SharedMemoryStore/MemoryStore.cs` until T056 passes
-- [X] T061 [US4] Complete all agent checkpoint/crash commands, run T055 in Release, and record capacity/live-owner/stale-token evidence in `specs/009-lock-free-publish-read/recovery-results.md`
+- [X] T061 [US4] Complete every entry in the then-current agent checkpoint/crash catalog, run T055 in Release, and record capacity/live-owner/stale-token evidence in `specs/009-lock-free-publish-read/recovery-results.md`; later catalog additions remain owned by their convergence task
 
 **Checkpoint**: User Story 4 proves stopped owners retain only local bounded
 resources and recovery cannot reclaim live/current ownership.
@@ -259,6 +259,13 @@ non-convergence gates.
 - [X] T105 Freeze `benchmark-results/short-report.md`, `release-qualification.md`, and `checklists/implementation.md` before execution; every SC-001..SC-018 and review conclusion is conditionally closed only by linked final JSON and identical clean provenance, and failing/missing evidence invalidates the freeze rather than permitting a tracked post-run edit
 - [X] T106 Fence Linux recovery by exact store/participant PID-namespace identities and monotonic Enabled/Mixed mode under required-feature bit 2 (mask 7); publish Mixed before a differing/unproven opener's first Registering CAS, preserve ordinary KV access, conservatively retain partial Registering owners, validate stable Active identities, and cover layout/checkpoint/crash behavior on Windows/Linux
 
+---
+
+## Phase 9: Convergence
+
+- [ ] T107 Harden the bounded C# cold create/open/close transaction so only physical creation authorizes initialization, Windows coordinates before mapping, and Linux orders lifecycle reconciliation, stale deletion, mapping lock, mapping/owner-anchor publication, reverse gate release, and post-gate failed-open cleanup within the caller's original wait budget; preserve conservative anchor/sidecar/release-marker liveness and hot key-value lock freedom. Correct directory joint-tuple validation and legal cancellation/location handoffs so delayed generation-G helpers cannot expose, clear, or overwrite generation-G+1 state; cover future-generation fail-closed behavior, first-valid-location arbitration, alternate cleanup, and post-CAS withdrawal with checkpoints 66-67 and the complete 67-entry Windows/Linux crash matrix. Correct the Linux raw tiny-operation workload to use two deterministic rotating keys per worker in distinct canonical buckets with a recorded catalog digest, unbiased fixed early/late reservoirs whose independent running maximum cannot evict a stall, exact host-tuple binding, mask-valid sparse affinity, paired-success cycle coherence, and zero checksum/corruption evidence. Bind exact one/eight-process raw trials and enforce one-process intrinsic-p99 non-regression, eight-process throughput non-regression, <=3x lock-free self-amplification, <=10 us absolute p99, and every-lock-free-trial <=10 ms sampled maximum for both scenarios; require the release importer to reproduce the decision and revalidate the exact OS evidence tree and command-log bindings. Run focused regressions, anchor/release-marker tests, full Windows/Linux Release suites, a clean Linux `-Command all` diagnostic, and independent production/qualification-harness review with no unresolved high-severity finding per FR-044, FR-054..FR-056, LC-009, SC-001..SC-018, and US1's independent test
+- [ ] T108 Freeze the terminal one-shot PR, nightly, release, Windows-x64, and Linux-x64 execution and machine-acceptance contract for one clean commit. This task's checkbox records that the commands, immutable paths, exact manifest/file-set/log binding, completion revalidation, identical clean commit/source-manifest provenance, and no-unresolved-high-severity-review requirements are frozen; it does not assert that the ignored artifacts already exist. After the final tracked commit, approval is evidence-only at `artifacts/lock-free-qualification/009-final-pr/{summary.json,sync-probe.json}`, `artifacts/lock-free-qualification/009-final-nightly/{summary.json,sync-probe.json}`, `artifacts/lock-free-qualification/009-final-release/{summary.json,sync-probe.json,os-validation.json}`, `artifacts/lock-free-os-validation/009-final-linux-x64.json`, and `artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json`; no tracked post-run edit or checkbox change is permitted per SC-001..SC-018, plan: Delivery Strategy, and Constitution III
+
 **Final Checkpoint**: All correctness/package gates pass, required benchmark
 evidence is recorded for qualified environments, review has no unresolved
 high-severity finding, and no repeated non-convergence condition remains.
@@ -281,6 +288,8 @@ high-severity finding, and no repeated non-convergence condition remains.
 - User Story 5 depends on all engine behavior whose diagnostics/contracts it
   exposes.
 - Phase 8 depends on all five story checkpoints.
+- Phase 9 depends on Phase 8 and closes only after the convergence regressions,
+  clean diagnostic qualification, and independent review pass.
 
 ### Within each phase
 
@@ -313,12 +322,13 @@ high-severity finding, and no repeated non-convergence condition remains.
 | Logical remove/reclaim/reuse (FR-020..FR-024) | T042-T051 |
 | Lock-free/no global owner/bounded retry (FR-025..FR-031) | T010, T020, T024-T029, T077-T084 |
 | Failure scope/recovery/incarnations/no worker (FR-032..FR-036, FR-046) | T052-T061, T071-T073 |
-| Generation-tagged stale-helper fencing, spill-summary ABA prevention, cancellation, publication intent, exact-reference revalidation, PID-namespace recovery fencing, and v2 slot ceiling (FR-047..FR-053, LC-015..LC-016, SC-017..SC-018) | T007, T015, T020-T021, T026-T029, T043, T046, T048, T067, T082-T106 |
+| Generation-tagged stale-helper fencing, spill-summary ABA prevention, cancellation, publication intent, exact-reference revalidation, PID-namespace recovery fencing, and v2 slot ceiling (FR-047..FR-053, LC-015..LC-016, SC-017..SC-018) | T007, T015, T020-T021, T026-T029, T043, T046, T048, T067, T082-T107 |
 | Linux owner-anchor liveness, bounded cold-path convergence, and conservative orphan repair (FR-054) | T107-T108 |
 | Persistent mapped-corruption latch and fail-closed propagation (FR-055) | T107-T108 |
+| Physical-creator-only cold-open transaction and existing-unpublished fail-closed behavior (FR-056, LC-009) | T107-T108 |
 | Allocation/diagnostics/disposal (FR-037..FR-041) | T030, T040, T051, T056, T062-T066 |
 | Public compatibility/docs/sample (FR-042..FR-045, LC-001..LC-016) | T005-T019, T062-T074, T086-T087, T090, T106 |
-| Performance and success criteria SC-001..SC-018 | T039-T041, T045-T046, T055, T073, T075-T093 |
+| Performance and success criteria SC-001..SC-018 | T039-T041, T045-T046, T055, T073, T075-T108 |
 
 ## Implementation Strategy
 
@@ -332,10 +342,3 @@ If a convergence gate repeats after two evidence-driven corrections, stop and
 raise the exact invariant, minimal failing schedule, affected requirement, and
 design choices needed from the user. Do not mark remaining tasks complete or
 weaken the spec.
-
----
-
-## Phase 9: Convergence
-
-- [ ] T107 Harden the bounded C# Linux cold create/open/close path so ordinary 12-process fan-out completes within the documented default finite wait without weakening conservative owner-anchor liveness, exact sidecar/release-marker ordering, caller-selected timeout/cancellation, or hot key-value lock freedom; close final structural-control review findings with exact-token validation, nonthrowing cleanup, and the persistent mapped-corruption latch; require Linux `-Command all` to produce the exact 8-process, three-by-60-second raw tiny-operation matrix with every-trial stall validation, mask-valid sparse affinity, paired-success cycle coherence, and zero checksum/corruption evidence; require the release runner to reproduce the Linux performance decision and verify/revalidate exact OS evidence trees and command-log bindings; add and repeatedly run the focused regressions plus anchor/release-marker and full Linux Release suites, and obtain an independent no-high-severity production and qualification-harness review per FR-054, FR-055, FR-044, SC-006, SC-014, and US1/independent test (partial)
-- [ ] T108 After T107 passes, execute the frozen one-shot PR, nightly, release, Windows-x64, and Linux-x64 qualification on one clean commit and require machine-pass results at the immutable `artifacts/lock-free-qualification/009-final-pr/{summary.json,sync-probe.json}`, `artifacts/lock-free-qualification/009-final-nightly/{summary.json,sync-probe.json}`, `artifacts/lock-free-qualification/009-final-release/{summary.json,sync-probe.json,os-validation.json}`, `artifacts/lock-free-os-validation/009-final-linux-x64.json`, and `artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json` paths; require exact manifest/file-set/log binding plus completion revalidation, identical clean commit/source-manifest provenance, and no unresolved high-severity review finding per SC-001..SC-018, plan: Delivery Strategy, and Constitution III (missing)

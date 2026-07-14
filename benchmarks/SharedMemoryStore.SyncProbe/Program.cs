@@ -32,11 +32,14 @@ const int DefaultLeaseRecordCount = 64;
 const int MixedLeaseRecordCount = 128;
 const int ParticipantRecordCount = 64;
 const int ReaderKeyCount = 256;
+const int SyncKeysPerWorker = 2;
+const int SyncMaximumWorkerCount = 12;
 const int DefaultShortWarmupSeconds = 2;
 const int ReleaseWarmupSeconds = 10;
 const int BrokerObserverSamplingInterval = 16;
 const int SamplingInterval = 64;
 const int MaxLatencySamplesPerWorker = 65_536;
+const int LatencyReservoirCapacityPerWindow = MaxLatencySamplesPerWorker / 2;
 const int DefaultDurationSeconds = 3;
 const int DefaultTrials = 3;
 
@@ -59,6 +62,7 @@ return await RunController(args);
 
 static async Task<int> RunController(string[] args)
 {
+    AssertLatencyReservoirMaximumSemantics();
     int durationSeconds = ReadPositiveIntOption(args, "--duration", DefaultDurationSeconds);
     int trials = ReadPositiveIntOption(args, "--trials", DefaultTrials);
     string? outputPath = ReadStringOption(args, "--output");
@@ -236,6 +240,17 @@ static async Task<int> RunController(string[] args)
         scenarioCounts[plan.Name] = plan.ProcessCounts;
     }
 
+    int syncCanonicalBucketCount = BenchmarkProtocol.CalculatePrimaryBucketCount(SyncSlotCount);
+    BenchmarkKeyCatalog syncKeyCatalog = BenchmarkProtocol.CreateCanonicalBucketKeyCatalog(
+        SyncKeysPerWorker,
+        SyncMaximumWorkerCount,
+        syncCanonicalBucketCount);
+    int[] syncKeyCanonicalBucketAssignments = Enumerable.Range(0, syncKeyCatalog.Count)
+        .Select(index => BenchmarkProtocol.GetCanonicalBucket(
+            syncKeyCatalog[index].Span,
+            syncCanonicalBucketCount))
+        .ToArray();
+
     var report = new ProbeReport(
         SchemaVersion: ProbeReportSchema.CurrentVersion,
         TimestampUtc: DateTimeOffset.UtcNow,
@@ -265,7 +280,12 @@ static async Task<int> RunController(string[] args)
             stickyOverflowSlotCount,
             stickyOverflowChurnCycles,
             stickyOverflowMissingSamples,
-            ProbeReportSchema.LegacyFullPayloadCopiesFieldSemantics),
+            ProbeReportSchema.LegacyFullPayloadCopiesFieldSemantics,
+            SyncKeysPerWorker,
+            SyncMaximumWorkerCount,
+            syncCanonicalBucketCount,
+            syncKeyCatalog.CalculateSha256(),
+            syncKeyCanonicalBucketAssignments),
         Runs: runs,
         Summary: Summarize(runs),
         MinimumCompatibleSchemaVersion: ProbeReportSchema.MinimumCompatibleVersion,
@@ -696,7 +716,9 @@ static RunResult RunStickyOverflowTrial(
             FullPayloadCopyEvidenceKind: "not-applicable-no-large-payload-path",
             ProducerStoreOperationAllocatedBytes: 0,
             AllocationMeasurementScope: "controller-thread-entire-overflow-measured-window",
-            StickyOverflow: evidence);
+            StickyOverflow: evidence,
+            EarlySampleCount: earlySamples.Length,
+            LateSampleCount: lateSamples.Length);
     }
 }
 
@@ -910,7 +932,9 @@ static async Task<RunResult> RunBrokerTrial(
                 FullPayloadCopyEvidenceKind: "structural-direct-reservation-write-and-borrowed-lease-read",
                 ProducerStoreOperationAllocatedBytes: measuredResult.ProducerStoreOperationAllocatedBytes,
                 AllocationMeasurementScope:
-                    "dedicated-producer-and-broker-coordinator-thread-entire-measured-interval");
+                    "dedicated-producer-and-broker-coordinator-thread-entire-measured-interval",
+                EarlySampleCount: sortedEarly.Length,
+                LateSampleCount: sortedLate.Length);
         }
         finally
         {
@@ -990,7 +1014,7 @@ static RunResult AggregateAutonomousRun(
         Percentile(samples, 0.50),
         Percentile(samples, 0.95),
         Percentile(samples, 0.99),
-        samples.Length == 0 ? 0 : samples[^1],
+        workerResults.Max(static result => result.MaximumSampleMicroseconds),
         earlyP99,
         lateP99,
         earlyP99 == 0 ? 0 : lateP99 / earlyP99,
@@ -1020,7 +1044,9 @@ static RunResult AggregateAutonomousRun(
         FullPayloadCopyCountIsInstrumented: false,
         FullPayloadCopyEvidenceKind: "not-instrumented-legacy-field-do-not-interpret-as-count",
         ProducerStoreOperationAllocatedBytes: 0,
-        AllocationMeasurementScope: "sum-of-dedicated-worker-thread-measured-regions");
+        AllocationMeasurementScope: "sum-of-dedicated-worker-thread-measured-regions",
+        EarlySampleCount: early.Length,
+        LateSampleCount: late.Length);
 }
 
 static async Task AwaitReady(IReadOnlyList<Process> workers)
@@ -1069,9 +1095,19 @@ static void Seed(Store owner, string scenario, int processCount)
 {
     if (scenario == "acquire-release")
     {
+        if (processCount > SyncMaximumWorkerCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(processCount));
+        }
+
+        BenchmarkKeyCatalog keys = CreateSyncKeyCatalog();
         for (var workerId = 0; workerId < processCount; workerId++)
         {
-            Ensure(owner.TryPublish(BenchmarkProtocol.Key(workerId), [(byte)workerId]), "seed publish");
+            for (var keyOrdinal = 0; keyOrdinal < SyncKeysPerWorker; keyOrdinal++)
+            {
+                int keyIndex = checked((workerId * SyncKeysPerWorker) + keyOrdinal);
+                Ensure(owner.TryPublish(keys[keyIndex].Span, [(byte)workerId]), "seed publish");
+            }
         }
 
         return;
@@ -1090,6 +1126,41 @@ static void Seed(Store owner, string scenario, int processCount)
             Ensure(owner.TryPublish(BenchmarkProtocol.Key(keyIndex), ReaderPayload(keyIndex)), "distributed seed publish");
         }
     }
+}
+
+static BenchmarkKeyCatalog CreateSyncKeyCatalog() =>
+    BenchmarkProtocol.CreateCanonicalBucketKeyCatalog(
+        SyncKeysPerWorker,
+        SyncMaximumWorkerCount,
+        BenchmarkProtocol.CalculatePrimaryBucketCount(SyncSlotCount));
+
+static bool IsSyncScenario(string scenario) =>
+    scenario is "acquire-release" or "publish-remove";
+
+static int SyncKeyIndex(int workerId, long cycle)
+{
+    if ((uint)workerId >= SyncMaximumWorkerCount)
+    {
+        throw new ArgumentOutOfRangeException(nameof(workerId));
+    }
+
+    return checked((workerId * SyncKeysPerWorker) + (int)(cycle & 1));
+}
+
+static ulong AutonomousSamplingSeed(string scenario, int workerId)
+{
+    ulong scenarioSeed = scenario switch
+    {
+        "acquire-release" => 0x243f_6a88_85a3_08d3UL,
+        "publish-remove" => 0x1319_8a2e_0370_7344UL,
+        "same-key-read" => 0xa409_3822_299f_31d0UL,
+        "distributed-key-read" => 0x082e_fa98_ec4e_6c89UL,
+        "mixed-churn-reader" => 0x4528_21e6_38d0_1377UL,
+        "mixed-churn-writer" => 0xbe54_66cf_34e9_0c6cUL,
+        _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+    };
+
+    return scenarioSeed ^ (unchecked((ulong)(workerId + 1)) * 0x9e37_79b9_7f4a_7c15UL);
 }
 
 static void SeedMixed(Store owner)
@@ -1207,7 +1278,9 @@ static int RunAutonomousWorker(string[] args)
 
     using (store)
     {
-        BenchmarkKeyCatalog stableKeys = BenchmarkProtocol.CreateKeyCatalog(ReaderKeyCount);
+        BenchmarkKeyCatalog stableKeys = IsSyncScenario(scenario)
+            ? CreateSyncKeyCatalog()
+            : BenchmarkProtocol.CreateKeyCatalog(ReaderKeyCount);
         byte[][]? collisionKeys = scenario.StartsWith("mixed-churn", StringComparison.Ordinal)
             ? BenchmarkProtocol.CreateCollisionKeys(
                 MixedCollisionKeyCount,
@@ -1242,9 +1315,14 @@ static int RunAutonomousWorker(string[] args)
             return 5;
         }
 
-        var samples = new List<double>(MaxLatencySamplesPerWorker);
-        var earlySamples = new List<double>(MaxLatencySamplesPerWorker);
-        var lateSamples = new List<double>(MaxLatencySamplesPerWorker);
+        ulong samplingSeed = AutonomousSamplingSeed(scenario, workerId);
+        var candidateSampler = new GeometricCycleSampler(samplingSeed);
+        var earlySamples = new LatencyReservoir(
+            LatencyReservoirCapacityPerWindow,
+            samplingSeed ^ 0xa076_1d64_78bd_642fUL);
+        var lateSamples = new LatencyReservoir(
+            LatencyReservoirCapacityPerWindow,
+            samplingSeed ^ 0xe703_7ed1_a0b4_28dbUL);
         var counters = new StatusCounters();
         long cycles = 0;
         long bytesProcessed = 0;
@@ -1255,7 +1333,7 @@ static int RunAutonomousWorker(string[] args)
             ? counters.TotalOperations < operationTarget
             : elapsed.Elapsed.TotalSeconds < durationSeconds)
         {
-            bool sample = cycles % SamplingInterval == 0 && samples.Count < MaxLatencySamplesPerWorker;
+            bool sample = candidateSampler.ShouldSample(cycles);
             long started = sample ? Stopwatch.GetTimestamp() : 0;
             RunCycle(
                 store,
@@ -1270,7 +1348,6 @@ static int RunAutonomousWorker(string[] args)
             if (sample)
             {
                 double microseconds = Stopwatch.GetElapsedTime(started).TotalMicroseconds;
-                samples.Add(microseconds);
                 bool early = operationTarget > 0
                     ? counters.TotalOperations < operationTarget / 2
                     : elapsed.Elapsed.TotalSeconds < durationSeconds / 2.0;
@@ -1286,6 +1363,9 @@ static int RunAutonomousWorker(string[] args)
         long measuredThreadAllocatedBytes = Math.Max(
             0,
             GC.GetAllocatedBytesForCurrentThread() - allocatedBefore);
+        double[] earlySnapshot = earlySamples.ToArray();
+        double[] lateSnapshot = lateSamples.ToArray();
+        double[] samples = [.. earlySnapshot, .. lateSnapshot];
         Console.WriteLine(JsonSerializer.Serialize(new WorkerResult(
             workerId,
             ScenarioRole(scenario),
@@ -1299,12 +1379,31 @@ static int RunAutonomousWorker(string[] args)
             assignedProcessor,
             affinityStrategy,
             counters.ToHistogram(),
-            samples.ToArray(),
-            earlySamples.ToArray(),
-            lateSamples.ToArray()), BenchmarkProtocol.JsonOptions));
+            samples,
+            earlySnapshot,
+            lateSnapshot,
+            Math.Max(earlySamples.MaximumObserved, lateSamples.MaximumObserved)), BenchmarkProtocol.JsonOptions));
     }
 
     return 0;
+}
+
+static void AssertLatencyReservoirMaximumSemantics()
+{
+    const double outlier = 12_345.0;
+    var reservoir = new LatencyReservoir(capacity: 1, seed: 1);
+    reservoir.Add(outlier);
+    for (var index = 0; index < 100_000; index++)
+    {
+        reservoir.Add(1.0);
+    }
+
+    double[] retained = reservoir.ToArray();
+    if (retained.Length != 1 || retained[0] == outlier || reservoir.MaximumObserved != outlier)
+    {
+        throw new InvalidOperationException(
+            "Latency reservoir maximum self-test did not preserve an evicted sampled outlier.");
+    }
 }
 
 static async Task<int> RunBrokerWorker(string[] args)
@@ -1469,7 +1568,7 @@ static void RunCycle(
         {
             "same-key-read" => 0,
             "distributed-key-read" => (int)((cycle + workerId * 17L) % ReaderKeyCount),
-            _ => workerId
+            _ => SyncKeyIndex(workerId, cycle)
         };
         StoreStatus acquire = AcquireWithRetry(
             store,
@@ -1503,9 +1602,10 @@ static void RunCycle(
 
     if (scenario == "publish-remove")
     {
+        int syncKeyIndex = SyncKeyIndex(workerId, cycle);
         StoreStatus publish = PublishWithRetry(
             store,
-            stableKeys[workerId].Span,
+            stableKeys[syncKeyIndex].Span,
             [unchecked((byte)cycle)],
             counters);
         if (publish != StoreStatus.Success)
@@ -1515,7 +1615,7 @@ static void RunCycle(
         }
 
         bytesProcessed = 1;
-        StoreStatus remove = RemoveWithRetry(store, stableKeys[workerId].Span, counters);
+        StoreStatus remove = RemoveWithRetry(store, stableKeys[syncKeyIndex].Span, counters);
         if (remove != StoreStatus.Success)
         {
             failures++;

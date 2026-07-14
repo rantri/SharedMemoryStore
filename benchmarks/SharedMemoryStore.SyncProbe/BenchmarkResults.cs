@@ -13,7 +13,8 @@ internal sealed record WorkerResult(
     SortedDictionary<string, long> StatusHistogram,
     double[] SamplesMicroseconds,
     double[] EarlySamplesMicroseconds,
-    double[] LateSamplesMicroseconds);
+    double[] LateSamplesMicroseconds,
+    double MaximumSampleMicroseconds);
 
 internal sealed record BrokerWorkerSummary(
     int WorkerId,
@@ -129,7 +130,9 @@ internal sealed record RunResult(
     string FullPayloadCopyEvidenceKind = "not-applicable",
     long ProducerStoreOperationAllocatedBytes = 0,
     string AllocationMeasurementScope = "not-applicable",
-    StickyOverflowEvidence? StickyOverflow = null);
+    StickyOverflowEvidence? StickyOverflow = null,
+    int EarlySampleCount = 0,
+    int LateSampleCount = 0);
 
 internal sealed record SummaryResult(
     string Profile,
@@ -198,7 +201,12 @@ internal sealed record ProbeConfiguration(
     int StickyOverflowSlotCount,
     int StickyOverflowChurnCycles,
     int StickyOverflowMissingSamplesPerWindow,
-    string LegacyFullPayloadCopiesFieldSemantics);
+    string LegacyFullPayloadCopiesFieldSemantics,
+    int SyncKeysPerWorker,
+    int SyncMaximumWorkerCount,
+    int SyncCanonicalBucketCount,
+    string SyncKeyCatalogSha256,
+    int[] SyncKeyCanonicalBucketAssignments);
 
 internal sealed record ProbeReport(
     int SchemaVersion,
@@ -217,7 +225,10 @@ internal static class ProbeReportSchema
     internal const string Compatibility =
         "Schema v6 is additive over v3-v5: all existing property names and meanings are retained; "
         + "new evidence tags disambiguate structural assertions from measured counters, and "
-        + "overflow qualification fields expose the spill/cleanup/late-window transitions.";
+        + "overflow qualification fields expose the spill/cleanup/late-window transitions; "
+        + "sync topology fields identify the deterministic key catalog, and early/late sample "
+        + "counts identify the autonomous latency reservoirs; autonomous MaxMicroseconds "
+        + "retains every sampled candidate even when reservoir replacement discards it.";
 
     internal const string LegacyFullPayloadCopiesFieldSemantics =
         "Retained for v3-v5 readers. Consult FullPayloadCopyCountIsInstrumented and "

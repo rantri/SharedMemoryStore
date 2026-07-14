@@ -6,14 +6,17 @@
 
 **Review date**: 2026-07-14
 
-**Decision**: **Code and qualification harness approved; final release evidence pending**
+**Decision**: **Code approved; revised qualification gate and final release evidence pending**
 
 ## Verdict
 
-The tracked implementation is approved on code, protocol, focused-test, and
-qualification-harness review grounds. The final independent re-review found no
+The tracked implementation is approved on code, protocol, and focused-test
+grounds. Independent re-review of the post-`844448e` reclamation and benchmark
+delta found no
 unresolved High or Medium issue in the production implementation or the release
-harness. This is not yet release approval: every immutable artifact and
+harness after the running-maximum correction. The revised Linux one/eight-
+process acceptance parser still requires final review and execution. This is
+not yet release approval: every immutable artifact and
 provenance condition in [Final evidence gate](#final-evidence-gate) must still
 pass on one identical clean source state. A missing, failed, provenance-mismatched,
 or incomplete gate leaves the feature unapproved for release.
@@ -109,9 +112,10 @@ zero-to-tagged location CAS may leave non-visible generation-fenced residue
 until recovery or reuse cleanup; that residue cannot project bytes or overwrite
 a future nonzero word.
 
-### Current pre-qualification aggregate
+### Historical `844448e` pre-qualification aggregate
 
-On the resulting unchanged worktree, both Windows x64 and Linux x64 Release
+On commit `844448e` before the later reclamation/benchmark delta, both Windows
+x64 and Linux x64 Release
 aggregates passed with zero skips: solution build 0 warnings/0 errors, Unit
 415/415, Contract 117/117, Integration 295/295, Interop 75/75, and
 Linearizability 83/83, for 985/985 tests per platform. Documentation validation,
@@ -196,12 +200,14 @@ These are intentional contract boundaries, not open findings:
 All of the following prelinked artifacts must exist and report success:
 
 1. [artifacts/lock-free-qualification/009-final-pr/summary.json](../../artifacts/lock-free-qualification/009-final-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-nightly/summary.json)
-3. [artifacts/lock-free-qualification/009-final-release/summary.json](../../artifacts/lock-free-qualification/009-final-release/summary.json)
-4. [artifacts/lock-free-qualification/009-final-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-release/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-release/os-validation.json)
-6. [artifacts/lock-free-os-validation/009-final-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.json)
-7. [artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json)
+2. [artifacts/lock-free-qualification/009-final-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-release/summary.json](../../artifacts/lock-free-qualification/009-final-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 
@@ -209,8 +215,9 @@ Approval requires the machine-checkable evidence to show that:
   passed;
 - the release synchronization probe and Windows OS validation passed;
 - the Linux x64 OS validation passed its required checks, including the exact
-  schema-6 8-process tiny-operation raw matrix, median no-regression ratios, and
-  every-lock-free-trial 10 ms stall ceiling;
+  schema-6 one/eight-process tiny-operation raw matrix; one-process intrinsic
+  p99, eight-process throughput, <=3x self-amplification, <=10 us p99, and
+  every-lock-free-trial 10 ms stall ceilings for both scenarios;
 - both exact sibling OS evidence trees, manifests, executable logs, and accepted
   report/tree digests passed initial and completion validation;
 - every artifact identifies the same clean commit and identical source manifest;
@@ -219,7 +226,7 @@ Approval requires the machine-checkable evidence to show that:
 - the tracked tree was not edited after evidence collection.
 
 No final release-evidence status, commit hash, source-manifest hash, or artifact
-hash is asserted in this review before those files are produced. If the seven
+hash is asserted in this review before those files are produced. If the nine
 artifacts satisfy the conditions above, the release decision is **final
 approved**. Otherwise the code and harness review remains closed, but the
 feature is **not approved for release** until the failing gate is rerun on one

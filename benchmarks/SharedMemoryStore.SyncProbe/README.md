@@ -35,6 +35,26 @@ Broker allocation evidence has two scopes:
 
 `AllocationMeasurementScope` identifies the applicable scope for every run.
 
+## Tiny-operation topology and latency sampling
+
+The synchronization scenarios use one deterministic catalog for both store
+profiles. Each of the 12 supported workers owns two keys and alternates between
+them by cycle. Both keys for worker `i` have canonical bucket `i` in the
+16-bucket directory used by the 32-slot synchronization store. Configuration
+records the key count per worker, maximum worker count, canonical bucket count,
+SHA-256 of the ordered key bytes, and the ordered per-key bucket assignments.
+
+Autonomous workers select latency candidates with deterministic xorshift-driven
+geometric gaps whose mean is `SamplingInterval` cycles. Separate early and late
+Algorithm-R reservoirs retain at most 32,768 samples each across their complete
+measurement windows. Overall percentiles use the merged reservoirs;
+`EarlySampleCount`, `LateSampleCount`, and `SampleCount` expose the retained
+sample topology for machine validation. Reservoir storage is allocated before
+the measured region and candidate selection and replacement are allocation-free.
+`MaxMicroseconds` is tracked separately across every sampled candidate, so an
+outlier remains visible to the stall gate even if Algorithm R later evicts it
+from a percentile reservoir.
+
 ## Sticky-overflow qualification
 
 The `overflow` mode constructs 17 exact two-choice bucket-pair collisions in a

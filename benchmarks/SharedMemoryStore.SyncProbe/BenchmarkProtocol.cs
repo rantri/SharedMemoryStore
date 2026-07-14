@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using SharedMemoryStore;
 
@@ -182,6 +183,41 @@ internal static class BenchmarkProtocol
 
     internal static BenchmarkKeyCatalog CreateKeyCatalog(int count) => new(count);
 
+    internal static BenchmarkKeyCatalog CreateCanonicalBucketKeyCatalog(
+        int keysPerWorker,
+        int maximumWorkerCount,
+        int canonicalBucketCount)
+    {
+        if (keysPerWorker <= 0
+            || maximumWorkerCount <= 0
+            || maximumWorkerCount > canonicalBucketCount
+            || canonicalBucketCount <= 0
+            || (canonicalBucketCount & (canonicalBucketCount - 1)) != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(keysPerWorker));
+        }
+
+        var keys = new byte[checked(keysPerWorker * maximumWorkerCount)][];
+        Span<byte> candidateKey = stackalloc byte[sizeof(long)];
+        long candidate = 1;
+        for (var workerId = 0; workerId < maximumWorkerCount; workerId++)
+        {
+            for (var keyOrdinal = 0; keyOrdinal < keysPerWorker;)
+            {
+                BinaryPrimitives.WriteInt64LittleEndian(candidateKey, candidate++);
+                if (GetCanonicalBucket(candidateKey, canonicalBucketCount) != workerId)
+                {
+                    continue;
+                }
+
+                keys[(workerId * keysPerWorker) + keyOrdinal] = candidateKey.ToArray();
+                keyOrdinal++;
+            }
+        }
+
+        return new BenchmarkKeyCatalog(keys);
+    }
+
     internal static byte[][] CreateCollisionKeys(int count, int canonicalBucketCount)
     {
         if (count <= 0 || canonicalBucketCount <= 0 || (canonicalBucketCount & (canonicalBucketCount - 1)) != 0)
@@ -256,6 +292,16 @@ internal static class BenchmarkProtocol
         }
 
         return (first, second);
+    }
+
+    internal static int GetCanonicalBucket(ReadOnlySpan<byte> key, int bucketCount)
+    {
+        if (bucketCount <= 0 || (bucketCount & (bucketCount - 1)) != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bucketCount));
+        }
+
+        return (int)(Mix(Hash(key)) & (uint)(bucketCount - 1));
     }
 
     internal static int CalculatePrimaryBucketCount(int slotCount)
@@ -387,11 +433,152 @@ internal sealed class BenchmarkKeyCatalog
         }
     }
 
+    internal BenchmarkKeyCatalog(byte[][] keys)
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        ArgumentOutOfRangeException.ThrowIfZero(keys.Length);
+        _keys = new ReadOnlyMemory<byte>[keys.Length];
+        _hexKeys = new string[keys.Length];
+        for (var index = 0; index < keys.Length; index++)
+        {
+            byte[] key = keys[index]
+                ?? throw new ArgumentException("The key catalog cannot contain null entries.", nameof(keys));
+            _keys[index] = key;
+            _hexKeys[index] = Convert.ToHexString(key);
+        }
+    }
+
     internal int Count => _keys.Length;
 
     internal ReadOnlyMemory<byte> this[int index] => _keys[index];
 
     internal string Hex(int index) => _hexKeys[index];
+
+    internal string CalculateSha256()
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (ReadOnlyMemory<byte> key in _keys)
+        {
+            hash.AppendData(key.Span);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+}
+
+internal struct DeterministicXorShift64
+{
+    private ulong _state;
+
+    internal DeterministicXorShift64(ulong seed)
+    {
+        _state = seed == 0 ? 0x9e37_79b9_7f4a_7c15UL : seed;
+    }
+
+    internal ulong NextUInt64()
+    {
+        ulong value = _state;
+        value ^= value >> 12;
+        value ^= value << 25;
+        value ^= value >> 27;
+        _state = value;
+        return value * 0x2545_f491_4f6c_dd1dUL;
+    }
+
+    internal ulong NextUInt64(ulong exclusiveUpperBound)
+    {
+        if (exclusiveUpperBound == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(exclusiveUpperBound));
+        }
+
+        ulong rejectionThreshold = unchecked(0UL - exclusiveUpperBound) % exclusiveUpperBound;
+        ulong candidate;
+        do
+        {
+            candidate = NextUInt64();
+        }
+        while (candidate < rejectionThreshold);
+
+        return candidate % exclusiveUpperBound;
+    }
+}
+
+internal struct GeometricCycleSampler
+{
+    private const double UnitIntervalScale = 1.0 / 9_007_199_254_740_992.0;
+    private const double InverseLogSurvivalProbability = -63.498_687_642_344;
+
+    private DeterministicXorShift64 _random;
+    private long _nextCandidateCycle;
+
+    internal GeometricCycleSampler(ulong seed)
+    {
+        _random = new DeterministicXorShift64(seed);
+        _nextCandidateCycle = NextGap() - 1L;
+    }
+
+    internal bool ShouldSample(long cycle)
+    {
+        if (cycle < _nextCandidateCycle)
+        {
+            return false;
+        }
+
+        int gap = NextGap();
+        _nextCandidateCycle = cycle > long.MaxValue - gap ? long.MaxValue : cycle + gap;
+        return true;
+    }
+
+    private int NextGap()
+    {
+        // A success probability of 1/64 gives an exact geometric mean of 64
+        // cycles. One 53-bit uniform variate avoids a per-cycle RNG cost while
+        // keeping candidate selection deterministic and allocation-free.
+        ulong mantissa = (_random.NextUInt64() >> 11) + 1;
+        double unitInterval = mantissa * UnitIntervalScale;
+        double gap = Math.Floor(Math.Log(unitInterval) * InverseLogSurvivalProbability) + 1;
+        return gap >= int.MaxValue ? int.MaxValue : (int)gap;
+    }
+}
+
+internal sealed class LatencyReservoir
+{
+    private readonly double[] _samples;
+    private DeterministicXorShift64 _random;
+    private ulong _observedCount;
+    private int _sampleCount;
+    private double _maximumObserved;
+
+    internal LatencyReservoir(int capacity, ulong seed)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        _samples = new double[capacity];
+        _random = new DeterministicXorShift64(seed);
+    }
+
+    internal int Count => _sampleCount;
+
+    internal double MaximumObserved => _maximumObserved;
+
+    internal void Add(double sample)
+    {
+        _maximumObserved = Math.Max(_maximumObserved, sample);
+        _observedCount++;
+        if (_sampleCount < _samples.Length)
+        {
+            _samples[_sampleCount++] = sample;
+            return;
+        }
+
+        ulong replacement = _random.NextUInt64(_observedCount);
+        if (replacement < (ulong)_samples.Length)
+        {
+            _samples[(int)replacement] = sample;
+        }
+    }
+
+    internal double[] ToArray() => _samples[.._sampleCount];
 }
 
 internal static class ProcessorAffinityPlanner

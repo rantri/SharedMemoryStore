@@ -45,13 +45,15 @@ The predicate is:
    finding for the same committed source. The Linux OS report additionally has
    one required `linux-tiny-performance` row and the Windows OS report has the
    same row as optional/not-qualified. The Linux row binds schema-6 raw JSON for
-   exactly Legacy/LockFree x acquire-release/publish-remove x process-count 8 x
-   three 60-second trials after 10 seconds of warm-up, with complete affinity,
+   exactly Legacy/LockFree x acquire-release/publish-remove x process-counts 1
+   and 8 x three 60-second trials after 10 seconds of warm-up, with complete affinity,
    unique native CPU IDs in `[0,63]`, zero failures, at least two operations and
    exactly one successful operation pair per completed cycle, no checksum or
-   corruption evidence, reproducible summaries, median lock-free/legacy
-   throughput ratio at least 1.0, p99 ratio at most 1.0, and every raw lock-free
-   `MaxMicroseconds` at most 10,000.
+   corruption evidence, and reproducible summaries. For each scenario,
+   one-process lock-free/legacy p99 is at most 1.0, eight-process lock-free/
+   legacy throughput is at least 1.0, lock-free eight/one-process p99 is at most
+   3.0, lock-free eight-process p99 is at most 10 microseconds, and every raw
+   lock-free `MaxMicroseconds` is at most 10,000.
 
 If any predicate is false, any command exits nonzero, or any artifact path
 already exists before its one shot, the freeze is invalid. Preserve the failed
@@ -84,8 +86,8 @@ The configured release run is the exact 100,000,000-operation mixed workload,
 1,000,000 production repetitions per SC-011 family, 1,000,000 directory-
 generation repetitions, 10,000 recovery cases, three 60-second trials after a
 10-second warm-up, 100,000 direct 1.3 MB frames, and 30-second suspension gate.
-The Linux `-Command all` run also executes the independently validated 8-process
-tiny-operation matrix described above and preserves its raw JSON inside the
+The Linux `-Command all` run also executes the independently validated one/eight-
+process tiny-operation matrix described above and preserves its raw JSON inside the
 Linux OS evidence tree.
 Exit code `0` is necessary but not sufficient: the JSON predicate above is the
 final authority. Exit code `1` is failure. Exit code `2`, `validation-only`, a
@@ -105,7 +107,7 @@ override a failing or missing field.
 | SC-003 | Release `sync-probe` distributed-key-read 6/1 and 12/1 median throughput assertions are at least 4.5x and 8x. |
 | SC-004 | Release `sync-probe` broker-directed 12-reader publication rate is at least 80% of its one-reader rate. |
 | SC-005 | Release `participant-suspension` is `passed` with `qualification: sc005-qualified`, every configured checkpoint, 30-second pauses, and healthy-throughput ratio at least 0.9. |
-| SC-006 | Release `sync-probe` 8-process Windows tiny-operation throughput/p99 assertions pass; Linux `linux-tiny-performance` binds the exact three-trial raw matrix and passes both median no-regression ratios plus the every-raw-trial 10 ms maximum-stall gate; `dual-platform-os-evidence` and completion OS-tree revalidation pass. |
+| SC-006 | Release `sync-probe` 8-process Windows tiny-operation throughput/p99 assertions pass; Linux `linux-tiny-performance` binds the exact one/eight-process three-trial raw matrix and passes uncontended p99, eight-process throughput, <=3x self-amplification, <=10 us absolute p99, and every-raw-trial 10 ms maximum-stall gates for both scenarios; `dual-platform-os-evidence` and completion OS-tree revalidation pass. |
 | SC-007 | Release `wait-policy` includes the no-operation-lock proof; Windows `no-lock-held` and Linux `no-lock-held` plus required `no-lock-linux-strace` OS rows pass. |
 | SC-008 | Release `sync-probe` exact allocation scope reports `ProducerStoreOperationAllocatedBytes == 0` and the full-suite allocation tests pass for warmed publish/reserve/commit and acquire/project/release paths. |
 | SC-009 | Every release large-ingest row reaches 100,000 frames, reports zero producer store-operation allocation, and carries `structural-direct-reservation-write-and-borrowed-lease-read` copy evidence with zero correctness failures. |

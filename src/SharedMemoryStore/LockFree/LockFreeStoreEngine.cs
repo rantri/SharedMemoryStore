@@ -817,27 +817,17 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
             return StoreStatus.RemovePending;
         }
 
-        StoreStatus leaseScan = _leases.ScanHasActiveLease(binding, budget, out bool hasActiveLease);
-        if (leaseScan != StoreStatus.Success)
-        {
-            return leaseScan == StoreStatus.CorruptStore
-                ? CorruptHere()
-                : StoreStatus.RemovePending;
-        }
-
-        if (hasActiveLease)
-        {
-            Reach(LockFreeCheckpointId.RemoveAfterLeaseClassification);
-            return StoreStatus.RemovePending;
-        }
-
         if (HasExpired(waitOptions, started))
         {
             return StoreStatus.RemovePending;
         }
 
         Reach(LockFreeCheckpointId.ReclaimBeforeOwnershipCas);
-        StoreStatus reclaimed = _reclaimer.TryReclaim(binding, budget, ref _checkpoint);
+        StoreStatus reclaimed = _reclaimer.TryReclaim(
+            binding,
+            budget,
+            ref _checkpoint,
+            reportRemoveClassification: true);
         for (var attempt = 0;
             reclaimed == StoreStatus.StoreBusy && budget.IsInfinite;
             attempt++)
@@ -848,7 +838,11 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
                 break;
             }
 
-            reclaimed = _reclaimer.TryReclaim(binding, budget, ref _checkpoint);
+            reclaimed = _reclaimer.TryReclaim(
+                binding,
+                budget,
+                ref _checkpoint,
+                reportRemoveClassification: true);
         }
 
         if (reclaimed == StoreStatus.Success)

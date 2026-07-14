@@ -9,11 +9,11 @@ revalidation. They make cancellation handoff, first-publisher arbitration,
 post-CAS withdrawal, alternate-location cleanup, and generation-reuse behavior
 crash-observable through the production callback.
 
-Focused Release runs of the complete current catalog passed 67/67 on Windows
+Focused Release runs of the complete catalog on commit `844448e` passed 67/67 on Windows
 x64 and 67/67 on Linux x64 (WSL2). The corresponding final 8-process fixed-key
 churn regression passed on both platforms, and the full Release aggregate on
-each platform passed 985/985 tests with zero failures or skips. These worktree
-runs establish implementation/review closure; the immutable final qualification
+each platform passed 985/985 tests with zero failures or skips. These historical
+snapshot runs establish implementation/review closure; the immutable final qualification
 workflow remains the release-evidence authority.
 
 ## Projection and recovery-window extension (2026-07-14, historical)
@@ -57,9 +57,10 @@ Result:
 - repeat stability check: PASS, 3 consecutive runs and 93/93 checkpoint cases;
 - process termination mode: `Process.Kill(entireProcessTree: true)` at the exact instrumented protocol checkpoint.
 
-## Matrix coverage
+## Original 31-entry matrix coverage (2026-07-13 snapshot)
 
-`LockFreeCrashRecoveryIntegrationTests.CanonicalCheckpoints` enumerates the
+At this historical checkpoint,
+`LockFreeCrashRecoveryIntegrationTests.CanonicalCheckpoints` enumerated the
 production `LockFreeCheckpointCatalog.Entries` collection directly. Therefore a
 new catalog entry automatically adds a required crash case instead of relying on
 a duplicated test list.

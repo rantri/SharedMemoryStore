@@ -139,9 +139,19 @@
     "mode": "sync",
     "profiles": ["Legacy", "LockFree"],
     "scenarios": ["acquire-release", "publish-remove"],
-    "processCounts": [8],
+    "processCounts": [1, 8],
+    "syncKeysPerWorker": 2,
+    "syncMaximumWorkerCount": 12,
+    "syncCanonicalBucketCount": 16,
+    "syncKeyCatalogSha256": "9A7E93EB1382F2665155971C64C10D4C29039916CD9E314DB72B9906549656D2",
+    "syncKeyCanonicalBucketAssignments": [
+      0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
+      6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11
+    ],
     "minimumThroughputRatio": 1.0,
-    "maximumP99Ratio": 1.0,
+    "maximumUncontendedP99Ratio": 1.0,
+    "maximumScaleP99Ratio": 3.0,
+    "maximumP99Microseconds": 10.0,
     "maximumStallMicroseconds": 10000
   },
   "suspensionCheckpointIds": [

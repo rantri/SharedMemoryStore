@@ -504,3 +504,44 @@ schedules, directory collisions create duplicate current generations, recovery
 can reclaim a live owner or leak a dead one repeatedly, a steady-state path
 touches the OS operation lock, or short profiling shows no unrelated-key scaling
 after two evidence-driven correction cycles.
+
+## Decision 12: Separate intrinsic latency from parallel scaling on Linux
+
+**Decision**: Qualify both acquire/release and publish/remove at one and eight
+processes with three independent 60-second Release trials after a 10-second
+warmup. The lock-free profile must meet all of these independently recomputed
+conditions:
+
+- at one process, median p99 latency is no greater than the matching legacy
+  median p99;
+- at eight processes, median throughput is no lower than the matching legacy
+  median throughput;
+- lock-free eight-process median p99 is at most three times its matching
+  one-process median p99 and is also at most 10 microseconds;
+- every lock-free raw trial at both process counts has an unevictable observed
+  maximum across its sampled candidates of at most 10 milliseconds.
+
+The executable benchmark uses two deterministic keys per worker, a fixed
+canonical bucket assignment, separate early and late Algorithm-R reservoirs,
+and an unevictable running maximum. Qualification binds the raw evidence to the
+exact Linux host, architecture, process count, CPU model, and clean commit, then
+recomputes all eight scenario/profile/process-count summary rows from the raw
+trials.
+
+**Evidence**: The original probe accidentally allowed fixed-key collisions and
+could lose an early maximum when its latency reservoir replaced that sample.
+After correcting both defects, eight-process lock-free operation retained a
+large throughput advantage and sub-10-microsecond p99, while the legacy Linux
+file lock produced a deceptively low p99 by serializing incumbents even though
+its raw stalls reached tens of milliseconds. Reducing the lease table from 64
+records to one, changing the slot hash, and changing the slot probe stride did
+not materially improve lock-free eight-process p99, so each experiment was
+reverted.
+
+**Rationale**: A serialized implementation is not a valid parallel-latency
+oracle. The one-process comparison checks intrinsic operation cost, the
+eight-process throughput comparison checks useful scaling, the lock-free
+one-to-eight ratio limits contention growth, and the absolute p99 and raw-maximum
+limits protect tail latency without rewarding convoying. This preserves a hard
+performance contract while keeping correctness, host binding, and raw-tail
+requirements independent of any aggregate score.

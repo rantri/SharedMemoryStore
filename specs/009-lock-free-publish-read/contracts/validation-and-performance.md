@@ -214,7 +214,7 @@ failure.
 
 | Workload | Participants | Pattern | Required evidence |
 |---|---|---|---|
-| Tiny operation | 1, 2, 4, 8, 12 processes | 8-byte rotating keys, 1-byte values, publish/remove and acquire/release | ops/s, p50/p95/p99, Windows 4x/80% target, Linux no regression/no >10 ms stalls |
+| Tiny operation | 1, 2, 4, 8, 12 processes | 8-byte rotating keys, 1-byte values, publish/remove and acquire/release | ops/s, p50/p95/p99, Windows 4x/80% target; Linux one-process intrinsic p99, eight-process throughput, <=3x self-amplification, <=10 us p99, and no >10 ms sampled stall |
 | Same-key broadcast | 1, 2, 4, 6, 8, 12 readers | one 256-byte value, full checksum, immediate release | 6-reader >=4x and 12-reader >=7x single-reader throughput |
 | Distributed keys | 1, 2, 4, 6, 8, 12 readers | 256 uniform stable keys, 256-byte values | 6-reader >=4.5x and 12-reader >=8x, zero false misses/checksum errors |
 | Broker-directed primary | one zero-copy producer, 1 or 12 assigned readers, one observer | 1.3 MB frames, 16-byte descriptors, 256 rotating keys; test pipe sends keys only | 12-reader publication rate >=80% of one-reader, end-to-end latency, `ProducerStoreOperationAllocatedBytes == 0`, and structural direct-reservation-write/borrowed-lease-read evidence; the retained non-instrumented `FullPayloadCopies` field is not treated as a measured zero |
@@ -299,16 +299,19 @@ the gate. Correctness counters are checked before threshold calculations.
 
 The Linux-x64 `-Command all` report contains one required
 `linux-tiny-performance` row. It runs schema-6 SyncProbe mode `sync` for exactly
-Legacy and LockFree, `acquire-release` and `publish-remove`, process count 8,
-10-second warm-up, 60-second measurement, and three trials. All 12 raw rows must
-be qualification measurements with zero failures, no oversubscription, complete
-unique eight-process affinity, internally consistent operation/status/worker
-counters, and reproducible 4-row medians. Every raw row has at least two recorded
+Legacy and LockFree, `acquire-release` and `publish-remove`, process counts 1 and
+8, 10-second warm-up, 60-second measurement, and three trials. All 24 raw rows
+must be qualification measurements with zero failures, no oversubscription,
+complete unique per-row affinity, internally consistent operation/status/worker
+counters, and reproducible 8-row medians. Every raw row has at least two recorded
 store operations per completed cycle and exactly one successful operation pair
 per cycle (`Acquire`/`Release` or `Publish`/`Remove`); checksum-mismatch and
 corruption-reason histogram rows are forbidden. For each scenario, lock-free
-median throughput divided by legacy is at least 1.0 and lock-free median p99
-divided by legacy is at most 1.0. Every individual lock-free raw row—not only
+one-process median p99 divided by legacy one-process p99 is at most 1.0;
+lock-free eight-process median throughput divided by legacy eight-process
+throughput is at least 1.0; lock-free eight-process median p99 divided by its
+own one-process median p99 is at most 3.0 and is at most 10 microseconds
+absolute. Every individual lock-free raw row at either process count—not only
 its median maximum—has `MaxMicroseconds <= 10000`. The same OS row remains
 visible as optional/not-qualified on Windows and executes no workload there.
 
