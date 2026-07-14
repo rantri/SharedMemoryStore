@@ -4,10 +4,10 @@
 
 This report is frozen before the one-shot runs and is not edited afterward.
 The short convergence conclusion is **PASS if and only if** the final PR
-[`summary.json`](../../../artifacts/lock-free-qualification/009-final-pr/summary.json)
+[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json)
 has schema 4, tier `pr`, `validationOnly: false`, and `overallStatus: passed`,
 and its hashed
-[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-pr/sync-probe.json)
+[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json)
 passes every exact row, count, provenance, correctness, raw-visibility, and
 short-performance check enforced by the runner. Its start/completion provenance
 must be identical and clean, and must match the final nightly and release
@@ -15,9 +15,9 @@ summaries. Otherwise the short conclusion is **FAIL** or **NOT QUALIFIED** as
 reported by the raw JSON; this tracked report cannot promote it.
 
 The same clean commit then has to pass the immutable
-[`009-final-nightly`](../../../artifacts/lock-free-qualification/009-final-nightly/summary.json)
+[`009-final-r2-nightly`](../../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json)
 and
-[`009-final-release`](../../../artifacts/lock-free-qualification/009-final-release/summary.json)
+[`009-final-r2-release`](../../../artifacts/lock-free-qualification/009-final-r2-release/summary.json)
 gates before the short result can contribute to release qualification. Raw
 JSON remains in the ignored immutable `artifacts/` tree; no copy is maintained
 under tracked `specs/` and no tracked post-run edit is permitted.
@@ -30,6 +30,15 @@ validation, and focused Linux tests. Their exact counts are snapshot-specific
 and are not asserted for the current tree. These are diagnostic results only:
 they are not one provenance-matched final sequence and do not establish any
 final performance threshold.
+
+The latest clean short-tier diagnostic, `009-r2-pre-final4-pr`, passed all 24
+qualification rows on commit `ca200238423877044d841a3b92f93edb37385d46`:
+1,014/1,014 tests, the one exact 10,000-cycle churn row, all 50 directory
+configurations, and 108/108 suspension rows. Its summary SHA-256 is
+`3D543FBF5E4C4A5C514C1C3309565F0B2575126E5B176B79E347802AC46E331A`
+and its synchronization-probe SHA-256 is
+`9788BF7222BFE8B77E4512EECFEE9788BD1D898763AABBA0417F16D2AF8DE3EC`.
+This is a successful convergence diagnostic, not the frozen final PR result.
 
 Two still-earlier one-second smoke artifacts are also retained:
 

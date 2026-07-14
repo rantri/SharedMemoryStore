@@ -400,6 +400,44 @@ evidence.
 The focused results above establish closure of the review findings; they are not
 a substitute for the immutable final qualification artifacts below.
 
+### R2 qualification convergence and final re-review
+
+The first immutable candidate remains preserved. Its Linux report passed on
+`73accd7`, but the same-source `009-final-pr` summary correctly failed after
+1,013/1,013 tests because SC-017 configured 46 directory mutations while the
+source catalog contained 50. The Linux report SHA-256 is
+`6C9727CCD6C412CD9B036E2107DA389F7359281A630C120BF48919FD987668B2`;
+the failed PR summary SHA-256 is
+`E1B5FA0D0EF419388054B1AA310A292DB689ABBB7F33DDA5BD377166021CB79E`.
+Neither is promoted as final evidence.
+
+R2 diagnostics subsequently rejected an obsolete atomic-test parent timeout,
+ambiguous churn-test cardinality, and checkpoint 62/63 suspension boundaries.
+The atomic implementation passed isolated Windows and Linux OS reports. The
+qualification runner now binds churn to the one exact SC-016 method, binds each
+leak assertion to its exact producing step, requires exactly one passed TRX row,
+and verifies the configured top-level class plus its directly declared test
+method. Its negative self-test covers role swaps, joint-mapping drift, nested
+types/methods, wrong source, and wrapper/XML failure propagation. Checkpoint 62
+preserves its primary reservation outcome through cleanup. The production
+reclaimer now performs checkpoint 63 before its final budget check, so a finite
+remover resumed after expiry leaves a helpable `RemoveRequested` transition
+rather than claiming `Reclaiming` with a stale deadline.
+
+The clean `009-r2-pre-final4-pr` diagnostic passed all 24 rows on exact commit
+`ca200238423877044d841a3b92f93edb37385d46`, tree
+`5f4454fa25bbfb67ea0e687153ef94470ca11112`, and source-manifest SHA-256
+`952FB17E4D08B5C4973A0809F0FC3541E5409B32991A07C6416709CB6C0CD5BF`.
+It passed 1,014/1,014 tests, exact churn, all 50 SC-017 configurations, and all
+108 suspension rows. Its summary SHA-256 is
+`3D543FBF5E4C4A5C514C1C3309565F0B2575126E5B176B79E347802AC46E331A`.
+Independent production, qualification-harness, and test/spec re-reviews found
+no unresolved High or Medium issue. The sole accepted Low boundary remains the
+bounded Linux cold-open cost of scanning a flat rendezvous namespace after
+extreme historical store-name churn; it does not touch an open store's hot path.
+These results establish convergence only. The decision remains pending until
+the new R2 final paths below pass on one immutable source state.
+
 ## Accepted design boundaries
 
 These are intentional contract boundaries, not open findings:
@@ -433,15 +471,15 @@ These are intentional contract boundaries, not open findings:
 
 All of the following prelinked artifacts must exist and report success:
 
-1. [artifacts/lock-free-qualification/009-final-pr/summary.json](../../artifacts/lock-free-qualification/009-final-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-pr/sync-probe.json)
-3. [artifacts/lock-free-qualification/009-final-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-nightly/summary.json)
-4. [artifacts/lock-free-qualification/009-final-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-nightly/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-release/summary.json](../../artifacts/lock-free-qualification/009-final-release/summary.json)
-6. [artifacts/lock-free-qualification/009-final-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-release/sync-probe.json)
-7. [artifacts/lock-free-qualification/009-final-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-release/os-validation.json)
-8. [artifacts/lock-free-os-validation/009-final-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.json)
-9. [artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json)
+1. [artifacts/lock-free-qualification/009-final-r2-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json)
+2. [artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-r2-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-r2-release/summary.json](../../artifacts/lock-free-qualification/009-final-r2-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-r2-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r2-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-r2-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 

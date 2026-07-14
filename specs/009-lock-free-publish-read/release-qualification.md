@@ -11,10 +11,10 @@ the authoritative final record, even when it reports `failed`,
 
 | Tier or platform | Authoritative raw evidence |
 |---|---|
-| PR | [`009-final-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-pr/summary.json) and [`009-final-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-pr/sync-probe.json) |
-| Nightly | [`009-final-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-nightly/summary.json) and [`009-final-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-nightly/sync-probe.json) |
-| Release | [`009-final-release/summary.json`](../../artifacts/lock-free-qualification/009-final-release/summary.json), [`009-final-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-release/sync-probe.json), and the runner-created Windows [`009-final-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-release/os-validation.json) |
-| Linux x64 | [`009-final-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json) |
+| PR | [`009-final-r2-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json) and [`009-final-r2-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json) |
+| Nightly | [`009-final-r2-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json) and [`009-final-r2-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json) |
+| Release | [`009-final-r2-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-release/summary.json), [`009-final-r2-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json), and the runner-created Windows [`009-final-r2-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r2-release/os-validation.json) |
+| Linux x64 | [`009-final-r2-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json) |
 
 The predicate is:
 
@@ -70,16 +70,16 @@ raw evidence without changing repository provenance.
 ```powershell
 # Linux x64, on the same clean commit
 pwsh ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release `
-  -OutputPath artifacts/lock-free-os-validation/009-final-linux-x64.json
+  -OutputPath artifacts/lock-free-os-validation/009-final-r2-linux-x64.json
 
 # Windows x64, on that same clean commit
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier pr `
-  -EvidenceRunId 009-final-pr
+  -EvidenceRunId 009-final-r2-pr
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier nightly `
-  -EvidenceRunId 009-final-nightly
+  -EvidenceRunId 009-final-r2-nightly
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier release `
-  -EvidenceRunId 009-final-release `
-  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-linux-x64.json
+  -EvidenceRunId 009-final-r2-release `
+  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r2-linux-x64.json
 ```
 
 The configured release run is the exact 100,000,000-operation mixed workload,
@@ -140,3 +140,58 @@ preserved. Its `summary.json` SHA-256 is
 Its ordinary eight-process publish/remove workload returned `CorruptStore`.
 That artifact predates exact-reference revalidation and is failure evidence,
 not evidence for the final tree.
+
+## First final candidate and R2 convergence lineage
+
+The first immutable final candidate is also preserved rather than rewritten.
+Its Linux report, `artifacts/lock-free-os-validation/009-final-linux-x64.json`,
+passed all required rows on commit `73accd7b33730027fed8da54d99d72239eeb1d59`,
+tree `2d0deebeb5da5b9be578297fbaf7965079d3b63f`, and source-manifest SHA-256
+`780D563964615DB8C5BF234D257F074737D1223EC98660E4FDA77D022C8235EF`.
+The report SHA-256 is
+`6C9727CCD6C412CD9B036E2107DA389F7359281A630C120BF48919FD987668B2`;
+its raw performance report SHA-256 is
+`EA05742E2CEC2F2A3032C18EADE888C0DDD026A8C08358AD1477B57BFC966CC7`.
+The matching `009-final-pr` attempt then passed the complete 1,013-test suite
+but correctly failed SC-017 because its generated configuration covered 46
+directory mutations while the source catalog contained 50. Its summary SHA-256
+is `E1B5FA0D0EF419388054B1AA310A292DB689ABBB7F33DDA5BD377166021CB79E`.
+That failure rejects the entire first candidate despite the Linux pass.
+
+The preserved R2 diagnostics then closed four distinct gaps. The
+`009-r2-pre-final-pr` attempt exposed an obsolete 45-second parent timeout in a
+raw mapped-memory atomic proof, not a store failure; isolated Windows and Linux
+atomic reports passed with SHA-256
+`B39F7970C718C8A4EDF384AFD3A196D29B8C4F8B91FF131C31DFF67910E74FD7`
+and `51CC15DDB526B330801F4815BD44A330B22B6EBEF0E211898A09A293D742742E`.
+The rejected parent-run summary SHA-256 is
+`FC0949A5D7B56EFC7A5E707A3B8ED50C41738C2CD90A94264A88AA8E7BDF21E6`.
+One separate full-solution observation found a test-only 50-millisecond setup
+budget expiring before an instrumented reservation checkpoint under parallel
+load. That observation emitted no named immutable diagnostic artifact or hash;
+focused repetition closed it with a two-second budget and 2.25-second pause and
+is deliberately recorded only as unbound test history.
+`009-r2-pre-final2-pr` rejected two churn result rows where the contract requires
+the one exact SC-016 method; its summary SHA-256 is
+`3483EE66ED1DDA3E71864CC16D73C5569D195BF3C74AF800CDDCBD1CF044E0ED`.
+`009-r2-pre-final3-pr` then passed 104/108 checkpoint/workload rows and isolated
+checkpoint 62 oracle handling and checkpoint 63 finite-budget ownership in both
+suspension workloads. Its summary SHA-256 is
+`48F632E637B2999AFD877FCCA094322D6C9CA029903E495CF32D80C43A9FC66A`.
+The former was corrected in the crash command; the latter required a production
+reclaimer change so an expired remover cannot claim `Reclaiming` after
+suspension and leave the key unhelpable.
+
+Finally, the clean diagnostic `009-r2-pre-final4-pr` passed all 24 qualification
+rows on commit `ca200238423877044d841a3b92f93edb37385d46`, tree
+`5f4454fa25bbfb67ea0e687153ef94470ca11112`, and source-manifest SHA-256
+`952FB17E4D08B5C4973A0809F0FC3541E5409B32991A07C6416709CB6C0CD5BF`.
+It passed 1,014/1,014 tests, the single exact 10,000-cycle churn test, all 50
+SC-017 configurations, and 108/108 suspension rows across 54 checkpoints and
+two workloads. Its summary, synchronization probe, and suspension SHA-256 values
+are respectively
+`3D543FBF5E4C4A5C514C1C3309565F0B2575126E5B176B79E347802AC46E331A`,
+`9788BF7222BFE8B77E4512EECFEE9788BD1D898763AABBA0417F16D2AF8DE3EC`,
+and `8BC2FD8F2BBFA288EE67610E43155186E5A445443059586BF1AEC34F8C7DAA35`.
+All R2 artifacts named in this section are diagnostic lineage only. They do not
+replace the frozen common-provenance R2 final sequence linked above.
