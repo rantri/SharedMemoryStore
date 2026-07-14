@@ -131,11 +131,16 @@ internal static class CheckpointCrashCommands
             bool expectedStoreFull = status == StoreStatus.StoreFull
                 && target.Id is LockFreeCheckpointId.StoreFullAfterFirstCollectBeforeVerification
                     or LockFreeCheckpointId.StoreFullAfterExactDoubleCollect;
-            if (status is not (StoreStatus.Success
+            bool canceledInsertSuspension = suspensionProbe
+                && target.Id == LockFreeCheckpointId.DirectoryAfterCancelLocationClearBeforeDescriptorRejection;
+            bool expectedStatus = canceledInsertSuspension
+                ? status == StoreStatus.InvalidReservation
+                : status is StoreStatus.Success
                     or StoreStatus.RemovePending
-                    or StoreStatus.DuplicateKey)
-                && !expectedStoreFull
-                && !(suspensionProbe && status == StoreStatus.StoreBusy))
+                    or StoreStatus.DuplicateKey
+                    || expectedStoreFull
+                    || (suspensionProbe && status == StoreStatus.StoreBusy);
+            if (!expectedStatus)
             {
                 Console.Error.WriteLine("Target operation failed after continue: " + status);
                 return OperationFailureExitCode;
@@ -293,7 +298,18 @@ internal static class CheckpointCrashCommands
                     parsed.Value.Length,
                     parsed.Descriptor,
                     out ValueReservation reservation);
-                return reserve == StoreStatus.Success ? reservation.Abort() : reserve;
+                if (reserve != StoreStatus.Success)
+                {
+                    return reserve;
+                }
+
+                // Preserve the primary reserve outcome for the suspension
+                // oracle. Cleanup must not transform an unexpected Success
+                // into the expected InvalidReservation and hide a regression.
+                StoreStatus cleanup = reservation.Abort();
+                return cleanup is StoreStatus.Success or StoreStatus.InvalidReservation
+                    ? StoreStatus.Success
+                    : cleanup;
             }
 
             case LockFreeCheckpointId.DirectoryBeforeSpillSummaryPublicationCas:

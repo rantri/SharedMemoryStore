@@ -101,21 +101,25 @@ internal sealed class LockFreeReclaimer
                 return StoreStatus.RemovePending;
             }
 
+            LockFreeCheckpoint.Reach(
+                ref checkpoint,
+                LockFreeCheckpointId.ReclaimAfterLeaseScanBeforeOwnershipCas);
+
             // The lease scan establishes that claiming Reclaiming would be
             // safe, but it does not authorize starting new caller-bounded work
-            // after the public deadline/cancellation point. Leaving the slot
-            // in RemoveRequested keeps it universally helpable; the public
-            // remove facade normalizes this terminal budget status to
-            // RemovePending because logical removal already linearized.
+            // after the public deadline/cancellation point. Check after the
+            // instrumentable validation window as well as after the scan so a
+            // delayed participant cannot claim ownership with a stale budget.
+            // Leaving the slot in RemoveRequested keeps it universally
+            // helpable; the public remove facade normalizes this terminal
+            // budget status to RemovePending because logical removal already
+            // linearized.
             StoreStatus ownershipBudget = budget.Check();
             if (ownershipBudget != StoreStatus.Success)
             {
                 return ownershipBudget;
             }
 
-            LockFreeCheckpoint.Reach(
-                ref checkpoint,
-                LockFreeCheckpointId.ReclaimAfterLeaseScanBeforeOwnershipCas);
             structure = TryLifecycleTransition(
                 ref slot.Control,
                 removeRequested,

@@ -82,6 +82,46 @@ public sealed class LockFreeRemoveStateTests
     }
 
     [Fact]
+    public async Task ExpiredDeadlineAfterLeaseScanDoesNotClaimReclaimOwnership()
+    {
+        using var scheduler = new ControlledLockFreeScheduler();
+        using var store = CreateInstrumentedStore(scheduler);
+        byte[] key = [0x21];
+        Assert.Equal(StoreStatus.Success, store.TryPublish(key, [0x31]));
+        scheduler.PauseAt(LockFreeCheckpointId.ReclaimAfterLeaseScanBeforeOwnershipCas);
+
+        StoreStatus removeStatus = default;
+        var remove = Task.Run(() => removeStatus = store.TryRemove(
+            key,
+            new StoreWaitOptions(TimeSpan.FromSeconds(2))));
+        bool paused = scheduler.WaitUntilPaused(TimeSpan.FromSeconds(5));
+        await Task.Delay(TimeSpan.FromMilliseconds(2_250));
+        scheduler.Continue();
+        await remove.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(paused, "Remove never reached the post-scan pre-ownership checkpoint.");
+        Assert.Equal(StoreStatus.RemovePending, removeStatus);
+        DiagnosticsSnapshot pending = store.GetDiagnostics();
+        Assert.Equal(0, pending.ReclaimingSlotCount);
+        Assert.Equal(1, pending.PendingRemovalCount);
+        Assert.Equal(1, pending.FreeSlotCount);
+        Assert.Equal(StoreStatus.NotFound, store.TryAcquire(key, out _));
+
+        Assert.Equal(
+            StoreStatus.Success,
+            store.TryPublish(key, [0x41], default, StoreWaitOptions.Infinite));
+        Assert.Equal(StoreStatus.Success, store.TryAcquire(key, out ValueLease replacement));
+        Assert.Equal(0x41, replacement.ValueSpan[0]);
+        Assert.Equal(StoreStatus.Success, replacement.Release());
+        Assert.Equal(StoreStatus.Success, store.TryRemove(key, StoreWaitOptions.Infinite));
+
+        DiagnosticsSnapshot reclaimed = store.GetDiagnostics();
+        Assert.Equal(0, reclaimed.ReclaimingSlotCount);
+        Assert.Equal(0, reclaimed.PendingRemovalCount);
+        Assert.Equal(2, reclaimed.FreeSlotCount);
+    }
+
+    [Fact]
     public void CancellationBeforeLogicalRemovalPreservesPublishedGeneration()
     {
         using var store = CreateStore();

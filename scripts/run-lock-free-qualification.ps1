@@ -36,6 +36,9 @@ if ($null -eq $selected) {
 }
 $churnTestSourceRelativePath = 'tests/SharedMemoryStore.IntegrationTests/LockFreeChurnIntegrationTests.cs'
 $churnTestNamespace = 'SharedMemoryStore.IntegrationTests'
+$churnTestClass = 'LockFreeChurnIntegrationTests'
+$churnQualificationTestMethod = 'CollisionHeavyMultiProcessRemoveReuseRestoresCapacityAndKeepsLateLatencyBounded'
+$churnQualificationTestNameFragment = "$churnTestClass.$churnQualificationTestMethod"
 
 $outputRoot = if ([IO.Path]::IsPathFullyQualified($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
@@ -1095,10 +1098,30 @@ function Invoke-Sc017ConfigurationVerifierSelfTest {
 }
 
 function Get-ChurnQualificationTestContract {
-    param([Parameter(Mandatory)]$QualificationConfig)
+    param(
+        [Parameter(Mandatory)]$QualificationConfig,
+        [AllowEmptyString()][string]$SourceOverride)
 
     $assertions = @(Get-RequiredPropertyValue $QualificationConfig `
         'requiredLeakAssertions' 'qualification config')
+    if ($assertions.Count -ne 3) {
+        throw 'Qualification config must contain exactly three required leak assertions.'
+    }
+    $expectedEvidenceSteps = [ordered]@{
+        'slot-owner-count=0' = 'churn'
+        'lease-owner-count=0' = 'churn'
+        'unreferenced-stale-participant-count=0' = 'recovery'
+    }
+    foreach ($expected in $expectedEvidenceSteps.GetEnumerator()) {
+        $matches = @($assertions | Where-Object {
+            [string]$_.id -ceq $expected.Key
+        })
+        if ($matches.Count -ne 1 `
+            -or [string]$matches[0].evidenceStep -cne [string]$expected.Value) {
+            throw "Leak assertion '$($expected.Key)' must map exactly once to evidence step '$($expected.Value)'."
+        }
+    }
+
     $churnAssertions = @($assertions | Where-Object {
         [string]$_.evidenceStep -ceq 'churn'
     })
@@ -1121,19 +1144,42 @@ function Get-ChurnQualificationTestContract {
         $mapping,
         '^(?<class>[A-Za-z_][A-Za-z0-9_]*)\.(?<method>[A-Za-z_][A-Za-z0-9_]*)$',
         [Text.RegularExpressions.RegexOptions]::CultureInvariant)
-    if (-not $match.Success -or $match.Groups['class'].Value -cne 'LockFreeChurnIntegrationTests') {
+    if (-not $match.Success -or $match.Groups['class'].Value -cne $churnTestClass) {
         throw "Configured churn evidence test '$mapping' must name one method on LockFreeChurnIntegrationTests."
+    }
+    if ($mapping -cne $churnQualificationTestNameFragment) {
+        throw "Configured churn evidence test must remain the SC-016 collision workload '$churnQualificationTestNameFragment'; actual='$mapping'."
     }
 
     $sourcePath = Join-Path $root $churnTestSourceRelativePath
-    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $source = if ($PSBoundParameters.ContainsKey('SourceOverride')) {
+        $SourceOverride
+    }
+    else {
+        Get-Content -LiteralPath $sourcePath -Raw
+    }
     $method = $match.Groups['method'].Value
-    $methodPattern = '(?ms)^[ \t]*\[Fact\][ \t]*\r?\n' +
+    $namespacePattern = '(?m)^[ \t]*namespace[ \t]+' +
+        [regex]::Escape($churnTestNamespace) + ';[ \t]*$'
+    $classPattern = '(?m)^[ \t]*public[ \t]+sealed[ \t]+class[ \t]+' +
+        [regex]::Escape($churnTestClass) + '[ \t]*$'
+    $methodDeclarationPattern = '^[ \t]*\[Fact\][ \t]*\r?\n' +
         '(?:[ \t]*\[[^\r\n]+\][ \t]*\r?\n)*' +
         '[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task(?:<[^>\r\n]+>)?)[ \t]+' +
         [regex]::Escape($method) + '[ \t]*\('
-    if ([regex]::Matches($source, $methodPattern).Count -ne 1) {
-        throw "Configured churn evidence method '$mapping' must identify exactly one [Fact] in $churnTestSourceRelativePath."
+    $methodPattern = '(?ms)' + $methodDeclarationPattern
+    $sourceContractPattern = '(?ms)' +
+        '^[ \t]*namespace[ \t]+' + [regex]::Escape($churnTestNamespace) + ';[ \t]*\r?\n' +
+        '[ \t\r\n]*' +
+        '^[ \t]*public[ \t]+sealed[ \t]+class[ \t]+' +
+        [regex]::Escape($churnTestClass) + '[ \t]*\r?\n[ \t]*\{[ \t]*\r?\n' +
+        '(?:(?!^}[ \t]*$)(?!^[^\r\n]*\b(?:class|struct|record|interface|enum)\b).)*?' +
+        $methodDeclarationPattern
+    if (([regex]::Matches($source, $namespacePattern).Count -ne 1) `
+        -or ([regex]::Matches($source, $classPattern).Count -ne 1) `
+        -or ([regex]::Matches($source, $methodPattern).Count -ne 1) `
+        -or ([regex]::Matches($source, $sourceContractPattern).Count -ne 1)) {
+        throw "Configured churn evidence FQN '$churnTestNamespace.$mapping' must identify the exact namespace, class, and one [Fact] in $churnTestSourceRelativePath."
     }
 
     return [pscustomobject]@{
@@ -1450,7 +1496,13 @@ function Invoke-ChurnQualificationVerifierSelfTest {
     $assertions = 1
 
     $differentMappings = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $differentMappings.requiredLeakAssertions[1].testNameContains =
+    $leaseMappings = @($differentMappings.requiredLeakAssertions | Where-Object {
+        [string]$_.id -ceq 'lease-owner-count=0' -and [string]$_.evidenceStep -ceq 'churn'
+    })
+    if ($leaseMappings.Count -ne 1) {
+        throw 'Churn qualification verifier self-test could not locate the configured lease-owner mapping.'
+    }
+    $leaseMappings[0].testNameContains =
         'LockFreeChurnIntegrationTests.BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn'
     $mappingRejected = $false
     try {
@@ -1464,21 +1516,136 @@ function Invoke-ChurnQualificationVerifierSelfTest {
     }
     $assertions++
 
-    $missingMethod = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    foreach ($assertion in @($missingMethod.requiredLeakAssertions | Where-Object evidenceStep -CEQ 'churn')) {
-        $assertion.testNameContains = 'LockFreeChurnIntegrationTests.MissingConfiguredChurnEvidenceMethod'
-    }
-    $sourceRejected = $false
+    $missingMapping = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $missingMapping.requiredLeakAssertions = @(
+        $missingMapping.requiredLeakAssertions | Where-Object {
+            [string]$_.id -cne 'lease-owner-count=0'
+        })
+    $missingMappingRejected = $false
     try {
-        [void](Get-ChurnQualificationTestContract $missingMethod)
+        [void](Get-ChurnQualificationTestContract $missingMapping)
     }
     catch {
-        $sourceRejected = $_.Exception.Message -match 'must identify exactly one \[Fact\]'
+        $missingMappingRejected = $_.Exception.Message -like '*must contain exactly three required leak assertions*'
     }
-    if (-not $sourceRejected) {
-        throw 'Churn qualification verifier self-test accepted a configured method absent from source.'
+    if (-not $missingMappingRejected) {
+        throw 'Churn qualification verifier self-test accepted a missing churn leak-evidence mapping.'
     }
     $assertions++
+
+    $swappedEvidenceSteps = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $leaseMapping = @($swappedEvidenceSteps.requiredLeakAssertions | Where-Object {
+        [string]$_.id -ceq 'lease-owner-count=0'
+    })
+    $participantMapping = @($swappedEvidenceSteps.requiredLeakAssertions | Where-Object {
+        [string]$_.id -ceq 'unreferenced-stale-participant-count=0'
+    })
+    if ($leaseMapping.Count -ne 1 -or $participantMapping.Count -ne 1) {
+        throw 'Churn qualification verifier self-test could not locate exact role-swap mappings.'
+    }
+    $leaseMapping[0].evidenceStep = 'recovery'
+    $participantMapping[0].evidenceStep = 'churn'
+    $roleSwapRejected = $false
+    try {
+        [void](Get-ChurnQualificationTestContract $swappedEvidenceSteps)
+    }
+    catch {
+        $roleSwapRejected = $_.Exception.Message -like '*must map exactly once to evidence step*'
+    }
+    if (-not $roleSwapRejected) {
+        throw 'Churn qualification verifier self-test accepted swapped leak-evidence roles.'
+    }
+    $assertions++
+
+    $wrongExistingTarget = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    foreach ($assertion in @($wrongExistingTarget.requiredLeakAssertions | Where-Object {
+        [string]$_.evidenceStep -ceq 'churn'
+    })) {
+        $assertion.testNameContains =
+            'LockFreeChurnIntegrationTests.BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn'
+    }
+    $semanticTargetRejected = $false
+    try {
+        [void](Get-ChurnQualificationTestContract $wrongExistingTarget)
+    }
+    catch {
+        $semanticTargetRejected = $_.Exception.Message -like '*must remain the SC-016 collision workload*'
+    }
+    if (-not $semanticTargetRejected) {
+        throw 'Churn qualification verifier self-test accepted the fixed-key sibling as configured SC-016 evidence.'
+    }
+    $assertions++
+
+    $source = Get-Content -LiteralPath (Join-Path $root $churnTestSourceRelativePath) -Raw
+    $sourceWithoutDirectMethod = $source.Replace(
+        $churnQualificationTestMethod,
+        'MissingConfiguredChurnEvidenceMethod',
+        [StringComparison]::Ordinal)
+    $outerClassClose = $sourceWithoutDirectMethod.LastIndexOf('}')
+    if ($outerClassClose -lt 0) {
+        throw 'Churn qualification verifier self-test source has no outer class terminator.'
+    }
+    $nestedMethodSource = $sourceWithoutDirectMethod.Insert(
+        $outerClassClose,
+        "    private sealed class NestedChurnEvidence`r`n    {`r`n" +
+            "        [Fact]`r`n        public void $churnQualificationTestMethod()`r`n" +
+            "        {`r`n        }`r`n    }`r`n")
+    $sourceNegativeCases = @(
+        [pscustomobject]@{
+            name = 'missing-method'
+            source = $source.Replace(
+                $churnQualificationTestMethod,
+                'MissingConfiguredChurnEvidenceMethod',
+                [StringComparison]::Ordinal)
+        },
+        [pscustomobject]@{
+            name = 'wrong-namespace'
+            source = $source.Replace(
+                "namespace $churnTestNamespace;",
+                "namespace $churnTestNamespace.Wrong;",
+                [StringComparison]::Ordinal)
+        },
+        [pscustomobject]@{
+            name = 'wrong-class'
+            source = $source.Replace(
+                "public sealed class $churnTestClass",
+                "public sealed class WrongChurnIntegrationTests",
+                [StringComparison]::Ordinal)
+        },
+        [pscustomobject]@{
+            name = 'method-outside-configured-class'
+            source = $source.Replace(
+                    $churnQualificationTestMethod,
+                    'MissingConfiguredChurnEvidenceMethod',
+                    [StringComparison]::Ordinal) +
+                "`r`n`r`npublic sealed class WrongChurnEvidenceContainer`r`n{`r`n" +
+                "    [Fact]`r`n    public void $churnQualificationTestMethod()`r`n    {`r`n    }`r`n}`r`n"
+        },
+        [pscustomobject]@{
+            name = 'configured-class-nested-under-another-type'
+            source = $source.Replace(
+                    "public sealed class $churnTestClass",
+                    "public sealed class OuterChurnContainer`r`n{`r`n    public sealed class $churnTestClass",
+                    [StringComparison]::Ordinal) +
+                "`r`n}`r`n"
+        },
+        [pscustomobject]@{
+            name = 'configured-method-nested-under-another-type'
+            source = $nestedMethodSource
+        })
+    foreach ($case in $sourceNegativeCases) {
+        $sourceRejected = $false
+        try {
+            [void](Get-ChurnQualificationTestContract $config -SourceOverride $case.source)
+        }
+        catch {
+            $sourceRejected = $_.Exception.Message -match 'must identify the exact namespace, class, and one \[Fact\]'
+        }
+        if (-not $sourceRejected) {
+            throw "Churn qualification verifier self-test accepted invalid source case '$($case.name)'."
+        }
+        $assertions++
+    }
 
     $siblingRow = [pscustomobject]@{
         testName = "$churnTestNamespace.LockFreeChurnIntegrationTests.BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn"
@@ -1514,6 +1681,43 @@ function Invoke-ChurnQualificationVerifierSelfTest {
         }
         $assertions++
     }
+
+    $trxSelfTestRoot = Join-Path $runRoot 'churn-trx-verifier-self-test'
+    New-Item -ItemType Directory -Path $trxSelfTestRoot | Out-Null
+    $validTrxPath = Join-Path $trxSelfTestRoot 'valid.trx'
+    $extraTrxPath = Join-Path $trxSelfTestRoot 'extra.trx'
+    [IO.File]::WriteAllText(
+        $validTrxPath,
+        ('<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testName="{0}" outcome="Passed" /></Results></TestRun>' `
+            -f $contract.fullyQualifiedName))
+    $parsedRows = @(Get-TrxResults $trxSelfTestRoot)
+    [void](Assert-ExactPassedTrxRows $parsedRows @($contract.fullyQualifiedName))
+    $assertions++
+
+    [IO.File]::WriteAllText(
+        $extraTrxPath,
+        ('<TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results><UnitTestResult testName="{0}" outcome="Passed" /></Results></TestRun>' `
+            -f $siblingRow.testName))
+    $temporaryStepName = 'self-test-churn-exact-trx-wrapper-negative'
+    Add-EvidenceResult $temporaryStepName 'passed' 'self-test-setup' @('pending negative assertion')
+    $temporaryStep = Get-StepResult $temporaryStepName
+    $wrapperRejected = $false
+    try {
+        [void](Assert-ExactTrxStepEvidence `
+            $temporaryStepName $trxSelfTestRoot @($contract.fullyQualifiedName))
+    }
+    catch {
+        $wrapperRejected = $_.Exception.Message -like '*TRX evidence has 2 passed rows; expected exactly 1*' `
+            -and $temporaryStep.status -ceq 'failed' `
+            -and $temporaryStep.qualification -ceq 'validation-failed'
+    }
+    finally {
+        [void]$results.Remove($temporaryStep)
+    }
+    if (-not $wrapperRejected) {
+        throw 'Churn exact-TRX verifier self-test did not reject and record an XML-parsed extra sibling row.'
+    }
+    $assertions++
 
     return $assertions
 }
@@ -4755,8 +4959,13 @@ try {
             'configured-exact-test-and-trx-cardinality-positive-and-negative-cases-passed' @(
                 "assertions=$churnVerifierAssertions",
                 "exactTest=$($churnQualificationContract.fullyQualifiedName)",
-                'one configured mapping and one exact Passed row accepted',
-                'distinct/missing mappings plus missing/extra/wrong/duplicate/non-passed rows rejected')
+                'two identical semantically pinned mappings and one exact Passed row accepted',
+                'distinct/missing/alternate-existing mappings rejected',
+                'wrong namespace/class/method source bindings rejected',
+                'missing/extra/wrong/duplicate/non-passed rows rejected',
+                'XML parsing, wrapper failure recording, and result cleanup exercised') @(
+                    [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'churn-trx-verifier-self-test/valid.trx')),
+                    [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'churn-trx-verifier-self-test/extra.trx')))
         $markerParserAssertions = Invoke-ProductionRaceMarkerParserSelfTest
         Add-EvidenceResult 'production-race-marker-parser-self-test' 'passed' `
             'closed-marker-grammar-positive-and-negative-cases-passed' @(
@@ -4914,7 +5123,7 @@ try {
         $churnResult = Get-StepResult 'churn'
         $churnResult.qualification = 'configured-churn-and-final-capacity-proof-passed'
         $churnResult.validation = @($churnResult.validation) + @(
-            "configuredCyclesPerWorker=$([int64]$selected.churnCycles)",
+            "configuredTotalCycles=$([int64]$selected.churnCycles)",
             "configuredTest=$($churnQualificationContract.fullyQualifiedName)")
 
         $recoveryTrx = Join-Path $runRoot 'trx/recovery'
