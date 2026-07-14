@@ -66,14 +66,14 @@ internal sealed class SharedStoreOpenScope : IDisposable
                 {
                     try
                     {
-                        // Region disposal may acquire Linux .lifecycle through
-                        // owner cleanup and must therefore run after both held
-                        // gates have been released.
-                        Region.Dispose();
+                        // Retire the ordinary descriptor before mapped-owner
+                        // cleanup can re-enter Linux .lifecycle. Both held
+                        // gates have already been released at this point.
+                        Synchronization.Dispose();
                     }
                     finally
                     {
-                        Synchronization.Dispose();
+                        Region.Dispose();
                     }
                 }
             }

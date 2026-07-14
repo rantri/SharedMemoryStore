@@ -33,7 +33,7 @@ allowed. See the complete predicate and SC mapping in
   [`009-final-linux-x64.json`](../../../artifacts/lock-free-os-validation/009-final-linux-x64.json)
   is schema 3 `pass`, qualified x64, every required row passes, and its required
   [`linux-tiny-performance.json`](../../../artifacts/lock-free-os-validation/009-final-linux-x64.evidence/linux-tiny-performance.json)
-  is schema 6 with the exact 2-profile/2-scenario/1-and-8-process/3-trial release
+  is schema 7 with the exact 2-profile/2-scenario/1-and-8-process/3-trial release
   matrix, zero failures, `[0,63]` mask-valid complete affinity, coherent paired
   successes per completed cycle, no checksum/corruption evidence, reproducible
   medians, one-process intrinsic-p99 non-regression, eight-process throughput

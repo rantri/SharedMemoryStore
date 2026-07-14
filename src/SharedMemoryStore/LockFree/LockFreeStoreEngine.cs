@@ -1145,9 +1145,24 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
         }
         finally
         {
-            _storeControl.Dispose();
-            _region.Dispose();
-            _coldSynchronization.Dispose();
+            try
+            {
+                _storeControl.Dispose();
+            }
+            finally
+            {
+                try
+                {
+                    // Linux owner cleanup may enter .lifecycle and retire the
+                    // final pathname generation. Close the ordinary lock
+                    // descriptor before region cleanup can reach that point.
+                    _coldSynchronization.Dispose();
+                }
+                finally
+                {
+                    _region.Dispose();
+                }
+            }
         }
     }
 

@@ -6,17 +6,17 @@
 
 **Review date**: 2026-07-14
 
-**Decision**: **Code approved; revised qualification gate and final release evidence pending**
+**Decision**: **Code approved; immutable final release evidence pending**
 
 ## Verdict
 
-The tracked implementation is approved on code, protocol, and focused-test
-grounds. Independent re-review of the post-`844448e` reclamation and benchmark
-delta found no
-unresolved High or Medium issue in the production implementation or the release
-harness after the running-maximum correction. The revised Linux one/eight-
-process acceptance parser still requires final review and execution. This is
-not yet release approval: every immutable artifact and
+The tracked implementation is approved on code, protocol, focused-test, and
+pre-final qualification grounds. Independent re-review of the reclamation,
+cold-open, Linux record-lock lifetime, benchmark, and evidence-importer deltas
+found no unresolved High or Medium issue in the production implementation or
+release harness. The complete revised Linux one/eight-process matrix and all
+required Linux OS/interoperability rows passed on a clean pre-final commit. This
+is not yet release approval: every immutable artifact and
 provenance condition in [Final evidence gate](#final-evidence-gate) must still
 pass on one identical clean source state. A missing, failed, provenance-mismatched,
 or incomplete gate leaves the feature unapproved for release.
@@ -53,6 +53,14 @@ qualification harnesses.
   paired-success/checksum/corruption coherence, exact metric tuples,
   manifest/file-set/log/path binding, reparse rejection, and completion
   revalidation.
+- Linux record-lock lifetime, load-context/native same-PID exclusion, stable
+  pathname identity, and teardown ordering: remediated with OFD locks,
+  persistent rendezvous inodes, descriptor-before-region cleanup, and focused
+  same/foreign-process regressions; final independent re-review is recorded
+  below.
+- Pre-final evidence recomputation: **reviewed clean** after both PowerShell
+  median helpers adopted explicit midpoint-floor semantics and distinct
+  odd/even self-tests; the real three-trial raw report recomputes exactly.
 
 ### Cold-open initialization-authority closure
 
@@ -78,6 +86,159 @@ before any physical mapping or owner publication, that an opposite-profile
 sentinel is preserved, and that cleanup transfers/disposes ownership exactly
 once. Focused Linux owner-marker, profile-open, and wait-policy tests passed.
 Independent re-review found no unresolved High, Medium, or concrete Low issue.
+
+### Linux OFD-lock, inode, and teardown closure
+
+The first Linux audit found that one descriptor per wrapper was unsafe with
+traditional process-associated `F_SETLK`: same-PID contenders did not conflict,
+and closing any sibling descriptor could release a live lock. A shared managed
+descriptor registry fixed that case inside one loaded assembly, but final review
+found two further High-severity holes. The registry was static per
+`AssemblyLoadContext`, not per OS process, so another package copy or native
+module could bypass it. Separately, store and failed-open teardown disposed the
+mapped region before the synchronization descriptor; final-owner cleanup could
+unlink `.lock`, a same-process reopen could reuse the old descriptor/inode, and
+a foreign process could create and lock a replacement inode.
+
+Current C# and C++ adapters now use direct nonblocking `F_OFD_SETLK` calls.
+Each C# wrapper owns one descriptor and a non-reentrant local gate. C++ wrappers
+inside one module share their existing per-path `FileState`/descriptor and timed
+mutex; distinct modules/load contexts/descriptors contend in the kernel.
+Unsupported commands/filesystems fail closed, and unlock failure closes/retires
+the affected descriptor before its local gate is reopened. Current cleanup retains `.lock`
+as an empty mode-`0600` stable rendezvous, matching `.lifecycle`. Lock-free,
+legacy, initialized, uninitialized, platform-failure, and failed-scope teardown
+all dispose ordinary synchronization before region/owner cleanup may re-enter
+`.lifecycle`; the native store uses the same order.
+
+The accepted compatibility boundary is explicit: traditional and OFD locks
+remain mutually exclusive across processes, and current managed/native OFD
+implementations coexist inside one PID. Concurrently mixing an older
+process-associated-`F_SETLK` package with a current adapter inside the same PID
+is unsupported because closing any sibling descriptor can invalidate the old
+lock.
+
+Focused Linux evidence covers both lock paths, same-thread and timed contenders,
+foreign exclusion, two independently loaded current assemblies, a same-PID
+native-style OFD descriptor in both directions, and concurrent final close/reopen.
+The last test locks the persistent pathname and proves the reopened legacy
+store's actual operation returns `StoreBusy`, detecting the former inode split;
+failed-open event recording proves synchronization disposal precedes owner
+cleanup. A held gate for one store still does not block a different store name.
+Final re-review also found that both adapters cleared their wrapper-local held
+flag after waking the next local waiter; the old releaser could overwrite the
+new holder's state and strand the local semaphore/mutex. Both now clear private
+ownership before publishing the unlock, and a 4,000-handoff C# stress regression
+proves exclusivity plus immediate wrapper reuse; the rebuilt native suite passes.
+
+### Benchmark reproducibility-metadata closure
+
+The final harness audit found one Medium evidence-contract gap: the benchmark
+methodology required CPU model, logical/physical processor counts, total memory,
+and exact store dimensions, but schema 6 omitted several fields and Linux could
+record `processorIdentifier: unknown`. Both importers accepted any nonempty
+identifier.
+
+Schema 7 adds portable processor model, logical/physical counts, total host
+memory, and exact per-scenario slot/value/descriptor/key/lease/participant
+dimensions. Windows uses processor-topology and physical-memory APIs; Linux uses
+the process-visible CPU topology, `/proc/cpuinfo`, and `/proc/meminfo`. Detection
+uncertainty emits an invalid zero/unknown value so qualification fails closed.
+Both importers require schema 7, reject missing/unknown/implausible metadata,
+verify the exact selected scenario-dimension set, and include negative
+self-tests for unknown CPU, missing memory, and dimension tampering. Focused
+Windows/Linux builds, runtime smokes, and validator self-tests passed.
+
+### Current post-review convergence evidence
+
+After the OFD, teardown, persistent-inode, handoff, and schema-7 changes, fresh
+Windows x64 and Linux x64 Release restores/builds completed with zero warnings
+and zero errors. Each platform passed Unit 416/416, Contract 117/117,
+Integration 302/302, Interop 75/75, and Linearizability 83/83: **993/993** with
+no skips. The four additional integration cases are the load-context,
+managed/native OFD, concurrent close/reopen, and shared-wrapper handoff
+regressions.
+
+A source-fresh Linux C++ build passed 5/5 native tests. With that exact native
+library installed for Python and its exact C++ agent selected, the non-stress
+C#/C++/Python interoperability matrix passed 65/65, including three-owner final
+cleanup with persistent `.lock`. Documentation validation and `git diff --check`
+passed. Independent final source/protocol/test review found no remaining High,
+Medium, or Low issue in the Linux closure or deep lock-free core. These
+worktree results establish code-review closure but do not replace the clean
+same-commit immutable evidence gate.
+
+Integration test classes are now serialized because several independent
+classes each launch 8-12 subprocesses and their simultaneous execution measured
+host-wide startup oversubscription against the one-second public cold-open
+budget. Each scenario retains its real internal cross-process concurrency, and
+the explicit two-store test preserves coverage that unrelated names remain
+independent. The complete serialized Linux suite passed without increasing the
+library timeout or weakening deadline checks.
+
+A subsequent Linux-to-Windows clean-output switch exposed one unrelated sample
+test dependency: `DockerSharedMemoryLocalSampleModeRuns` invokes the sample with
+`--no-build`, but the integration project did not declare that sample as a
+build-only reference. The integration project now carries the same
+`ReferenceOutputAssembly=false` dependency pattern already used for the broker
+sample and test agents. A fresh Windows solution restore/build then completed
+with 0 warnings and 0 errors and the full aggregate passed 989/989.
+
+### Remove classification and reclaim closure
+
+`TryRemove` now performs one active-lease classification scan immediately
+before claiming `RemoveRequested -> Reclaiming`; the reclaimer no longer repeats
+the same full lease-table scan. A fresh budget check follows classification, so
+NoWait, finite, infinite, cancellation, active-lease `RemovePending`, and
+post-ordering reclaim outcomes retain their documented boundaries. Checkpoint
+63 deterministically covers a lease acquired after the earlier observation and
+before reclaim ownership. Focused remove/reclaim/wait validation passed 111/111,
+and independent review found no unresolved High or Medium issue.
+
+### Current pre-final convergence evidence
+
+The production candidate `a99a656` passed complete Windows x64 and Linux x64
+Release aggregates with no skips: Unit 416/416, Contract 117/117, Integration
+298/298, Interop 75/75, and Linearizability 83/83, for **989/989** on each
+platform. The later `50ea3a8` commit changes only the two evidence importers and
+their self-tests; its clean Linux `-Command all` run repeated the full 989-test
+Release aggregate and passed every required architecture, atomic, raw
+visibility, held-lock/`strace`, 67-checkpoint crash, native, Python, Docker,
+6/12-reader sample, and pack row. The optional container PID-namespace pause
+row was `not-qualified` with `required: false`; the required Docker validation
+passed.
+
+The first clean long attempt, preserved as `009-pre-final3`, stopped after its
+correct 24-run benchmark because both PowerShell importers converted the
+three-value midpoint `1.5` to integer `2` and compared the C# median against the
+maximum. All 96 stored producer medians matched correct recomputation and every
+performance gate passed; later OS stages were correctly not run after the
+integrity exception. Commit `50ea3a8` uses an explicit floored midpoint in both
+importers and adds non-monotonic odd/even median self-tests. Windows and Linux
+validation-only suites passed, the preserved raw report revalidated across five
+cultures, and independent review found no High, Medium, or Low issue.
+
+The fresh immutable diagnostic
+`artifacts/lock-free-os-validation/009-pre-final4-linux-x64.json` then completed
+with `overallStatus: pass`, start/completion clean provenance at `50ea3a8`, and
+52 manifest-bound evidence files. Its exact performance summaries were:
+
+| Profile | Scenario | Processes | Median calls/s | Median p99 | Maximum raw stall |
+|---|---|---:|---:|---:|---:|
+| Legacy | acquire/release | 1 | 314,130 | 9.5 us | 489.7 us |
+| Legacy | acquire/release | 8 | 317,653 | 11.8 us | 131,729.1 us |
+| LockFree | acquire/release | 1 | 3,975,778 | 0.7 us | 284.2 us |
+| LockFree | acquire/release | 8 | 22,070,035 | 1.4 us | 4,017.0 us |
+| Legacy | publish/remove | 1 | 1,168,006 | 2.3 us | 768.1 us |
+| Legacy | publish/remove | 8 | 1,177,259 | 2.3 us | 151,389.6 us |
+| LockFree | publish/remove | 1 | 1,430,035 | 1.8 us | 476.7 us |
+| LockFree | publish/remove | 8 | 6,545,020 | 4.6 us | 2,460.9 us |
+
+For both scenarios, lock-free one-process p99 beat legacy, eight-process
+throughput beat legacy, eight/one lock-free p99 stayed below 3x, eight-process
+p99 stayed below 10 us, and every lock-free raw stall stayed below 10 ms. This
+is pre-final diagnostic evidence, not a substitute for the common-provenance
+final gate.
 
 ### Directory handoff and delayed-helper closure
 
@@ -215,7 +376,7 @@ Approval requires the machine-checkable evidence to show that:
   passed;
 - the release synchronization probe and Windows OS validation passed;
 - the Linux x64 OS validation passed its required checks, including the exact
-  schema-6 one/eight-process tiny-operation raw matrix; one-process intrinsic
+  schema-7 one/eight-process tiny-operation raw matrix; one-process intrinsic
   p99, eight-process throughput, <=3x self-amplification, <=10 us p99, and
   every-lock-free-trial 10 ms stall ceilings for both scenarios;
 - both exact sibling OS evidence trees, manifests, executable logs, and accepted

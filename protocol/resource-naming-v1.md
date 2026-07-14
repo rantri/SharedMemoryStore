@@ -69,13 +69,26 @@ are forced back to `0600` when touched.
 
 ## Linux locking
 
-Both `.lock` and `.lifecycle` use a nonblocking POSIX record lock on byte range
-`[0, 1)`, retried according to the caller's wait policy. This is the behavior
-exposed by .NET `FileStream.Lock(0, 1)`; using `flock` is not compatible. Each
-process must additionally serialize contenders through a process-local mutex
-keyed by the absolute lock-file path because POSIX record locks alone do not
-provide the required same-process ownership boundary. Release unlocks the byte
-range before releasing the local mutex.
+Both `.lock` and `.lifecycle` use a nonblocking record lock on byte range
+`[0, 1)`, retried according to the caller's wait policy. Current C# and native
+implementations issue Linux `F_OFD_SETLK` open-file-description locks and fail
+closed as `UnsupportedPlatform` when that command is unavailable. OFD locks
+conflict with other descriptors in the same PID, including independently loaded
+managed assemblies and native modules, and with traditional `F_SETLK` locks.
+They therefore remain mutually exclusive across processes with released v1
+clients while avoiding the traditional rule that closing any sibling descriptor
+releases all locks owned by that process. Using `flock` for either interoperable
+resource is not compatible.
+
+One wrapper may still be called by several local threads on the same descriptor,
+so it uses a non-reentrant local gate before entering the kernel. Release unlocks
+the byte range before releasing that gate. If explicit unlock fails, the wrapper
+closes/retires its descriptor before reopening the local gate because close is
+the OFD-lock release boundary. Concurrent use of a released implementation that
+still uses process-associated `F_SETLK` and a current OFD implementation inside
+one OS process is unsupported: closing any descriptor can invalidate the old
+implementation's process-associated lock. Cross-process compatibility and
+same-process coexistence among current OFD implementations remain supported.
 
 This prohibition applies to the interoperable `.lock` and `.lifecycle`
 resources. A current C# participant may also hold `flock` on its own private
@@ -168,17 +181,20 @@ been removed. Either artifact can remain until a later lifecycle operation
 reconciles the marker, commits the filtered sidecar, and repeats the conservative
 anchor sweep.
 
-When no live owner remains, stale cleanup removes `.region`, `.lock`, `.owners`,
+When no live owner remains, current stale cleanup removes `.region`, `.owners`,
 `.owners.tmp`, and applicable release-marker artifacts. It does not blindly
 remove every per-owner anchor. Exact anchors are deleted by orderly owner
 release or by the post-commit sweep only when they are canonical, unreferenced,
 regular files whose lock is acquirable; every uncertain artifact remains for a
-later reconciliation or operator diagnosis. The `.lifecycle` file is
-deliberately retained because it is the rendezvous used while cleanup is in
-progress and by later openers. Closing a non-final handle commits removal of
-only its exact owner record and then attempts the same safe anchor cleanup.
-Closing the final live handle performs stale-resource deletion while holding
-the lifecycle lock and remains subject to the same conservative anchor rules.
+later reconciliation or operator diagnosis. The empty mode-`0600` `.lock` and
+`.lifecycle` files are deliberately retained as stable rendezvous inodes; they
+contain no store-generation state. Ordinary synchronization is disposed before
+mapped-region cleanup can enter `.lifecycle`, so even an older participant that
+deletes a no-owner `.lock` cannot strand a current closing descriptor on an
+obsolete inode. Closing a non-final handle commits removal of only its exact
+owner record and then attempts the same safe anchor cleanup. Closing the final
+live handle performs stale data-resource deletion while holding the lifecycle
+lock and remains subject to the same conservative anchor rules.
 
 The sidecar start token protects resource cleanup from PID reuse. Layout-1.2
 lease and reservation records themselves contain only a PID; their explicit

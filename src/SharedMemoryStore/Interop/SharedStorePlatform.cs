@@ -106,11 +106,11 @@ internal static class SharedStorePlatform
             {
                 try
                 {
-                    region?.Dispose();
+                    synchronization?.Dispose();
                 }
                 finally
                 {
-                    synchronization?.Dispose();
+                    region?.Dispose();
                 }
             }
         }

@@ -182,8 +182,8 @@ Use three independent checks:
    range indefinitely using the existing foreign-lock harness; warmed v2 data
    operations must continue.
 3. On Linux, trace a marked warmed measurement interval with
-   `strace -ff -yy -e fcntl,flock` and assert no store `.lock` `F_SETLK`/
-   `F_SETLKW` call.
+   `strace -ff -yy -e fcntl,flock` and assert no store `.lock` `F_OFD_SETLK`,
+   `F_OFD_SETLKW`, `F_SETLK`, or `F_SETLKW` call.
 
 Windows ETW wait tracing is useful supplemental evidence but not a deterministic
 release gate. Cold create/open/final-cleanup activity is excluded from the
@@ -298,7 +298,7 @@ wrong-duration, wrong-frame-target, or wrong-operation-target rows cannot satisf
 the gate. Correctness counters are checked before threshold calculations.
 
 The Linux-x64 `-Command all` report contains one required
-`linux-tiny-performance` row. It runs schema-6 SyncProbe mode `sync` for exactly
+`linux-tiny-performance` row. It runs schema-7 SyncProbe mode `sync` for exactly
 Legacy and LockFree, `acquire-release` and `publish-remove`, process counts 1 and
 8, 10-second warm-up, 60-second measurement, and three trials. All 24 raw rows
 must be qualification measurements with zero failures, no oversubscription,

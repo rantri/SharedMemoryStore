@@ -71,8 +71,9 @@ Resource protocol 2 changes participation:
   owner-line commit, header work, and participant registration; release is
   `.lock` followed by `.lifecycle`;
 - failed-open mapped-resource and owner cleanup occurs only after those gates
-  are released, because owner cleanup may re-enter `.lifecycle`; a contender
-  rejected before mapping publishes no owner line or release marker;
+  are released, and its ordinary synchronization descriptor is disposed before
+  mapped-owner cleanup may re-enter `.lifecycle`; a contender rejected before
+  mapping publishes no owner line or release marker;
 - only the attempt whose physical operation created a new region may initialize
   a zero header; an opened-existing zero header has the fixed outcomes above;
 - Linux owner registration/final cleanup remains under `.lifecycle`;
@@ -115,6 +116,15 @@ Resource protocol 2 changes participation:
 - C# 2.0 applies the bounded owner-cleanup extension to both mapped profiles
   because their Linux sidecars are shared, without changing layout-v1.2 bytes or
   its ordinary per-operation locking contract;
+- current C# and native Linux adapters use nonblocking `F_OFD_SETLK` on
+  `.lock`/`.lifecycle`, fail closed when OFD locks are unavailable, and contend
+  across managed assembly-load contexts and native modules in one PID; current
+  cleanup retains both empty lock inodes, and every close retires ordinary
+  synchronization before region/owner cleanup;
+- released process-associated-`F_SETLK` clients remain compatible in separate
+  processes because traditional and OFD locks conflict; concurrent old and
+  current lock implementations inside one OS process are not supported because
+  closing a sibling descriptor can release the old implementation's lock;
 - v2 releases/disposes the ordinary synchronization handle after open validation
   or retains it only as a cold-path object that is unreachable from data paths;
 - v2 steady-state operations never enter the Windows named mutex/semaphore or

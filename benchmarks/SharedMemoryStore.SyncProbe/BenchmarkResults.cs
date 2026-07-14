@@ -122,7 +122,7 @@ internal sealed record RunResult(
     string Qualification,
     SortedDictionary<string, long> StatusHistogram,
     long[] WorkerCycles,
-    // Schema v6 is additive. FullPayloadCopies is retained above for schema
+    // Schema v7 is additive. FullPayloadCopies is retained above for schema
     // compatibility, but this tag states whether it is an instrumented event
     // counter or structural evidence and prevents a literal zero from being
     // presented as a measurement.
@@ -172,9 +172,20 @@ internal sealed record ProbeEnvironment(
     string Framework,
     string RuntimeVersion,
     int LogicalProcessorCount,
+    int PhysicalCoreCount,
+    long TotalMemoryBytes,
+    string ProcessorModel,
     string ProcessorIdentifier,
     bool ServerGarbageCollection,
     long StopwatchFrequency);
+
+internal sealed record ProbeStoreDimensions(
+    int SlotCount,
+    int MaxValueBytes,
+    int MaxDescriptorBytes,
+    int MaxKeyBytes,
+    int LeaseRecordCount,
+    int LockFreeParticipantRecordCount);
 
 internal sealed record ProbeConfiguration(
     string Mode,
@@ -183,6 +194,7 @@ internal sealed record ProbeConfiguration(
     string[] Profiles,
     string[] Scenarios,
     SortedDictionary<string, int[]> ScenarioProcessCounts,
+    SortedDictionary<string, ProbeStoreDimensions> ScenarioStoreDimensions,
     int ReaderKeyCount,
     int ReaderPayloadBytes,
     int BrokerRotatingKeyCount,
@@ -220,15 +232,16 @@ internal sealed record ProbeReport(
 
 internal static class ProbeReportSchema
 {
-    internal const int CurrentVersion = 6;
+    internal const int CurrentVersion = 7;
     internal const int MinimumCompatibleVersion = 3;
     internal const string Compatibility =
-        "Schema v6 is additive over v3-v5: all existing property names and meanings are retained; "
+        "Schema v7 is additive over v3-v6: all existing property names and meanings are retained; "
         + "new evidence tags disambiguate structural assertions from measured counters, and "
         + "overflow qualification fields expose the spill/cleanup/late-window transitions; "
         + "sync topology fields identify the deterministic key catalog, and early/late sample "
         + "counts identify the autonomous latency reservoirs; autonomous MaxMicroseconds "
-        + "retains every sampled candidate even when reservoir replacement discards it.";
+        + "retains every sampled candidate even when reservoir replacement discards it; portable "
+        + "hardware metadata and exact per-scenario store dimensions bind benchmark topology.";
 
     internal const string LegacyFullPayloadCopiesFieldSemantics =
         "Retained for v3-v5 readers. Consult FullPayloadCopyCountIsInstrumented and "

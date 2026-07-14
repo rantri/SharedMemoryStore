@@ -967,6 +967,80 @@ function Assert-LinuxTinySyncTopology {
     }
 }
 
+function Assert-RequiredBenchmarkHardwareMetadata {
+    param(
+        [Parameter(Mandatory)]$Environment,
+        [Parameter(Mandatory)][string]$Context)
+
+    $logicalCount = Get-StrictInt64 $Environment 'logicalProcessorCount' $Context 1 ([int32]::MaxValue)
+    [void](Get-StrictInt64 $Environment 'physicalCoreCount' $Context 1 $logicalCount)
+    [void](Get-StrictInt64 $Environment 'totalMemoryBytes' $Context 1048576 ([int64]::MaxValue))
+    $processorModel = Get-StrictString $Environment 'processorModel' $Context
+    $processorIdentifier = Get-StrictString $Environment 'processorIdentifier' $Context
+    foreach ($value in @($processorModel, $processorIdentifier)) {
+        if ($value.Trim() -match '^(?i:(?:unknown|unavailable|not[- ]available|n/?a)(?:\s+(?:cpu|processor|model))?)$') {
+            throw "$Context contains unknown processor-model evidence '$value'."
+        }
+    }
+}
+
+function Assert-ExactBenchmarkStoreDimensions {
+    param(
+        [Parameter(Mandatory)]$Dimensions,
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][int64]$SlotCount,
+        [Parameter(Mandatory)][int64]$MaxValueBytes,
+        [Parameter(Mandatory)][int64]$MaxDescriptorBytes,
+        [Parameter(Mandatory)][int64]$MaxKeyBytes,
+        [Parameter(Mandatory)][int64]$LeaseRecordCount,
+        [Parameter(Mandatory)][int64]$LockFreeParticipantRecordCount)
+
+    $expected = [ordered]@{
+        slotCount = $SlotCount
+        maxValueBytes = $MaxValueBytes
+        maxDescriptorBytes = $MaxDescriptorBytes
+        maxKeyBytes = $MaxKeyBytes
+        leaseRecordCount = $LeaseRecordCount
+        lockFreeParticipantRecordCount = $LockFreeParticipantRecordCount
+    }
+    foreach ($entry in $expected.GetEnumerator()) {
+        if ((Get-StrictInt64 $Dimensions $entry.Key $Context 0 ([int32]::MaxValue)) -ne $entry.Value) {
+            throw "$Context.$($entry.Key) does not match the exact benchmark store topology."
+        }
+    }
+}
+
+function Assert-BenchmarkScenarioStoreDimensions {
+    param(
+        [Parameter(Mandatory)]$Configuration,
+        [Parameter(Mandatory)][string[]]$ExpectedScenarios,
+        [Parameter(Mandatory)][string]$Context)
+
+    $allDimensions = Get-RequiredPropertyValue $Configuration 'scenarioStoreDimensions' $Context
+    Assert-ExactStringSet "$Context scenarioStoreDimensions" `
+        @($allDimensions.PSObject.Properties.Name) $ExpectedScenarios
+    foreach ($scenario in $ExpectedScenarios) {
+        $expected = switch ($scenario) {
+            { $_ -cin @('acquire-release', 'publish-remove') } { @(32, 8, 0, 8, 64, 64); break }
+            { $_ -cin @('same-key-read', 'distributed-key-read') } { @(256, 256, 0, 8, 64, 64); break }
+            { $_ -cin @('broker-directed', 'large-ingest') } {
+                @(256, (Get-StrictInt64 $Configuration 'largeFrameBytes' $Context 1 ([int32]::MaxValue)), 16, 8, 64, 64)
+                break
+            }
+            'mixed-churn' { @(768, 256, 16, 8, 128, 64); break }
+            'sticky-overflow-miss' {
+                @((Get-StrictInt64 $Configuration 'stickyOverflowSlotCount' $Context 1 ([int32]::MaxValue)), 1, 0, 8, 64, 64)
+                break
+            }
+            default { throw "$Context has no store-dimension contract for scenario '$scenario'." }
+        }
+        Assert-ExactBenchmarkStoreDimensions `
+            $allDimensions.$scenario `
+            "$Context scenarioStoreDimensions.$scenario" `
+            $expected[0] $expected[1] $expected[2] $expected[3] $expected[4] $expected[5]
+    }
+}
+
 function Assert-QualificationConfiguration {
     Assert-KnownProvenance $repositoryProvenance 'start'
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
@@ -1705,9 +1779,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
 
     $raw = Get-Content -LiteralPath $actualRawPath -Raw | ConvertFrom-Json -Depth 30
-    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 6 6) -ne 6 `
+    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 7 7) -ne 7 `
         -or (Get-StrictInt64 $raw 'minimumCompatibleSchemaVersion' 'Linux tiny performance raw report' 3 3) -ne 3) {
-        throw 'Linux tiny performance raw report must be exact schema 6/minimum-compatible 3.'
+        throw 'Linux tiny performance raw report must be exact schema 7/minimum-compatible 3.'
     }
     [void](Get-StrictString $raw 'schemaCompatibility' 'Linux tiny performance raw report')
     $environment = Get-RequiredPropertyValue $raw 'environment' 'Linux tiny performance raw report'
@@ -1732,6 +1806,7 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     foreach ($property in @('framework', 'runtimeVersion', 'processorIdentifier')) {
         [void](Get-StrictString $environment $property 'Linux tiny performance environment')
     }
+    Assert-RequiredBenchmarkHardwareMetadata $environment 'Linux tiny performance environment'
     [void](Get-StrictBoolean $environment 'serverGarbageCollection' 'Linux tiny performance environment')
     [void](Get-StrictInt64 $environment 'stopwatchFrequency' 'Linux tiny performance environment' 1 [int64]::MaxValue)
     $probeAssembly = "benchmarks/SharedMemoryStore.SyncProbe/bin/$($Report.configuration)/net10.0/SharedMemoryStore.SyncProbe.dll"
@@ -1756,6 +1831,8 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         throw 'Linux tiny performance raw configuration is not the exact 10s/60s/3-trial affinity workload.'
     }
     [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
+    Assert-BenchmarkScenarioStoreDimensions `
+        $configuration @('acquire-release', 'publish-remove') 'Linux tiny performance configuration'
     if ((@($configuration.profiles) -join ',') -cne 'Legacy,LockFree' `
         -or (@($configuration.scenarios) -join ',') -cne 'acquire-release,publish-remove' `
         -or (@($configuration.scenarioProcessCounts.PSObject.Properties.Name) -join ',') -cne
@@ -2123,19 +2200,30 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         }
     }
     $raw = [pscustomobject][ordered]@{
-        SchemaVersion = 6
+        SchemaVersion = 7
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
             OperatingSystem = 'Ubuntu 24.04 synthetic'; OperatingSystemArchitecture = 'X64'; ProcessArchitecture = 'X64'
             Framework = '.NET synthetic'; RuntimeVersion = 'synthetic'; LogicalProcessorCount = 8
-            ProcessorIdentifier = 'synthetic'; ServerGarbageCollection = $false; StopwatchFrequency = 10000000
+            PhysicalCoreCount = 4; TotalMemoryBytes = 17179869184; ProcessorModel = 'Synthetic CPU'
+            ProcessorIdentifier = 'Synthetic CPU'; ServerGarbageCollection = $false; StopwatchFrequency = 10000000
         }
         Configuration = [pscustomobject][ordered]@{
             Mode = 'sync'; DurationSeconds = 60; Trials = 3; Profiles = @('Legacy', 'LockFree')
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
+            }
+            ScenarioStoreDimensions = [pscustomobject][ordered]@{
+                'acquire-release' = [pscustomobject][ordered]@{
+                    SlotCount = 32; MaxValueBytes = 8; MaxDescriptorBytes = 0; MaxKeyBytes = 8
+                    LeaseRecordCount = 64; LockFreeParticipantRecordCount = 64
+                }
+                'publish-remove' = [pscustomobject][ordered]@{
+                    SlotCount = 32; MaxValueBytes = 8; MaxDescriptorBytes = 0; MaxKeyBytes = 8
+                    LeaseRecordCount = 64; LockFreeParticipantRecordCount = 64
+                }
             }
             WarmupCycles = 0; WarmupSeconds = 10; AffinityRequested = $true
             SamplingInterval = 64; MaxLatencySamplesPerWorker = 65536
@@ -2146,7 +2234,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             SyncKeyCanonicalBucketAssignments = @($config.linuxTinyPerformance.syncKeyCanonicalBucketAssignments)
         }
         Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 3
-        SchemaCompatibility = 'synthetic schema-v6 release-runner verifier self-test'
+        SchemaCompatibility = 'synthetic Schema v7 release-runner verifier self-test'
     }
     $raw | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $rawRelativePath = [IO.Path]::GetRelativePath($root, $rawPath)
@@ -2283,6 +2371,27 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             throw $FailureMessage
         }
     }
+
+    $unknownProcessorTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $unknownProcessorTampered.Environment.ProcessorModel = ' Unknown CPU '
+    $unknownProcessorOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $unknownProcessorTampered $unknownProcessorOsReport `
+        'Linux OS performance verifier self-test accepted an unknown processor model.'
+    $assertions++
+
+    $missingMemoryTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $missingMemoryTampered.Environment.PSObject.Properties.Remove('TotalMemoryBytes')
+    $missingMemoryOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $missingMemoryTampered $missingMemoryOsReport `
+        'Linux OS performance verifier self-test accepted missing memory metadata.'
+    $assertions++
+
+    $storeDimensionTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $storeDimensionTampered.Configuration.ScenarioStoreDimensions.'acquire-release'.SlotCount = 31
+    $storeDimensionOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $storeDimensionTampered $storeDimensionOsReport `
+        'Linux OS performance verifier self-test accepted incorrect store dimensions.'
+    $assertions++
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
         $uncontendedTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
@@ -3670,8 +3779,14 @@ function Assert-ProbeEnvironmentEvidence {
 
     foreach ($property in @(
         'operatingSystem', 'operatingSystemArchitecture', 'processArchitecture',
-        'framework', 'runtimeVersion', 'processorIdentifier')) {
+        'framework', 'runtimeVersion')) {
         [void](Get-StrictString $environment $property 'sync probe environment')
+    }
+    try {
+        Assert-RequiredBenchmarkHardwareMetadata $environment 'sync probe environment'
+    }
+    catch {
+        Fail-StepValidation 'sync-probe' $_.Exception.Message
     }
     if ((Get-StrictString $environment 'processArchitecture' 'sync probe environment') -ne
         [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString() `
@@ -3739,6 +3854,13 @@ function Assert-ProbeConfigurationEvidence {
     Assert-ExactStringSet 'performance report scenarios' @($configuration.scenarios) @($expectedScenarioCounts.Keys)
     $actualScenarioCounts = Get-RequiredPropertyValue $configuration 'scenarioProcessCounts' 'sync probe configuration'
     Assert-ExactStringSet 'performance report scenario-count keys' @($actualScenarioCounts.PSObject.Properties.Name) @($expectedScenarioCounts.Keys)
+    try {
+        Assert-BenchmarkScenarioStoreDimensions `
+            $configuration @($expectedScenarioCounts.Keys) 'sync probe configuration'
+    }
+    catch {
+        Fail-StepValidation 'sync-probe' $_.Exception.Message
+    }
     foreach ($entry in $expectedScenarioCounts.GetEnumerator()) {
         $actual = @($actualScenarioCounts.($entry.Key) | ForEach-Object {
             if (-not (Test-IsIntegerNumber $_)) {
@@ -4108,11 +4230,11 @@ function Assert-SyncProbeEvidence {
     param([Parameter(Mandatory)][string]$Path)
 
     $report = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 6 6) -ne 6 `
+    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 7 7) -ne 7 `
         -or (Get-StrictInt64 $report 'minimumCompatibleSchemaVersion' 'sync probe report' 3 3) -ne 3 `
-        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v6' `
+        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v7' `
         -or @($report.runs).Count -eq 0) {
-        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable schema v6 with nonempty runs.'
+        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable schema v7 with nonempty runs.'
     }
     Assert-ProbeEnvironmentEvidence $report
     Assert-ProbeConfigurationEvidence $report

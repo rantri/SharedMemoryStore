@@ -1057,18 +1057,13 @@ public sealed unsafe class MemoryStore : IDisposable
 
             // TryBeginDispose has closed local entry and drained every active
             // operation, so teardown does not need the ordinary cross-process
-            // operation lock. Releasing the mapping while holding that lock
-            // would invert Linux open ordering (.lifecycle -> .lock), because
-            // exact-owner cleanup enters .lifecycle after unmapping.
+            // operation lock. DisposeCore closes that descriptor before the
+            // mapping's exact-owner cleanup can enter Linux .lifecycle.
             DisposeCore();
         }
         finally
         {
             _lifecycle.CompleteDispose();
-            if (_engine is null)
-            {
-                _synchronization.Dispose();
-            }
         }
     }
 
@@ -2208,9 +2203,14 @@ public sealed unsafe class MemoryStore : IDisposable
 
     private void DisposeUninitialized()
     {
-        DisposeCore();
-        _synchronization.Dispose();
-        _lifecycle.CompleteDispose();
+        try
+        {
+            DisposeCore();
+        }
+        finally
+        {
+            _lifecycle.CompleteDispose();
+        }
     }
 
     private void DisposeCore()
@@ -2222,7 +2222,17 @@ public sealed unsafe class MemoryStore : IDisposable
 
         _disposed = true;
         _reservationMemory.Dispose();
-        _region.Dispose();
+        try
+        {
+            // Region disposal may acquire Linux .lifecycle and commit final-
+            // owner cleanup. Retire the ordinary lock descriptor first so no
+            // reopening participant can inherit an obsolete inode generation.
+            _synchronization.Dispose();
+        }
+        finally
+        {
+            _region.Dispose();
+        }
     }
 
     internal DiagnosticsSnapshot CreateDisposedSnapshot()

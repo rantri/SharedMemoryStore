@@ -223,7 +223,7 @@ internal static class LinuxSharedMemoryRegion
     /// <summary>
     /// Begins a Linux cold-open transaction. The retained lifecycle lock is
     /// acquired before the ordinary operation lock, so stale-resource cleanup
-    /// cannot unlink and replace a lock file while the returned scope holds it.
+    /// cannot race the stable operation-lock rendezvous while the scope holds it.
     /// Both locks remain held across mapped initialization/validation.
     /// </summary>
     internal static StoreOpenStatus TryBeginColdOpen(
@@ -283,9 +283,9 @@ internal static class LinuxSharedMemoryRegion
                 return StoreOpenStatus.NotFound;
             }
 
-            // Open the ordinary lock only after stale-resource deletion has
-            // completed under .lifecycle. Unlinking a held POSIX lock file would
-            // split future participants onto a different inode.
+            // Open the ordinary lock only after stale data-resource deletion
+            // has completed under .lifecycle. Current cleanup retains this
+            // stable rendezvous inode; ordering also protects older clients.
             synchronization = new LinuxSharedStoreSynchronization(resourceName);
             StoreStatus enterStatus = synchronization.TryEnter(remainingWait);
             if (enterStatus != StoreStatus.Success)
@@ -361,13 +361,15 @@ internal static class LinuxSharedMemoryRegion
                 {
                     try
                     {
-                        // The region callback may acquire .lifecycle, so mapping
-                        // cleanup follows lifecycle release on every failure.
-                        region?.Dispose();
+                        // Close the ordinary descriptor before region cleanup
+                        // can reacquire .lifecycle and publish final-owner state.
+                        synchronization?.Dispose();
                     }
                     finally
                     {
-                        synchronization?.Dispose();
+                        // The region callback may acquire .lifecycle, so mapping
+                        // cleanup follows lifecycle release on every failure.
+                        region?.Dispose();
                     }
                 }
             }
@@ -903,7 +905,10 @@ internal static class LinuxSharedMemoryRegion
         // arriving after their reconciliation is safe to remove only when its owner was
         // also absent from the just-classified live set.
         DeleteIfExists(resourceName.LinuxRegionPath);
-        DeleteIfExists(resourceName.LinuxSynchronizationPath);
+        // Keep the ordinary lock inode as a permanent rendezvous, just like
+        // .lifecycle. It carries no store generation state, costs one empty
+        // mode-0600 file, and cannot split active and reopening participants
+        // across unlinked/replacement inodes.
         DeleteIfExists(resourceName.LinuxOwnersPath);
         DeleteIfExists(resourceName.LinuxOwnersPath + ".tmp");
         foreach (var markerPath in EnumerateReleaseMarkerArtifacts(resourceName, finalizedOnly: false))

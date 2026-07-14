@@ -685,6 +685,19 @@ existing unpublished region whose initialization ownership cannot be proven.
   cold transaction. Ordered gates MUST be released before failed-open mapped
   resource cleanup that may re-enter outer lifecycle coordination, and no store
   handle may escape until resource ownership has been transferred exactly once.
+- **FR-057**: Current C# and native Linux participants MUST use nonblocking
+  open-file-description record locks on byte `[0,1)` for `.lock` and
+  `.lifecycle`, fail closed as Unsupported when OFD locking is unavailable, and
+  preserve exclusion across separately loaded managed assemblies and native
+  modules in the same PID. Current cleanup MUST retain the empty mode-`0600`
+  `.lock` inode as a stable rendezvous, and every successful, failed, initialized,
+  or uninitialized teardown MUST retire ordinary synchronization after held gates
+  are released but before mapped-region/owner cleanup can enter `.lifecycle`.
+  Released traditional-record-lock participants MUST remain compatible across
+  processes; concurrently mixing such an older implementation with a current
+  implementation inside one OS process is explicitly unsupported because old
+  process-associated locks can be released by closing any sibling descriptor.
+  These rules MUST add no lock acquisition to a v2 steady-state key-value path.
 
 ### Library Contract & Compatibility *(mandatory)*
 

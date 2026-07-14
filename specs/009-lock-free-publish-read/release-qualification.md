@@ -38,13 +38,13 @@ The predicate is:
    length/hash and executable-row stdout/stderr binding matches the file on
    disk. The release summary records each accepted OS report hash/tree digest
    and revalidates both at completion.
-5. The release `sync-probe.json` has executable schema 6, exact configured
+5. The release `sync-probe.json` has executable schema 7, exact configured
    rows/trials/counts, matching source and tested-assembly provenance, zero
    correctness failures, and every threshold accepted by the runner. The
    independent review in `code-review.md` has no unresolved high-severity
    finding for the same committed source. The Linux OS report additionally has
    one required `linux-tiny-performance` row and the Windows OS report has the
-   same row as optional/not-qualified. The Linux row binds schema-6 raw JSON for
+   same row as optional/not-qualified. The Linux row binds schema-7 raw JSON for
    exactly Legacy/LockFree x acquire-release/publish-remove x process-counts 1
    and 8 x three 60-second trials after 10 seconds of warm-up, with complete affinity,
    unique native CPU IDs in `[0,63]`, zero failures, at least two operations and

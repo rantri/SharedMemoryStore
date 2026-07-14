@@ -227,7 +227,7 @@ public sealed class LockFreeOsTraceIntegrationTests
         const string path = "/dev/shm/SharedMemoryStore/sms-test.lock";
         string[] lines =
         [
-            "1710000000.100000 fcntl(17</dev/shm/SharedMemoryStore/sms-test.lock>, F_SETLK, {l_type=F_WRLCK}) = 0",
+            "1710000000.100000 fcntl(17</dev/shm/SharedMemoryStore/sms-test.lock>, F_OFD_SETLK, {l_type=F_WRLCK}) = 0",
             "1710000000.250000 fcntl(18</dev/shm/SharedMemoryStore/other.lock>, F_SETLKW, {l_type=F_WRLCK}) = 0",
             "1710000000.400000 flock(17</dev/shm/SharedMemoryStore/sms-test.lock>, LOCK_UN) = 0"
         ];
@@ -379,7 +379,9 @@ public sealed class LockFreeOsTraceIntegrationTests
         foreach (string line in lines)
         {
             bool fcntlLock = line.Contains("fcntl(", StringComparison.Ordinal)
-                && (line.Contains("F_SETLK", StringComparison.Ordinal)
+                && (line.Contains("F_OFD_SETLK", StringComparison.Ordinal)
+                    || line.Contains("F_OFD_SETLKW", StringComparison.Ordinal)
+                    || line.Contains("F_SETLK", StringComparison.Ordinal)
                     || line.Contains("F_SETLKW", StringComparison.Ordinal));
             bool flock = line.Contains("flock(", StringComparison.Ordinal);
             if ((!fcntlLock && !flock) || !line.Contains(targetPath, StringComparison.Ordinal))

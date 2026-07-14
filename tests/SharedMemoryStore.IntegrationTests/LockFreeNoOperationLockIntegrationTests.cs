@@ -119,7 +119,7 @@ public sealed class LockFreeNoOperationLockIntegrationTests
         scope.Dispose();
 
         Assert.Equal(
-            ["enter", "exit", "lifecycle-exit", "region-owner-cleanup", "sync-dispose"],
+            ["enter", "exit", "lifecycle-exit", "sync-dispose", "region-owner-cleanup"],
             events);
         Assert.Equal(1, synchronization.EnterCount);
         Assert.Equal(1, synchronization.ExitCount);

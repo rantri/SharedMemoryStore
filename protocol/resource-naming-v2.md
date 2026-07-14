@@ -40,12 +40,16 @@ while `OpenExisting` reports `IncompatibleLayout`. `CreateNew` reports
 On Windows, the named mutex is acquired before the physical mapping is created
 or opened and remains held through header work and participant registration. On
 Linux, `.lifecycle` is acquired first; release-marker reconciliation and stale
-resource deletion complete before `.lock` is opened and acquired. The mapping,
+data-resource deletion complete before the persistent `.lock` inode is opened
+and acquired. The mapping,
 private owner-anchor lock, owner-line commit, header work, and participant
 registration then occur while both gates are held. Release order is `.lock`
-followed by `.lifecycle`. This ordering prevents unlinking a held POSIX lock file
-and splitting later participants onto a different inode. Failed-open mapping
-and owner cleanup run only after both gates have been released.
+followed by `.lifecycle`. Failed-open cleanup first releases both gates, then
+disposes the ordinary synchronization descriptor, and only then disposes the
+mapping/owner registration that may re-enter lifecycle coordination. Current
+cleanup retains `.lock` as a stable empty rendezvous file. Together these rules
+prevent active and reopening participants from splitting across an unlinked and
+replacement inode.
 
 The caller's original wait and cancellation budget covers the complete cold
 transaction, including both gates, mapping, header work, and participant
@@ -60,8 +64,9 @@ decimal-pid:proc-start-or-utc-token:32-hex-guid
 ```
 
 This prevents an older opener from deleting a live SMS2 region as stale. Close
-removes only the exact handle's line; final-owner cleanup follows the existing
-resource protocol.
+retires the ordinary descriptor before removing only the exact handle's line;
+final-owner cleanup follows the existing resource protocol and retains the
+stable `.lock`/`.lifecycle` rendezvous files.
 
 Each current managed Linux owner also creates the private mode-`0600` path
 

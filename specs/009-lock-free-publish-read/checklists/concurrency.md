@@ -51,6 +51,7 @@
 - [x] CHK026 Is the external message broker dependency limited to distributing keys, with no broker state, worker assignment, or delivery semantics entering the mapped protocol? [Boundary, Spec §Scope/FR-046]
 - [x] CHK027 Are the trust boundary, mapped-atomic alignment assumptions, owner-liveness limitations, and lack of cross-host durability documented as explicit constraints? [Assumption, Spec §Assumptions/FR-043..FR-045]
 - [x] CHK028 Are package compatibility, required-feature bits, rollout, rollback, and old-runtime fail-closed behavior specified for the revised layout without implying C++/Python v2 support? [Dependency, Spec §FR-042..FR-045/LC-001..LC-016]
+- [x] CHK029 Are Linux same-PID managed/native exclusion, stable lock-inode lifetime, synchronization-before-region teardown, OFD unsupported behavior, and the old same-PID compatibility boundary explicit and testable? [Concurrency/Compatibility, Spec §FR-057]
 
 ## Notes
 

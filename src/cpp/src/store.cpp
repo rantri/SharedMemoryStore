@@ -905,9 +905,11 @@ sms_status Store::get_layout(const Wait& wait, Layout& result) noexcept {
 void Store::close() noexcept {
     if (closed_.exchange(true, std::memory_order_acq_rel)) return;
     gate_.lock();
+    // Linux region close can enter lifecycle cleanup. Retire the ordinary
+    // lock descriptor before that cleanup can observe a final owner.
+    lock_.reset();
     if (region_) region_->close();
     region_.reset();
-    lock_.reset();
     gate_.unlock();
 }
 

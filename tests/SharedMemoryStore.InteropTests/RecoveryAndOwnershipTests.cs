@@ -236,7 +236,7 @@ public sealed class RecoveryAndOwnershipTests
         InteropAssertions.Success(await python.SendAsync("close", new { storeId = "python" }));
 
         Assert.False(File.Exists(regionPath));
-        Assert.False(File.Exists(synchronizationPath));
+        Assert.True(File.Exists(synchronizationPath));
         Assert.False(File.Exists(ownersPath));
         Assert.True(File.Exists(lifecyclePath));
     }

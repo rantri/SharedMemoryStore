@@ -32,7 +32,11 @@ fixed-width, language-neutral little-endian fields.
 **Primary Dependencies**: .NET base class library and existing Windows/Linux OS
 adapters only; the Linux adapter uses libc `open`, `flock`, and `statx` for
 cold-lifecycle owner anchors. xUnit and BenchmarkDotNet remain test/benchmark
-dependencies. No new runtime package or broker dependency.
+dependencies. Interoperable `.lock`/`.lifecycle` coordination uses direct libc
+`F_OFD_SETLK` open-file-description locks with a per-wrapper non-reentrant local
+arbiter. OFD locks provide the missing same-PID boundary across assembly-load
+contexts and native modules without a managed process-wide registry. Unsupported
+kernels/filesystems fail closed. No new runtime package or broker dependency.
 
 **Storage**: Fixed-capacity named shared memory. Existing mapped layout 1.2
 remains unchanged. New mapped layout 2.0 (`SMS2`) contains an explicit header,
@@ -84,10 +88,18 @@ Named/file locking remains permitted only for bounded cold create/open/close
 coordination. One cold-open scope owns those gates and the mapped resources
 until initialization or validation and participant registration finish. On
 Windows the named gate precedes mapping. On Linux `.lifecycle` precedes
-reconciliation and stale deletion, `.lock` precedes mapping, and release occurs
-in reverse order before failed-open owner cleanup. Only the physical creator
-initializes an unpublished header; an opener never treats zero bytes or
-`OpenMode` as creation authority. Each managed Linux handle additionally holds
+reconciliation and stale data deletion, `.lock` precedes mapping, and release
+occurs in reverse order. After held gates are released, ordinary synchronization
+is disposed before failed-open or handle-close region cleanup can re-enter
+`.lifecycle`. Current implementations retain the empty `.lock` and `.lifecycle`
+inodes as stable rendezvous resources. Only the physical creator initializes an
+unpublished header; an opener never treats zero bytes or `OpenMode` as creation
+authority. Each C# Linux lock wrapper owns an OFD-lock descriptor and local
+non-reentrant gate. The C++ adapter retains one shared `FileState`/descriptor
+and timed mutex per canonical path inside one module; descriptors from different
+modules or managed load contexts contend in the kernel. Unlock failure
+retires/closes the affected descriptor before reopening its local gate. Each
+managed Linux handle additionally holds
 a private regular-file `flock` anchor after mapping and before its owner-sidecar
 line is committed. The anchor is liveness evidence, never a data-operation lock;
 cleanup removes only a canonical unreferenced anchor proven regular and unlocked

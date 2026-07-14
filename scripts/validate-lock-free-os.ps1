@@ -673,6 +673,66 @@ function Assert-LinuxTinySyncTopology {
     }
 }
 
+function Assert-RequiredBenchmarkHardwareMetadata {
+    param(
+        [Parameter(Mandatory)]$Environment,
+        [Parameter(Mandatory)][string]$Context)
+
+    $logicalCount = Get-StrictInt64 $Environment 'logicalProcessorCount' $Context 1 ([int32]::MaxValue)
+    [void](Get-StrictInt64 $Environment 'physicalCoreCount' $Context 1 $logicalCount)
+    [void](Get-StrictInt64 $Environment 'totalMemoryBytes' $Context 1048576 ([int64]::MaxValue))
+    $processorModel = Get-StrictString $Environment 'processorModel' $Context
+    $processorIdentifier = Get-StrictString $Environment 'processorIdentifier' $Context
+    foreach ($value in @($processorModel, $processorIdentifier)) {
+        if ($value.Trim() -match '^(?i:(?:unknown|unavailable|not[- ]available|n/?a)(?:\s+(?:cpu|processor|model))?)$') {
+            throw "$Context contains unknown processor-model evidence '$value'."
+        }
+    }
+}
+
+function Assert-ExactBenchmarkStoreDimensions {
+    param(
+        [Parameter(Mandatory)]$Dimensions,
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][int64]$SlotCount,
+        [Parameter(Mandatory)][int64]$MaxValueBytes,
+        [Parameter(Mandatory)][int64]$MaxDescriptorBytes,
+        [Parameter(Mandatory)][int64]$MaxKeyBytes,
+        [Parameter(Mandatory)][int64]$LeaseRecordCount,
+        [Parameter(Mandatory)][int64]$LockFreeParticipantRecordCount)
+
+    $expected = [ordered]@{
+        slotCount = $SlotCount
+        maxValueBytes = $MaxValueBytes
+        maxDescriptorBytes = $MaxDescriptorBytes
+        maxKeyBytes = $MaxKeyBytes
+        leaseRecordCount = $LeaseRecordCount
+        lockFreeParticipantRecordCount = $LockFreeParticipantRecordCount
+    }
+    foreach ($entry in $expected.GetEnumerator()) {
+        if ((Get-StrictInt64 $Dimensions $entry.Key $Context 0 ([int32]::MaxValue)) -ne $entry.Value) {
+            throw "$Context.$($entry.Key) does not match the exact benchmark store topology."
+        }
+    }
+}
+
+function Assert-LinuxTinyStoreDimensions {
+    param(
+        [Parameter(Mandatory)]$Configuration,
+        [Parameter(Mandatory)][string]$Context)
+
+    $allDimensions = Get-RequiredPropertyValue $Configuration 'scenarioStoreDimensions' $Context
+    if ((@($allDimensions.PSObject.Properties.Name) -join ',') -cne 'acquire-release,publish-remove') {
+        throw "$Context scenarioStoreDimensions must contain exactly acquire-release and publish-remove."
+    }
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        Assert-ExactBenchmarkStoreDimensions `
+            $allDimensions.$scenario `
+            "$Context scenarioStoreDimensions.$scenario" `
+            32 8 0 8 64 64
+    }
+}
+
 function Assert-LinuxTinyPerformanceConfiguration {
     param([Parameter(Mandatory)]$Config)
 
@@ -741,19 +801,19 @@ function Assert-LinuxTinyPerformanceReport {
         [Parameter(Mandatory)]$ReleaseConfig,
         [switch]$SkipEnvironmentBinding)
 
-    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 6 6) -ne 6 `
+    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 7 7) -ne 7 `
         -or (Get-StrictInt64 $Report 'minimumCompatibleSchemaVersion' 'Linux tiny performance report' 3 3) -ne 3) {
-        throw 'Linux tiny performance report must be schema 6 with minimum-compatible schema 3.'
+        throw 'Linux tiny performance report must be schema 7 with minimum-compatible schema 3.'
     }
     [void](Get-StrictString $Report 'schemaCompatibility' 'Linux tiny performance report')
     $environment = Get-RequiredPropertyValue $Report 'environment' 'Linux tiny performance report'
     foreach ($property in @(
         'repositoryCommit', 'repositoryWorkingTreeState', 'sharedMemoryStoreAssemblySha256',
         'probeAssemblySha256', 'operatingSystem', 'operatingSystemArchitecture',
-        'processArchitecture', 'framework', 'runtimeVersion', 'processorIdentifier')) {
+        'processArchitecture', 'framework', 'runtimeVersion')) {
         [void](Get-StrictString $environment $property 'Linux tiny performance environment')
     }
-    [void](Get-StrictInt64 $environment 'logicalProcessorCount' 'Linux tiny performance environment' 1 ([int32]::MaxValue))
+    Assert-RequiredBenchmarkHardwareMetadata $environment 'Linux tiny performance environment'
     [void](Get-StrictInt64 $environment 'stopwatchFrequency' 'Linux tiny performance environment' 1 ([int64]::MaxValue))
     [void](Get-StrictBoolean $environment 'serverGarbageCollection' 'Linux tiny performance environment')
     if (-not $SkipEnvironmentBinding) {
@@ -790,6 +850,7 @@ function Assert-LinuxTinyPerformanceReport {
         throw 'Linux tiny performance report configuration does not match the exact release workload.'
     }
     [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
+    Assert-LinuxTinyStoreDimensions $configuration 'Linux tiny performance configuration'
     Assert-ExactStringArray $configuration.profiles @('Legacy', 'LockFree') 'Linux tiny performance report profiles'
     Assert-ExactStringArray $configuration.scenarios @('acquire-release', 'publish-remove') 'Linux tiny performance report scenarios'
     $scenarioCounts = Get-RequiredPropertyValue $configuration 'scenarioProcessCounts' 'Linux tiny performance configuration'
@@ -1127,19 +1188,31 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
         }
     }
     $report = [pscustomobject][ordered]@{
-        SchemaVersion = 6
+        SchemaVersion = 7
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
             OperatingSystem = 'Ubuntu 24.04 synthetic'; OperatingSystemArchitecture = 'X64'; ProcessArchitecture = 'X64'
             Framework = '.NET synthetic'; RuntimeVersion = 'synthetic'; LogicalProcessorCount = 8
-            ProcessorIdentifier = 'synthetic'; ServerGarbageCollection = $false; StopwatchFrequency = 10000000
+            PhysicalCoreCount = 4; TotalMemoryBytes = 17179869184
+            ProcessorModel = 'Synthetic CPU'; ProcessorIdentifier = 'Synthetic CPU'
+            ServerGarbageCollection = $false; StopwatchFrequency = 10000000
         }
         Configuration = [pscustomobject][ordered]@{
             Mode = 'sync'; DurationSeconds = 60; Trials = 3; Profiles = @('Legacy', 'LockFree')
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
+            }
+            ScenarioStoreDimensions = [pscustomobject][ordered]@{
+                'acquire-release' = [pscustomobject][ordered]@{
+                    SlotCount = 32; MaxValueBytes = 8; MaxDescriptorBytes = 0; MaxKeyBytes = 8
+                    LeaseRecordCount = 64; LockFreeParticipantRecordCount = 64
+                }
+                'publish-remove' = [pscustomobject][ordered]@{
+                    SlotCount = 32; MaxValueBytes = 8; MaxDescriptorBytes = 0; MaxKeyBytes = 8
+                    LeaseRecordCount = 64; LockFreeParticipantRecordCount = 64
+                }
             }
             WarmupCycles = 0; WarmupSeconds = 10; AffinityRequested = $true
             SamplingInterval = 64; MaxLatencySamplesPerWorker = 65536
@@ -1150,7 +1223,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             SyncKeyCanonicalBucketAssignments = @($TinyConfig.syncKeyCanonicalBucketAssignments)
         }
         Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 3
-        SchemaCompatibility = 'synthetic schema-v6 parser self-test'
+        SchemaCompatibility = 'synthetic schema-v7 parser self-test'
     }
     [void](Assert-LinuxTinyPerformanceReport $report $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
     if (-not (Test-LinuxTinyHostTuple `
@@ -1179,6 +1252,33 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
     $evenMedian = Get-MedianValue ([double[]]@(40.0, 10.0, 30.0, 20.0))
     if ($oddMedian -ne 20.0 -or $evenMedian -ne 25.0) {
         throw 'Linux tiny performance parser self-test did not compute canonical odd/even medians.'
+    }
+    $assertions++
+
+    $unknownHardware = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $unknownHardware.Environment.ProcessorModel = ' Unknown CPU '
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $unknownHardware $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted unknown processor metadata.'
+    }
+    $assertions++
+
+    $missingHardware = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $missingHardware.Environment.PSObject.Properties.Remove('TotalMemoryBytes')
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $missingHardware $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted missing memory metadata.'
+    }
+    $assertions++
+
+    $wrongDimensions = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $wrongDimensions.Configuration.ScenarioStoreDimensions.'acquire-release'.SlotCount = 31
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $wrongDimensions $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted the wrong store dimensions.'
     }
     $assertions++
 
@@ -1949,7 +2049,7 @@ try {
                     $performanceReport $linuxTinyConfig $releaseConfig
                 $relativePerformancePath = [IO.Path]::GetRelativePath($root, $performancePath)
                 $performanceRow[0].detail =
-                    'schema6 exact 2-profile x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
+                    'schema7 exact 2-profile x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
                     'LF1 p99<=Legacy1, LF8 throughput>=Legacy8, LF8/LF1 p99<=3, LF8 p99<=10us, ' +
                     'and every lock-free raw MaxMicroseconds<=10000'
                 $performanceRow[0] | Add-Member -NotePropertyName performanceEvidence -NotePropertyValue `

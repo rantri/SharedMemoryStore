@@ -262,6 +262,7 @@ static async Task<int> RunController(string[] args)
             profiles.Select(static profile => profile.ToString()).ToArray(),
             plans.Select(static plan => plan.Name).ToArray(),
             scenarioCounts,
+            CreateScenarioStoreDimensions(plans, largeFrameBytes, stickyOverflowSlotCount),
             ReaderKeyCount,
             ReaderPayloadBytes,
             BrokerRotatingKeyCount,
@@ -2696,20 +2697,80 @@ static long ReadNonNegativeLongEnvironment(string name, long fallback) =>
         ? value
         : fallback;
 
-static ProbeEnvironment CaptureEnvironment() => new(
-    TryGetRepositoryCommit(),
-    TryGetRepositoryWorkingTreeState(),
-    TryGetFileSha256(typeof(Store).Assembly.Location),
-    TryGetFileSha256(typeof(BenchmarkProtocol).Assembly.Location),
-    RuntimeInformation.OSDescription,
-    RuntimeInformation.OSArchitecture.ToString(),
-    RuntimeInformation.ProcessArchitecture.ToString(),
-    RuntimeInformation.FrameworkDescription,
-    Environment.Version.ToString(),
-    Environment.ProcessorCount,
-    Environment.GetEnvironmentVariable("PROCESSOR_IDENTIFIER") ?? "unknown",
-    GCSettings.IsServerGC,
-    Stopwatch.Frequency);
+static ProbeEnvironment CaptureEnvironment()
+{
+    HostHardwareInfo hardware = HostEnvironmentProbe.Capture();
+    return new ProbeEnvironment(
+        TryGetRepositoryCommit(),
+        TryGetRepositoryWorkingTreeState(),
+        TryGetFileSha256(typeof(Store).Assembly.Location),
+        TryGetFileSha256(typeof(BenchmarkProtocol).Assembly.Location),
+        RuntimeInformation.OSDescription,
+        RuntimeInformation.OSArchitecture.ToString(),
+        RuntimeInformation.ProcessArchitecture.ToString(),
+        RuntimeInformation.FrameworkDescription,
+        Environment.Version.ToString(),
+        hardware.LogicalProcessorCount,
+        hardware.PhysicalCoreCount,
+        hardware.TotalMemoryBytes,
+        hardware.ProcessorModel,
+        hardware.ProcessorModel,
+        GCSettings.IsServerGC,
+        Stopwatch.Frequency);
+}
+
+static SortedDictionary<string, ProbeStoreDimensions> CreateScenarioStoreDimensions(
+    IReadOnlyList<ScenarioPlan> plans,
+    int largeFrameBytes,
+    int stickyOverflowSlotCount)
+{
+    var dimensions = new SortedDictionary<string, ProbeStoreDimensions>(StringComparer.Ordinal);
+    foreach (ScenarioPlan plan in plans)
+    {
+        dimensions[plan.Name] = plan.Name switch
+        {
+            "acquire-release" or "publish-remove" => new ProbeStoreDimensions(
+                SyncSlotCount,
+                SyncValueBytes,
+                MaxDescriptorBytes: 0,
+                MaxKeyBytes,
+                DefaultLeaseRecordCount,
+                ParticipantRecordCount),
+            "same-key-read" or "distributed-key-read" => new ProbeStoreDimensions(
+                ReaderSlotCount,
+                ReaderPayloadBytes,
+                MaxDescriptorBytes: 0,
+                MaxKeyBytes,
+                DefaultLeaseRecordCount,
+                ParticipantRecordCount),
+            "broker-directed" or "large-ingest" => new ProbeStoreDimensions(
+                BrokerSlotCount,
+                largeFrameBytes,
+                BenchmarkDescriptorBytes,
+                MaxKeyBytes,
+                DefaultLeaseRecordCount,
+                ParticipantRecordCount),
+            "mixed-churn" => new ProbeStoreDimensions(
+                MixedSlotCount,
+                MixedPayloadBytes,
+                BenchmarkDescriptorBytes,
+                MaxKeyBytes,
+                MixedLeaseRecordCount,
+                ParticipantRecordCount),
+            "sticky-overflow-miss" => new ProbeStoreDimensions(
+                stickyOverflowSlotCount,
+                MaxValueBytes: 1,
+                MaxDescriptorBytes: 0,
+                MaxKeyBytes,
+                DefaultLeaseRecordCount,
+                ParticipantRecordCount),
+            _ => throw new InvalidOperationException(
+                $"Scenario '{plan.Name}' does not declare benchmark store dimensions.")
+        };
+    }
+
+    return dimensions;
+}
 
 static string TryGetRepositoryCommit()
 {

@@ -526,7 +526,9 @@ canonical bucket assignment, separate early and late Algorithm-R reservoirs,
 and an unevictable running maximum. Qualification binds the raw evidence to the
 exact Linux host, architecture, process count, CPU model, and clean commit, then
 recomputes all eight scenario/profile/process-count summary rows from the raw
-trials.
+trials. Both PowerShell importers compute the midpoint with explicit floor
+semantics and self-test distinct odd and even value sets so a three-trial
+median cannot inherit PowerShell's round-to-nearest integer conversion.
 
 **Evidence**: The original probe accidentally allowed fixed-key collisions and
 could lose an early maximum when its latency reservoir replaced that sample.
@@ -545,3 +547,61 @@ one-to-eight ratio limits contention growth, and the absolute p99 and raw-maximu
 limits protect tail latency without rewarding convoying. This preserves a hard
 performance contract while keeping correctness, host binding, and raw-tail
 requirements independent of any aggregate score.
+
+## Decision 13: Use OFD locks and stable Linux rendezvous inodes
+
+**Decision**: Current C# and C++ Linux adapters issue nonblocking
+`F_OFD_SETLK` open-file-description locks for byte `[0,1)` on both `.lock` and
+`.lifecycle`. Each C# wrapper owns its descriptor and a per-wrapper
+non-reentrant local gate. C++ wrappers in one module retain the existing shared
+per-path `FileState`/descriptor and timed mutex; distinct native modules,
+managed assembly-load contexts, and other open descriptions contend in the
+kernel. `EINVAL`, `ENOSYS`, and unsupported-filesystem outcomes fail closed as
+Unsupported; there is no fallback to process-associated locking.
+
+Current cleanup retains the empty mode-`0600` `.lock` inode, matching the
+already-persistent `.lifecycle` inode. Successful, failed, initialized, and
+uninitialized teardown releases held gates and disposes ordinary
+synchronization before mapped-region/owner cleanup can enter `.lifecycle`.
+Unlock failure closes/retires the descriptor before its local gate is reopened.
+These rules affect only cold coordination and legacy v1.2 operations; no v2
+steady-state key-value path consults a registry or enters an OS lock.
+
+**Rationale**: The earlier shared-descriptor registry fixed sibling close within
+one loaded C# assembly, but its static state was per `AssemblyLoadContext`, not
+per OS process. Independently loaded packages and an in-process native adapter
+could still use different traditional `F_SETLK` descriptors; same-PID calls did
+not contend, and closing either descriptor could release every traditional lock
+for that inode. OFD locks bind ownership to each open description, conflict even
+inside one PID, and are not released by closing an unrelated descriptor. They
+also conflict with traditional record locks used by released clients in other
+processes. A persistent pathname removes the independent unlink/recreate inode
+split, while descriptor-before-region teardown remains defense in depth for an
+older participant that still deletes `.lock` after the last owner.
+
+Concurrent use of an older process-associated-lock implementation and a current
+OFD implementation in one OS process is explicitly unsupported: closing any new
+contender descriptor can release the older implementation's process-associated
+lock. Cross-process old/new compatibility and same-process current/current
+managed/native compatibility remain supported.
+
+**Evidence**: Linux regressions cover `.lock` and `.lifecycle`, same-thread and
+timed local contenders, foreign-process exclusion, two copies of the current
+assembly in separate collectible load contexts, and a same-PID native-style OFD
+descriptor in both ownership directions. A concurrent final-close/reopen test
+holds the persistent pathname lock, proves the reopened legacy store's own hot
+operation returns `StoreBusy`, and proves foreign exclusion until release.
+Failed-open ordering records synchronization disposal before region-owner
+cleanup. The current C++ adapter uses the same command and closes its lock before
+region owner cleanup.
+
+**Alternatives rejected**:
+
+- A managed static registry cannot provide process scope across load contexts or
+  native modules.
+- Traditional `F_SETLK` plus per-module mutexes cannot enforce same-PID mutual
+  exclusion and retains the sibling-close hazard.
+- Reentrant local monitors permit accidental same-thread unlock of a live gate.
+- Switching to `flock` would not conflict with released record-lock clients.
+- Teardown ordering alone cannot eliminate every unlink/recreate window; stable
+  rendezvous inodes make pathname identity independent of close timing.

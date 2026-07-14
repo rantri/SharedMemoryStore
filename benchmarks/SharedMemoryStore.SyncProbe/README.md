@@ -5,7 +5,7 @@ raw JSON; it is not a BenchmarkDotNet microbenchmark.
 
 ## Evidence semantics
 
-Report schema v6 is additive over schemas v3-v5. Existing JSON property names
+Report schema v7 is additive over schemas v3-v6. Existing JSON property names
 remain present. Readers that ignore unknown properties can continue to consume
 the report. `MinimumCompatibleSchemaVersion` and `SchemaCompatibility` state
 this contract in every report.
@@ -13,7 +13,10 @@ this contract in every report.
 `Environment` records the repository commit and clean/dirty state plus SHA-256
 digests for the exact SharedMemoryStore and probe assemblies that produced the
 report. Assembly digests are the authoritative trace when a qualification is
-run from an intentionally dirty development tree.
+run from an intentionally dirty development tree. Schema v7 also records a
+portable processor model, logical and physical processor counts, and total host
+memory; `Configuration.ScenarioStoreDimensions` binds every selected scenario
+to its exact slot/value/descriptor/key/lease/participant dimensions.
 
 `FullPayloadCopies` is retained for schema compatibility. A zero in that legacy
 field is not, by itself, a measured copy count. Consumers must also inspect:
