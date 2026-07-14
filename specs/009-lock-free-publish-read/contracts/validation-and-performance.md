@@ -345,8 +345,11 @@ identical, every length/SHA-256 must match, and every executable result's stdout
 and stderr path/hash must bind one manifested file. Every passing executed row,
 including `clean`, must retain its command and bound logs; only structural
 `self-test-*` rows and optional not-qualified platform rows are exempt from that
-executable-row requirement. The Linux raw performance JSON is validated again
-by the release runner, including provenance and tested-assembly hashes. Accepted
+executable-row requirement. An exempt row encodes `command`, `stdout`, `stderr`,
+and both stream digests as JSON `null`; empty strings, whitespace, partial
+command/log tuples, and missing nullable fields are invalid rather than aliases
+for absent evidence. The Linux raw performance JSON is validated again by the
+release runner, including provenance and tested-assembly hashes. Accepted
 OS report hashes and canonical evidence-tree digests are recorded in the
 schema-4 release summary and revalidated before completion.
 

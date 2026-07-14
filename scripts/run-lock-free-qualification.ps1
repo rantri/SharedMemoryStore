@@ -2610,6 +2610,44 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     return $assertions
 }
 
+function Assert-OsResultCommandEvidence {
+    param(
+        [Parameter(Mandatory)]$Row,
+        [Parameter(Mandatory)][string]$Context)
+
+    $members = @{}
+    foreach ($property in @('command', 'stdout', 'stderr', 'stdoutSha256', 'stderrSha256')) {
+        $member = $Row.PSObject.Properties[$property]
+        if ($null -eq $member) {
+            throw "$Context is missing nullable execution-evidence property '$property'."
+        }
+        $members[$property] = $member.Value
+    }
+
+    if ($null -eq $members.command) {
+        foreach ($property in @('stdout', 'stderr', 'stdoutSha256', 'stderrSha256')) {
+            if ($null -ne $members[$property]) {
+                throw "$Context has '$property' evidence without a command."
+            }
+        }
+        return $false
+    }
+
+    if ($members.command -isnot [string] -or [string]::IsNullOrWhiteSpace($members.command)) {
+        throw "$Context has an empty or non-string command."
+    }
+    foreach ($stream in @('stdout', 'stderr')) {
+        if ($members[$stream] -isnot [string] -or [string]::IsNullOrWhiteSpace($members[$stream])) {
+            throw "$Context has an empty or non-string $stream path."
+        }
+        $digest = $members[$stream + 'Sha256']
+        if ($digest -isnot [string] -or $digest -notmatch '^[0-9A-F]{64}$') {
+            throw "$Context has no SHA-256-bound $stream evidence."
+        }
+    }
+    return $true
+}
+
 function Assert-ExactReleaseOsRows {
     param(
         [Parameter(Mandatory)]$Report,
@@ -2645,21 +2683,19 @@ function Assert-ExactReleaseOsRows {
         [void](Get-StrictDouble $rowMatches[0] 'elapsedSeconds' "OS row '$($entry.Key)'" 0 [double]::MaxValue)
         $timeoutSeconds = Get-StrictInt64 $rowMatches[0] 'timeoutSeconds' "OS row '$($entry.Key)'" 0 [int32]::MaxValue
         $timedOut = Get-StrictBoolean $rowMatches[0] 'timedOut' "OS row '$($entry.Key)'"
-        $commandMember = $rowMatches[0].PSObject.Properties['command']
+        $hasCommandEvidence = Assert-OsResultCommandEvidence $rowMatches[0] "OS row '$($entry.Key)'"
         $requiresCommand = $status -ceq 'pass' `
             -and [string]$entry.Key -cnotlike 'self-test-*'
         if ($timedOut) {
             throw "Release OS row '$($entry.Key)' timed out."
         }
-        if ($requiresCommand -and ($null -eq $commandMember -or $null -eq $commandMember.Value)) {
+        if ($requiresCommand -and -not $hasCommandEvidence) {
             throw "Release OS passing executable row '$($entry.Key)' cannot omit its bounded command/log evidence."
         }
-        if ($null -ne $commandMember -and $null -ne $commandMember.Value) {
-            if ($commandMember.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($commandMember.Value) `
-                -or $timeoutSeconds -le 0 `
-                -or (Get-StrictInt64 $rowMatches[0] 'exitCode' "OS row '$($entry.Key)'" ([int64]-1) [int32]::MaxValue) -ne 0 `
-                -or [string]$rowMatches[0].stdoutSha256 -notmatch '^[0-9A-F]{64}$' `
-                -or [string]$rowMatches[0].stderrSha256 -notmatch '^[0-9A-F]{64}$') {
+        if ($hasCommandEvidence) {
+            $exitCode = Get-StrictInt64 $rowMatches[0] 'exitCode' "OS row '$($entry.Key)'" `
+                ([int64]-1) [int32]::MaxValue
+            if ($timeoutSeconds -le 0 -or $exitCode -ne 0) {
                 throw "Release OS executable row '$($entry.Key)' lacks bounded successful command/log evidence."
             }
         }
@@ -2887,17 +2923,17 @@ function Assert-OsEvidenceTree {
     }
 
     foreach ($row in @($Report.results)) {
-        $commandMember = $row.PSObject.Properties['command']
         $statusMember = $row.PSObject.Properties['status']
         $nameMember = $row.PSObject.Properties['name']
         $requiresCommand = $null -ne $statusMember `
             -and [string]$statusMember.Value -ceq 'pass' `
             -and $null -ne $nameMember `
             -and [string]$nameMember.Value -cnotlike 'self-test-*'
-        if ($requiresCommand -and ($null -eq $commandMember -or $null -eq $commandMember.Value)) {
+        $hasCommandEvidence = Assert-OsResultCommandEvidence $row "OS result row '$($row.name)'"
+        if ($requiresCommand -and -not $hasCommandEvidence) {
             throw "OS passing executable row '$($row.name)' cannot omit its command and manifested logs."
         }
-        if ($null -eq $commandMember -or $null -eq $commandMember.Value) {
+        if (-not $hasCommandEvidence) {
             continue
         }
         foreach ($stream in @('stdout', 'stderr')) {
@@ -2975,17 +3011,42 @@ function Invoke-OsEvidenceManifestVerifierSelfTest {
         }
     })
     $report = [pscustomobject][ordered]@{
-        results = @([pscustomobject][ordered]@{
-            name = 'synthetic'; status = 'pass'; required = $true; command = 'synthetic command'
-            stdout = [IO.Path]::GetRelativePath($root, $stdout)
-            stderr = [IO.Path]::GetRelativePath($root, $stderr)
-            stdoutSha256 = Get-FileSha256 $stdout
-            stderrSha256 = Get-FileSha256 $stderr
-        })
+        results = @(
+            [pscustomobject][ordered]@{
+                name = 'synthetic'; status = 'pass'; required = $true; command = 'synthetic command'
+                stdout = [IO.Path]::GetRelativePath($root, $stdout)
+                stderr = [IO.Path]::GetRelativePath($root, $stderr)
+                stdoutSha256 = Get-FileSha256 $stdout
+                stderrSha256 = Get-FileSha256 $stderr
+            },
+            [pscustomobject][ordered]@{
+                name = 'self-test-synthetic'; status = 'pass'; required = $true; command = $null
+                stdout = $null; stderr = $null; stdoutSha256 = $null; stderrSha256 = $null
+            },
+            [pscustomobject][ordered]@{
+                name = 'optional-synthetic'; status = 'not-qualified'; required = $false; command = $null
+                stdout = $null; stderr = $null; stdoutSha256 = $null; stderrSha256 = $null
+            })
         evidenceManifest = $manifest
     }
     [void](Assert-OsEvidenceTree $report $reportPath)
-    [int]$assertions = 1
+    [int]$assertions = 3
+
+    $invalidFields = @(
+        @{ Name = 'empty structural command'; Row = 1; Property = 'command'; Value = '' },
+        @{ Name = 'whitespace optional command'; Row = 2; Property = 'command'; Value = '   ' },
+        @{ Name = 'empty executable stdout'; Row = 0; Property = 'stdout'; Value = '' },
+        @{ Name = 'whitespace executable stderr'; Row = 0; Property = 'stderr'; Value = "`t" })
+    foreach ($case in $invalidFields) {
+        $invalidReport = $report | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+        $invalidReport.results[$case.Row].($case.Property) = $case.Value
+        $rejected = $false
+        try { [void](Assert-OsEvidenceTree $invalidReport $reportPath) } catch { $rejected = $true }
+        if (-not $rejected) {
+            throw "OS evidence verifier self-test accepted $($case.Name) pseudo-evidence."
+        }
+        $assertions++
+    }
 
     $extra = Join-Path $treeRoot 'unexpected.log'
     [IO.File]::WriteAllText($extra, 'unexpected')
@@ -4415,8 +4476,8 @@ try {
         Add-EvidenceResult 'os-evidence-manifest-verifier-self-test' 'passed' `
             'exact-tree-positive-and-tamper-negative-cases-passed' @(
                 "assertions=$osManifestAssertions",
-                'exact manifest/file-set/log binding=accepted',
-                'extra file/content hash/log hash/commandless passing clean row/out-of-root path=rejected') @(
+                'exact manifest/file-set/log binding plus null structural/optional rows=accepted',
+                'empty/whitespace pseudo-fields plus extra file/content hash/log hash/commandless passing clean row/out-of-root path=rejected') @(
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'os-evidence-manifest-self-test.json')),
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'os-evidence-manifest-self-test.evidence')))
         $linuxPerformanceAssertions = Invoke-LinuxTinyOsPerformanceVerifierSelfTest

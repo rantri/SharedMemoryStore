@@ -1557,22 +1557,74 @@ $definitions = [ordered]@{
     'pack' = @('src/SharedMemoryStore/SharedMemoryStore.csproj')
 }
 
+function Assert-ResultCommandEvidence {
+    param(
+        [Parameter(Mandatory)]$Result,
+        [string]$Context = 'OS validation result')
+
+    $members = @{}
+    foreach ($property in @('command', 'stdout', 'stderr', 'stdoutSha256', 'stderrSha256')) {
+        $member = $Result.PSObject.Properties[$property]
+        if ($null -eq $member) {
+            throw "$Context is missing nullable execution-evidence property '$property'."
+        }
+        $members[$property] = $member.Value
+    }
+
+    if ($null -eq $members.command) {
+        foreach ($property in @('stdout', 'stderr', 'stdoutSha256', 'stderrSha256')) {
+            if ($null -ne $members[$property]) {
+                throw "$Context has '$property' evidence without a command."
+            }
+        }
+        return $false
+    }
+
+    if ($members.command -isnot [string] -or [string]::IsNullOrWhiteSpace($members.command)) {
+        throw "$Context has an empty or non-string command."
+    }
+    foreach ($stream in @('stdout', 'stderr')) {
+        if ($members[$stream] -isnot [string] -or [string]::IsNullOrWhiteSpace($members[$stream])) {
+            throw "$Context has an empty or non-string $stream path."
+        }
+        $digest = $members[$stream + 'Sha256']
+        if ($digest -isnot [string] -or $digest -notmatch '^[0-9A-F]{64}$') {
+            throw "$Context has no SHA-256-bound $stream evidence."
+        }
+    }
+    return $true
+}
+
 function Add-Result {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][ValidateSet('pass', 'fail', 'not-qualified')][string]$Status,
         [Parameter(Mandatory)][string]$Detail,
         [bool]$Required = $true,
-        [string]$CommandLine = $null,
-        [string]$Stdout = $null,
-        [string]$Stderr = $null,
+        [AllowNull()][object]$CommandLine = $null,
+        [AllowNull()][object]$Stdout = $null,
+        [AllowNull()][object]$Stderr = $null,
         [Nullable[int]]$ExitCode = $null,
         [double]$ElapsedSeconds = 0,
         [int]$TimeoutSeconds = 0,
         [bool]$TimedOut = $false,
         [Nullable[DateTimeOffset]]$StartedUtc = $null)
 
-    $results.Add([pscustomobject][ordered]@{
+    foreach ($field in @(
+        @{ Name = 'command'; Value = $CommandLine },
+        @{ Name = 'stdout'; Value = $Stdout },
+        @{ Name = 'stderr'; Value = $Stderr })) {
+        if ($null -ne $field.Value `
+            -and ($field.Value -isnot [string] -or [string]::IsNullOrWhiteSpace($field.Value))) {
+            throw "OS validation result '$Name' has an empty or non-string $($field.Name) field."
+        }
+    }
+    $providedFieldCount = @($CommandLine, $Stdout, $Stderr | Where-Object { $null -ne $_ }).Count
+    if ($providedFieldCount -notin @(0, 3)) {
+        throw "OS validation result '$Name' must provide command, stdout, and stderr together or omit all three."
+    }
+
+    $result = [pscustomobject][ordered]@{
         name = $Name
         status = $Status
         required = $Required
@@ -1587,7 +1639,90 @@ function Add-Result {
         stderr = $Stderr
         stdoutSha256 = if ($null -ne $Stdout) { Get-FileSha256 (Join-Path $root $Stdout) } else { $null }
         stderrSha256 = if ($null -ne $Stderr) { Get-FileSha256 (Join-Path $root $Stderr) } else { $null }
-    })
+    }
+    [void](Assert-ResultCommandEvidence $result "OS validation result '$Name'")
+    $results.Add($result)
+}
+
+function Invoke-ResultCommandEvidenceSelfTest {
+    [int]$assertions = 0
+
+    foreach ($definition in @(
+        @{ Name = '__shape-structural'; Status = 'pass'; Required = $true },
+        @{ Name = '__shape-optional'; Status = 'not-qualified'; Required = $false })) {
+        $before = $results.Count
+        Add-Result $definition.Name $definition.Status 'synthetic result-shape self-test' $definition.Required
+        try {
+            $row = $results[$before]
+            [void](Assert-ResultCommandEvidence $row "Synthetic result '$($definition.Name)'")
+            foreach ($property in @('command', 'stdout', 'stderr', 'stdoutSha256', 'stderrSha256')) {
+                if ($null -ne $row.$property) {
+                    throw "Synthetic result '$($definition.Name)' did not retain JSON-null '$property'."
+                }
+            }
+        }
+        finally {
+            while ($results.Count -gt $before) {
+                $results.RemoveAt($results.Count - 1)
+            }
+        }
+        $assertions++
+    }
+
+    $executedStdoutPath = Join-Path $evidenceRoot '__shape-executed.stdout.log'
+    $executedStderrPath = Join-Path $evidenceRoot '__shape-executed.stderr.log'
+    [IO.File]::WriteAllText($executedStdoutPath, "synthetic stdout`n")
+    [IO.File]::WriteAllText($executedStderrPath, "synthetic stderr`n")
+    $executedStdout = [IO.Path]::GetRelativePath($root, $executedStdoutPath)
+    $executedStderr = [IO.Path]::GetRelativePath($root, $executedStderrPath)
+    $before = $results.Count
+    try {
+        Add-Result '__shape-executed' 'pass' 'synthetic result-shape self-test' $true `
+            -CommandLine 'synthetic command' -Stdout $executedStdout -Stderr $executedStderr
+        $row = $results[$before]
+        if (-not (Assert-ResultCommandEvidence $row "Synthetic result '__shape-executed'") `
+            -or [string]$row.command -cne 'synthetic command' `
+            -or [string]$row.stdout -cne $executedStdout `
+            -or [string]$row.stderr -cne $executedStderr `
+            -or [string]$row.stdoutSha256 -cne (Get-FileSha256 $executedStdoutPath) `
+            -or [string]$row.stderrSha256 -cne (Get-FileSha256 $executedStderrPath)) {
+            throw 'Synthetic executed result did not preserve its command/log evidence and hashes.'
+        }
+    }
+    finally {
+        while ($results.Count -gt $before) {
+            $results.RemoveAt($results.Count - 1)
+        }
+        Remove-Item -LiteralPath $executedStdoutPath, $executedStderrPath -Force -ErrorAction SilentlyContinue
+    }
+    $assertions++
+
+    $invalidCases = @(
+        @{ Name = 'empty-command'; Command = ''; Stdout = $null; Stderr = $null },
+        @{ Name = 'whitespace-command'; Command = '   '; Stdout = $null; Stderr = $null },
+        @{ Name = 'empty-stdout'; Command = 'synthetic command'; Stdout = ''; Stderr = 'synthetic.stderr.log' },
+        @{ Name = 'whitespace-stderr'; Command = 'synthetic command'; Stdout = 'synthetic.stdout.log'; Stderr = "`t" })
+    foreach ($case in $invalidCases) {
+        $before = $results.Count
+        $rejected = $false
+        try {
+            Add-Result "__shape-$($case.Name)" 'not-qualified' 'synthetic invalid result-shape self-test' $false `
+                -CommandLine $case.Command -Stdout $case.Stdout -Stderr $case.Stderr
+        }
+        catch {
+            $rejected = $true
+        }
+        finally {
+            while ($results.Count -gt $before) {
+                $results.RemoveAt($results.Count - 1)
+            }
+        }
+        if (-not $rejected) {
+            throw "Result-shape self-test accepted $($case.Name) pseudo-evidence."
+        }
+        $assertions++
+    }
+    return $assertions
 }
 
 function Test-Definition {
@@ -1989,8 +2124,9 @@ try {
 
     if ($ValidateOnly) {
         $performanceParserAssertions = Invoke-LinuxTinyPerformanceParserSelfTest $linuxTinyConfig $releaseConfig
+        $resultCommandEvidenceAssertions = Invoke-ResultCommandEvidenceSelfTest
         Add-Result 'validation-plan' 'pass' `
-            "configuration and structural inputs validated; linuxTinyPerformanceParserAssertions=$performanceParserAssertions; no restore, build, tests, interop, sample, performance workload, or pack executed"
+            "configuration and structural inputs validated; linuxTinyPerformanceParserAssertions=$performanceParserAssertions; resultCommandEvidenceAssertions=$resultCommandEvidenceAssertions; no restore, build, tests, interop, sample, performance workload, or pack executed"
         $completionProvenance = Get-RepositoryProvenance
         Assert-ProvenanceStable $repositoryProvenance $completionProvenance
     }
@@ -2230,6 +2366,9 @@ finally {
         catch {
             $completionAssemblyManifest = @()
         }
+    }
+    foreach ($result in $results) {
+        [void](Assert-ResultCommandEvidence $result "OS validation result '$($result.name)' before serialization")
     }
     $requiredStatuses = @($results | Where-Object required | ForEach-Object status)
     $overallStatus = if ($ValidateOnly -and $requiredStatuses -notcontains 'fail') {
