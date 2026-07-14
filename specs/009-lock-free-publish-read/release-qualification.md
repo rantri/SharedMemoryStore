@@ -11,10 +11,10 @@ the authoritative final record, even when it reports `failed`,
 
 | Tier or platform | Authoritative raw evidence |
 |---|---|
-| PR | [`009-final-r3-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json) and [`009-final-r3-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json) |
-| Nightly | [`009-final-r3-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json) and [`009-final-r3-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json) |
-| Release | [`009-final-r3-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-release/summary.json), [`009-final-r3-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json), and the runner-created Windows [`009-final-r3-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r3-release/os-validation.json) |
-| Linux x64 | [`009-final-r3-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json) |
+| PR | [`009-final-r4-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json) and [`009-final-r4-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json) |
+| Nightly | [`009-final-r4-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json) and [`009-final-r4-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json) |
+| Release | [`009-final-r4-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-release/summary.json), [`009-final-r4-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json), and the runner-created Windows [`009-final-r4-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r4-release/os-validation.json) |
+| Linux x64 | [`009-final-r4-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json) |
 
 The predicate is:
 
@@ -41,7 +41,7 @@ The predicate is:
 5. The release `sync-probe.json` has executable schema 7, exact configured
    rows/trials/counts, matching source and tested-assembly provenance, zero
    correctness failures, and every threshold accepted by the runner. The
-   independent review in `code-review.md` has no unresolved high-severity
+   independent review in `code-review.md` has no unresolved High or Medium
    finding for the same committed source. The Linux OS report additionally has
    one required `linux-tiny-performance` row and the Windows OS report has the
    same row as optional/not-qualified. The Linux row binds schema-7 raw JSON for
@@ -68,17 +68,21 @@ Run from the clean commit. The ignored `artifacts/` tree retains authoritative
 raw evidence without changing repository provenance.
 
 ```powershell
+# Linux x64 prerequisite probe; it creates no final artifact on failure
+wsl -d Ubuntu -- bash -lc 'set -e; dotnet --info >/dev/null; dotnet workload list >/dev/null; command -v git >/dev/null; command -v pwsh >/dev/null; command -v cmake >/dev/null; command -v python >/dev/null; command -v docker >/dev/null; command -v strace >/dev/null; docker version --format "{{.Server.Version}}" >/dev/null'
+if ($LASTEXITCODE -ne 0) { throw 'Linux prerequisite probe failed.' }
+
 # Linux x64, explicitly inside Ubuntu on the same clean commit
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r3-linux-x64.json'
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r4-linux-x64.json'
 
 # Windows x64, on that same clean commit
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier pr `
-  -EvidenceRunId 009-final-r3-pr
+  -EvidenceRunId 009-final-r4-pr
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier nightly `
-  -EvidenceRunId 009-final-r3-nightly
+  -EvidenceRunId 009-final-r4-nightly
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier release `
-  -EvidenceRunId 009-final-r3-release `
-  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r3-linux-x64.json
+  -EvidenceRunId 009-final-r4-release `
+  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r4-linux-x64.json
 ```
 
 The configured release run is the exact 100,000,000-operation mixed workload,
@@ -220,3 +224,29 @@ passed. That diagnostic report is
 `AE16F3AED1A9E0FE5113F20AD3AB2F28AE194E5CF0717F6372BF87362A51666C`.
 It proves correct platform selection and orchestration only; it is not final
 qualification evidence.
+
+## Rejected R3 final prerequisite
+
+The third candidate is preserved at
+`artifacts/lock-free-os-validation/009-final-r3-linux-x64.json`. It is an
+executable Linux-x64 schema-3 `fail` report with SHA-256
+`59419F78D559829A0E3B47AE1FAF334B5B79E83CAF8004646A1FE3687C5B86D5`
+and exact clean provenance for commit
+`4a972ce095fd79b76ffaa77778c4f6d1a7011921`, tree
+`3d7a22b9c12dbb0e20fb85b65b75df9e2fb3be87`, and source-manifest SHA-256
+`117C476DD55EA6148C16D15707528B2503ECCAB75FF9D31FF4D6DC0BBC6B4795`.
+All nine structural self-tests passed, then the first executable row,
+`dotnet --info`, exited 1 before restore or any store workload. Ubuntu's healthy
+package-managed SDK 10.0.109 was reading a stale user-local workload set
+10.0.102 with missing manifests. `dotnet workload repair` correctly reported no
+installed workloads and made no change; `dotnet workload update` advanced the
+empty-workload manifest set to 10.0.109.1, after which both `dotnet --info` and
+`dotnet workload list` exited 0.
+
+The repaired environment then passed the executable Linux-x64 architecture
+diagnostic at
+`artifacts/lock-free-os-validation/009-r4-preflight-linux-x64.json`: clean
+`dotnet-info`, restore, build, and 45/45 architecture tests. Its report SHA-256
+is `799A41E8181AA299E0E0E925E3F2818935F2F1842EA94FC66C1AC6E1D6EA7F0A`.
+This closes the environment failure but remains diagnostic only. The R3 path is
+immutable and rejected; only the full R4 sequence above can qualify.

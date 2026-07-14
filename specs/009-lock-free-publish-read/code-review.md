@@ -432,9 +432,12 @@ It passed 1,014/1,014 tests, exact churn, all 50 SC-017 configurations, and all
 108 suspension rows. Its summary SHA-256 is
 `3D543FBF5E4C4A5C514C1C3309565F0B2575126E5B176B79E347802AC46E331A`.
 Independent production, qualification-harness, and test/spec re-reviews found
-no unresolved High or Medium issue. The sole accepted Low boundary remains the
-bounded Linux cold-open cost of scanning a flat rendezvous namespace after
-extreme historical store-name churn; it does not touch an open store's hot path.
+no unresolved High or Medium issue. The accepted Low observations are limited
+to generation-fenced, non-visible directory residue after a precisely timed
+crash, which recovery/reuse can clean and which cannot project or overwrite
+bytes, and the bounded Linux cold-open cost of scanning a flat rendezvous
+namespace after extreme historical store-name churn, which does not touch an
+open store's hot path.
 These results establish convergence only. The decision remains pending until
 the new final paths below pass on one immutable source state.
 
@@ -460,6 +463,27 @@ structural row with report SHA-256
 That validates host selection and orchestration, not release evidence. The R2
 exact-HEAD product, harness, and freeze reviews found no new High or Medium
 issue; the accepted cold-open Low remains unchanged.
+
+### Rejected R3 final prerequisite
+
+The corrected Ubuntu command reached Linux x64, but the R3 report stopped at
+its first executable row before restore or any store workload. `dotnet --info`
+exited 1 because the package-managed SDK 10.0.109 consumed stale user-local
+workload-set 10.0.102 metadata with missing manifests. The immutable report is
+`artifacts/lock-free-os-validation/009-final-r3-linux-x64.json`, SHA-256
+`59419F78D559829A0E3B47AE1FAF334B5B79E83CAF8004646A1FE3687C5B86D5`.
+All nine structural self-tests passed; no production row ran. This is an
+environment prerequisite failure, not a product or harness finding, but it
+rejects R3 in full.
+
+With no workload installed, `dotnet workload repair` was correctly a no-op.
+`dotnet workload update` advanced the user-local manifest set to 10.0.109.1.
+The repaired executable Linux architecture diagnostic then passed
+`dotnet --info`, clean restore/build, and 45/45 tests; its report SHA-256 is
+`799A41E8181AA299E0E0E925E3F2818935F2F1842EA94FC66C1AC6E1D6EA7F0A`.
+The R4 sequence adds a non-artifact-consuming prerequisite probe before
+allocating its immutable Linux path. Product code and the accepted cold-open
+Low are unchanged.
 
 ## Accepted design boundaries
 
@@ -494,15 +518,15 @@ These are intentional contract boundaries, not open findings:
 
 All of the following prelinked artifacts must exist and report success:
 
-1. [artifacts/lock-free-qualification/009-final-r3-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json)
-3. [artifacts/lock-free-qualification/009-final-r3-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json)
-4. [artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-r3-release/summary.json](../../artifacts/lock-free-qualification/009-final-r3-release/summary.json)
-6. [artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json)
-7. [artifacts/lock-free-qualification/009-final-r3-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r3-release/os-validation.json)
-8. [artifacts/lock-free-os-validation/009-final-r3-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.json)
-9. [artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json)
+1. [artifacts/lock-free-qualification/009-final-r4-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json)
+2. [artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-r4-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-r4-release/summary.json](../../artifacts/lock-free-qualification/009-final-r4-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-r4-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r4-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-r4-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 

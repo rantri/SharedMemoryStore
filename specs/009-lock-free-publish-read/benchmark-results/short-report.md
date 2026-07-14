@@ -4,10 +4,10 @@
 
 This report is frozen before the one-shot runs and is not edited afterward.
 The short convergence conclusion is **PASS if and only if** the final PR
-[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json)
+[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json)
 has schema 4, tier `pr`, `validationOnly: false`, and `overallStatus: passed`,
 and its hashed
-[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json)
+[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json)
 passes every exact row, count, provenance, correctness, raw-visibility, and
 short-performance check enforced by the runner. Its start/completion provenance
 must be identical and clean, and must match the final nightly and release
@@ -15,9 +15,9 @@ summaries. Otherwise the short conclusion is **FAIL** or **NOT QUALIFIED** as
 reported by the raw JSON; this tracked report cannot promote it.
 
 The same clean commit then has to pass the immutable
-[`009-final-r3-nightly`](../../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json)
+[`009-final-r4-nightly`](../../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json)
 and
-[`009-final-r3-release`](../../../artifacts/lock-free-qualification/009-final-r3-release/summary.json)
+[`009-final-r4-release`](../../../artifacts/lock-free-qualification/009-final-r4-release/summary.json)
 gates before the short result can contribute to release qualification. Raw
 JSON remains in the ignored immutable `artifacts/` tree; no copy is maintained
 under tracked `specs/` and no tracked post-run edit is permitted.
@@ -47,6 +47,15 @@ no final Linux evidence. The corrected Ubuntu invocation passed Linux-x64
 validation-only orchestration with SHA-256
 `AE16F3AED1A9E0FE5113F20AD3AB2F28AE194E5CF0717F6372BF87362A51666C`;
 that is an invocation check only, not a benchmark or final result.
+
+The R3 Linux attempt is also preserved, SHA-256
+`59419F78D559829A0E3B47AE1FAF334B5B79E83CAF8004646A1FE3687C5B86D5`.
+It reached Linux x64 but stopped at `dotnet --info` before workloads because a
+stale user-local workload manifest set remained after an SDK package upgrade.
+After updating that empty-workload set, the executable Linux architecture
+preflight passed restore/build and 45/45 tests; its SHA-256 is
+`799A41E8181AA299E0E0E925E3F2818935F2F1842EA94FC66C1AC6E1D6EA7F0A`.
+Both remain diagnostic only.
 
 Two still-earlier one-second smoke artifacts are also retained:
 
