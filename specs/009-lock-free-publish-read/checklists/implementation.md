@@ -13,26 +13,26 @@ allowed. See the complete predicate and SC mapping in
 [`release-qualification.md`](../release-qualification.md).
 
 - [x] PR is conditionally passed iff
-  [`009-final-r4-pr/summary.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json)
+  [`009-final-r5-pr/summary.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json)
   is schema 4 `passed` and its hashed
-  [`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json)
+  [`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json)
   passes exact short-matrix, correctness, and provenance validation.
 - [x] Nightly is conditionally passed iff
-  [`009-final-r4-nightly/summary.json`](../../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json)
+  [`009-final-r5-nightly/summary.json`](../../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json)
   is schema 4 `passed`, exact configured counts pass, and its
-  [`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json)
+  [`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json)
   is hash-bound to the same clean source.
 - [x] Release is conditionally passed iff
-  [`009-final-r4-release/summary.json`](../../../artifacts/lock-free-qualification/009-final-r4-release/summary.json)
+  [`009-final-r5-release/summary.json`](../../../artifacts/lock-free-qualification/009-final-r5-release/summary.json)
   is schema 4 `passed` and exact long counts, three 60-second trials, waits,
   recovery, churn, race, allocation, copy, and threshold gates all pass.
 - [x] Windows x64 is conditionally passed iff the runner-created
-  [`os-validation.json`](../../../artifacts/lock-free-qualification/009-final-r4-release/os-validation.json)
+  [`os-validation.json`](../../../artifacts/lock-free-qualification/009-final-r5-release/os-validation.json)
   is schema 3 `pass`, qualified x64, and every required row passes.
 - [x] Linux x64 is conditionally passed iff
-  [`009-final-r4-linux-x64.json`](../../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.json)
+  [`009-final-r5-linux-x64.json`](../../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.json)
   is schema 3 `pass`, qualified x64, every required row passes, and its required
-  [`linux-tiny-performance.json`](../../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json)
+  [`linux-tiny-performance.json`](../../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json)
   is schema 7 with the exact 2-profile/2-scenario/1-and-8-process/3-trial release
   matrix, zero failures, `[0,63]` mask-valid complete affinity, coherent paired
   successes per completed cycle, no checksum/corruption evidence, reproducible
@@ -66,6 +66,7 @@ Historical Windows/Linux tests, bounded SC-011 races/generated histories, and
 native/Python runs are explicitly diagnostic for their producing snapshots.
 The original `009-final-*` pass/failure pair, every `009-r2-pre-final*`
 artifact, the rejected Windows-host `009-final-r2-linux-x64` attempt, the
-stale-workload-set `009-final-r3-linux-x64` attempt, and the unbound reservation
-timing observation are likewise diagnostic only. Their stale counts are not
-current-tree claims and none can make an R4 conditional checkbox true by itself.
+stale-workload-set `009-final-r3-linux-x64` attempt, the R4 Linux pass/R4 PR
+test-contract failure pair, and the unbound reservation timing observation are
+likewise diagnostic only. Their stale counts are not current-tree claims and
+none can make an R5 conditional checkbox true by itself.

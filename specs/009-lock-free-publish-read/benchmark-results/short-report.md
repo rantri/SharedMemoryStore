@@ -4,10 +4,10 @@
 
 This report is frozen before the one-shot runs and is not edited afterward.
 The short convergence conclusion is **PASS if and only if** the final PR
-[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json)
+[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json)
 has schema 4, tier `pr`, `validationOnly: false`, and `overallStatus: passed`,
 and its hashed
-[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json)
+[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json)
 passes every exact row, count, provenance, correctness, raw-visibility, and
 short-performance check enforced by the runner. Its start/completion provenance
 must be identical and clean, and must match the final nightly and release
@@ -15,9 +15,9 @@ summaries. Otherwise the short conclusion is **FAIL** or **NOT QUALIFIED** as
 reported by the raw JSON; this tracked report cannot promote it.
 
 The same clean commit then has to pass the immutable
-[`009-final-r4-nightly`](../../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json)
+[`009-final-r5-nightly`](../../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json)
 and
-[`009-final-r4-release`](../../../artifacts/lock-free-qualification/009-final-r4-release/summary.json)
+[`009-final-r5-release`](../../../artifacts/lock-free-qualification/009-final-r5-release/summary.json)
 gates before the short result can contribute to release qualification. Raw
 JSON remains in the ignored immutable `artifacts/` tree; no copy is maintained
 under tracked `specs/` and no tracked post-run edit is permitted.
@@ -31,7 +31,7 @@ and are not asserted for the current tree. These are diagnostic results only:
 they are not one provenance-matched final sequence and do not establish any
 final performance threshold.
 
-The latest clean short-tier diagnostic, `009-r2-pre-final4-pr`, passed all 24
+The earlier clean R2 short-tier diagnostic, `009-r2-pre-final4-pr`, passed all 24
 qualification rows on commit `ca200238423877044d841a3b92f93edb37385d46`:
 1,014/1,014 tests, the one exact 10,000-cycle churn row, all 50 directory
 configurations, and 108/108 suspension rows. Its summary SHA-256 is
@@ -56,6 +56,23 @@ After updating that empty-workload set, the executable Linux architecture
 preflight passed restore/build and 45/45 tests; its SHA-256 is
 `799A41E8181AA299E0E0E925E3F2818935F2F1842EA94FC66C1AC6E1D6EA7F0A`.
 Both remain diagnostic only.
+
+The R4 Linux candidate passed all 28 required rows and the complete 1,014-test
+suite on commit `b19d982b76f2f54ebfb9f72e0f2aef85eb2632b8`. Its report and raw
+Linux tiny-performance SHA-256 values are
+`1346A080DFC7B397437F26088C16C074B9BA1AE3A4E3515D2E07D2DDAA7E2BDE`
+and `2716C25672FDB332345059F83FAFDD0063E9CE8C6635B7FE198E9A4053FF6D41`.
+The same-source R4 PR summary then failed with 1,013/1,014 tests because the
+disposal race used a current-process lease-recovery override without its
+required process-wide quiescence. The failed summary SHA-256 is
+`7A3754C670A3622C569CB5E6AFFF479C9C668D20975E31641113337213FAD177`;
+it emitted no `sync-probe.json`, and R4 nightly/release were not run. The
+test-only correction uses normal concurrent recovery for leases and
+reservations and avoids dereferencing borrowed spans during a disposal race.
+The subsequent clean `009-r5-pre-final-pr` diagnostic passed all 24 gates and
+1,014/1,014 tests on commit `527d451bd124dbbe8880fcb909b6e1bd70ad222a`.
+All of these R4/R5-pre-final results remain diagnostic; only the R5 final paths
+linked above can determine the frozen conclusion.
 
 Two still-earlier one-second smoke artifacts are also retained:
 

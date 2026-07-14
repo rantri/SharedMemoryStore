@@ -11,10 +11,10 @@ the authoritative final record, even when it reports `failed`,
 
 | Tier or platform | Authoritative raw evidence |
 |---|---|
-| PR | [`009-final-r4-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json) and [`009-final-r4-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json) |
-| Nightly | [`009-final-r4-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json) and [`009-final-r4-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json) |
-| Release | [`009-final-r4-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r4-release/summary.json), [`009-final-r4-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json), and the runner-created Windows [`009-final-r4-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r4-release/os-validation.json) |
-| Linux x64 | [`009-final-r4-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json) |
+| PR | [`009-final-r5-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json) and [`009-final-r5-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json) |
+| Nightly | [`009-final-r5-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json) and [`009-final-r5-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json) |
+| Release | [`009-final-r5-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-release/summary.json), [`009-final-r5-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json), and the runner-created Windows [`009-final-r5-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r5-release/os-validation.json) |
+| Linux x64 | [`009-final-r5-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json) |
 
 The predicate is:
 
@@ -73,16 +73,16 @@ wsl -d Ubuntu -- bash -lc 'set -e; dotnet --info >/dev/null; dotnet workload lis
 if ($LASTEXITCODE -ne 0) { throw 'Linux prerequisite probe failed.' }
 
 # Linux x64, explicitly inside Ubuntu on the same clean commit
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r4-linux-x64.json'
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r5-linux-x64.json'
 
 # Windows x64, on that same clean commit
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier pr `
-  -EvidenceRunId 009-final-r4-pr
+  -EvidenceRunId 009-final-r5-pr
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier nightly `
-  -EvidenceRunId 009-final-r4-nightly
+  -EvidenceRunId 009-final-r5-nightly
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier release `
-  -EvidenceRunId 009-final-r4-release `
-  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r4-linux-x64.json
+  -EvidenceRunId 009-final-r5-release `
+  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r5-linux-x64.json
 ```
 
 The configured release run is the exact 100,000,000-operation mixed workload,
@@ -124,7 +124,7 @@ override a failing or missing field.
 | SC-017 | Release `directory-generation-stress` is `passed` with `qualification: sc017-qualified-count-and-correctness` and exactly 1,000,000 repetitions across all configured mutation checkpoints. |
 | SC-018 | All three release sticky-overflow-miss trials meet the exact 4,096-slot/10,000-cycle/16,384-sample shape, observe real spill and cleanup, drain occupancy, add zero late scans, have zero failures, and report late/early p99 at most 2.0. |
 
-## Diagnostic evidence available before the freeze
+## Diagnostic and rejected-candidate lineage
 
 Historical development runs include Windows release tests, bounded SC-011
 production races and generated histories, native/Python checks, and focused
@@ -249,4 +249,47 @@ diagnostic at
 `dotnet-info`, restore, build, and 45/45 architecture tests. Its report SHA-256
 is `799A41E8181AA299E0E0E925E3F2818935F2F1842EA94FC66C1AC6E1D6EA7F0A`.
 This closes the environment failure but remains diagnostic only. The R3 path is
-immutable and rejected; only the full R4 sequence above can qualify.
+immutable and rejected.
+
+## Rejected R4 candidate and disposal test-contract correction
+
+The R4 Linux report is preserved at
+`artifacts/lock-free-os-validation/009-final-r4-linux-x64.json`. It passed on
+clean commit `b19d982b76f2f54ebfb9f72e0f2aef85eb2632b8`, tree
+`c5a94aeff5f098915f77ef9a0af8ed8e8f730571`, empty-status SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+and source-manifest SHA-256
+`7033447087954594BC982FF2AD859D282527B1A2F342199F404CA9358AEAE921`.
+The schema-3 report passed all 28 required rows, the complete 1,014-test suite,
+and the exact Linux tiny-operation matrix; its optional Docker PID-namespace
+pause row was `not-qualified`. The report, evidence-tree, and raw-performance
+SHA-256 values are respectively
+`1346A080DFC7B397437F26088C16C074B9BA1AE3A4E3515D2E07D2DDAA7E2BDE`,
+`6DEEBF6450AA909DA6D81E1F9725F9B3CD8DFE0534AE24FE7FC2985E828A5596`,
+and `2716C25672FDB332345059F83FAFDD0063E9CE8C6635B7FE198E9A4053FF6D41`.
+
+The same-source `artifacts/lock-free-qualification/009-final-r4-pr/summary.json`
+is schema 4 `failed`. It passed 1,013/1,014 tests—Contract 117/117,
+Linearizability 83/83, Interop 75/75, Unit 437/437, and Integration 301/302—then
+correctly rejected the sole failure,
+`LockFreeDisposalIntegrationTests.EveryOperationAndTokenCallbackHasOnlyDocumentedDisposalRaceOutcomes(operation: RecoverLeases)`.
+Its summary SHA-256 is
+`7A3754C670A3622C569CB5E6AFFF479C9C668D20975E31641113337213FAD177`.
+The failed PR emitted no `sync-probe.json`; R4 nightly and release were not run.
+
+The theory had selected `RecoverCurrentProcessLeases: true` while a second
+current-process handle performed ordinary lease work. That administrative
+override explicitly requires process-wide quiescence, so reclaiming the newly
+acquired lease was permitted and the test schedule was outside contract. Its
+reservation sibling carried the same latent defect. The test-only correction
+uses both normal concurrent-safe recovery modes and stops dereferencing borrowed
+projection bytes because racing disposal may invalidate their lifetime. Production
+code, layout, lock freedom, and the public recovery contract are unchanged.
+Focused repetition, the disposal class, Integration, the full solution, and an
+independent H0/M0/L0 review passed. The clean provenance-bound
+`009-r5-pre-final-pr` diagnostic then passed all 24 gates and 1,014/1,014 tests
+on commit `527d451bd124dbbe8880fcb909b6e1bd70ad222a`.
+
+R4 is rejected in full despite its Linux pass. Only the complete R5 sequence
+above can qualify, and the R4 Linux result cannot be reused because R5 must bind
+both platforms to one identical source manifest.

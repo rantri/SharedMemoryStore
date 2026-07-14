@@ -15,8 +15,11 @@ pre-final qualification grounds. Independent re-review of the reclamation,
 cold-open, Linux record-lock lifetime, benchmark, and evidence-importer deltas
 found no unresolved High or Medium issue in the production implementation or
 release harness. The complete revised Linux one/eight-process matrix and all
-required Linux OS/interoperability rows passed on a clean pre-final commit. This
-is not yet release approval: every immutable artifact and
+required Linux OS/interoperability rows passed on the clean R4 candidate, but
+R4 was rejected when its PR run exposed a disposal-test contract violation.
+The test-only correction and a clean provenance-bound PR diagnostic have since
+passed independent review and all configured gates. This is not yet release
+approval: every immutable artifact and
 provenance condition in [Final evidence gate](#final-evidence-gate) must still
 pass on one identical clean source state. A missing, failed, provenance-mismatched,
 or incomplete gate leaves the feature unapproved for release.
@@ -61,6 +64,10 @@ qualification harnesses.
 - Pre-final evidence recomputation: **reviewed clean** after both PowerShell
   median helpers adopted explicit midpoint-floor semantics and distinct
   odd/even self-tests; the real three-trial raw report recomputes exactly.
+- R4 disposal-test correction: **reviewed clean**. The concurrent theory now
+  uses normal non-override lease/reservation recovery and inspects only borrowed
+  span shape after racing disposal; exact content remains covered on the live
+  second handle and in dedicated data-path suites. No production code changed.
 
 ### Cold-open initialization-authority closure
 
@@ -485,6 +492,55 @@ The R4 sequence adds a non-artifact-consuming prerequisite probe before
 allocating its immutable Linux path. Product code and the accepted cold-open
 Low are unchanged.
 
+### Rejected R4 candidate and disposal test-contract correction
+
+R4 used clean commit `b19d982b76f2f54ebfb9f72e0f2aef85eb2632b8`, tree
+`c5a94aeff5f098915f77ef9a0af8ed8e8f730571`, empty-status SHA-256
+`E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`,
+and source-manifest SHA-256
+`7033447087954594BC982FF2AD859D282527B1A2F342199F404CA9358AEAE921`.
+Its Linux report passed all 28 required rows, the 1,014-test suite, native,
+Python, Docker, samples, package validation, crash/trace/SIGSTOP gates, and the
+exact raw performance matrix. Independent recomputation found H0/M0/L0. The
+report, evidence tree, and raw-performance SHA-256 values are respectively
+`1346A080DFC7B397437F26088C16C074B9BA1AE3A4E3515D2E07D2DDAA7E2BDE`,
+`6DEEBF6450AA909DA6D81E1F9725F9B3CD8DFE0534AE24FE7FC2985E828A5596`,
+and `2716C25672FDB332345059F83FAFDD0063E9CE8C6635B7FE198E9A4053FF6D41`.
+
+The same-source R4 PR summary correctly failed after 1,013/1,014 tests. Its sole
+failure was the `RecoverLeases` row of
+`EveryOperationAndTokenCallbackHasOnlyDocumentedDisposalRaceOutcomes`; the
+summary SHA-256 is
+`7A3754C670A3622C569CB5E6AFFF479C9C668D20975E31641113337213FAD177`.
+The theory raced `RecoverCurrentProcessLeases: true` with a second same-process
+handle's ordinary lease work even though the administrative override requires
+process-wide quiescence. The reservation row carried the symmetric latent
+defect. A legal recovery could therefore invalidate the second handle's lease
+between acquire and projection; this was an invalid test schedule, not a store
+corruption or progress failure. The same theory also dereferenced borrowed span
+bytes even though racing disposal could end their public lifetime.
+
+The correction is confined to the disposal integration test: both concurrent
+recovery cases now select `false`, and projection races assert only the safe
+empty/full length outcome. Content is still verified through the unaffected
+second handle and independent publication/acquisition suites. An unbound local
+stress observation completed 50 repeated 15-row theory executions; it is not
+promoted as durable evidence. The provenance-bound run passed 29/29 disposal-
+class tests, Integration 302/302, the full solution 1,014/1,014, and independent
+diff review closed with H0/M0/L0.
+The clean official `009-r5-pre-final-pr` diagnostic then passed all 24 gates on
+commit `527d451bd124dbbe8880fcb909b6e1bd70ad222a`, tree
+`845d5f7f1ec7e816e96de6531810bf01549e8f12`, and source-manifest SHA-256
+`6988C966FD0514309635708EA5EB898F0B500D83609507EA6C30B63C55F228D7`.
+Its summary and synchronization-probe SHA-256 values are
+`A7C28308FCF34CF8D5703CAAAFC9039CEA839EE4AF41CBA4752B9A3455B4C8EF`
+and `4ECA1C4A75DFF514FBD3AB54D6533A3DBB77DF5AD024C5A2311287301E9A8DA8`.
+
+R4 remains rejected because its PR tier failed and emitted no sync probe; its
+nightly and release tiers were not run. The R4 Linux pass is valuable diagnostic
+evidence but cannot qualify the changed R5 source. Production synchronization,
+layout, public API, and the accepted Low observations remain unchanged.
+
 ## Accepted design boundaries
 
 These are intentional contract boundaries, not open findings:
@@ -518,15 +574,15 @@ These are intentional contract boundaries, not open findings:
 
 All of the following prelinked artifacts must exist and report success:
 
-1. [artifacts/lock-free-qualification/009-final-r4-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r4-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-pr/sync-probe.json)
-3. [artifacts/lock-free-qualification/009-final-r4-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r4-nightly/summary.json)
-4. [artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-nightly/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-r4-release/summary.json](../../artifacts/lock-free-qualification/009-final-r4-release/summary.json)
-6. [artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r4-release/sync-probe.json)
-7. [artifacts/lock-free-qualification/009-final-r4-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r4-release/os-validation.json)
-8. [artifacts/lock-free-os-validation/009-final-r4-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.json)
-9. [artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r4-linux-x64.evidence/linux-tiny-performance.json)
+1. [artifacts/lock-free-qualification/009-final-r5-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json)
+2. [artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-r5-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-r5-release/summary.json](../../artifacts/lock-free-qualification/009-final-r5-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-r5-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r5-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-r5-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 
