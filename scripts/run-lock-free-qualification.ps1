@@ -34,6 +34,8 @@ $selected = $config.tiers.$Tier
 if ($null -eq $selected) {
     throw "Qualification tier '$Tier' is absent from $configPath."
 }
+$churnTestSourceRelativePath = 'tests/SharedMemoryStore.IntegrationTests/LockFreeChurnIntegrationTests.cs'
+$churnTestNamespace = 'SharedMemoryStore.IntegrationTests'
 
 $outputRoot = if ([IO.Path]::IsPathFullyQualified($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
@@ -1092,6 +1094,55 @@ function Invoke-Sc017ConfigurationVerifierSelfTest {
     return 2
 }
 
+function Get-ChurnQualificationTestContract {
+    param([Parameter(Mandatory)]$QualificationConfig)
+
+    $assertions = @(Get-RequiredPropertyValue $QualificationConfig `
+        'requiredLeakAssertions' 'qualification config')
+    $churnAssertions = @($assertions | Where-Object {
+        [string]$_.evidenceStep -ceq 'churn'
+    })
+    if ($churnAssertions.Count -ne 2) {
+        throw "Qualification config must map exactly two owner/leak assertions to the churn evidence step; actual=$($churnAssertions.Count)."
+    }
+
+    $distinctMappings = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($assertion in $churnAssertions) {
+        $mapping = Get-StrictString $assertion 'testNameContains' `
+            "qualification leak assertion '$($assertion.id)'"
+        [void]$distinctMappings.Add($mapping)
+    }
+    if ($distinctMappings.Count -ne 1) {
+        throw 'Every churn owner/leak assertion must map to one identical test method.'
+    }
+
+    $mapping = @($distinctMappings)[0]
+    $match = [regex]::Match(
+        $mapping,
+        '^(?<class>[A-Za-z_][A-Za-z0-9_]*)\.(?<method>[A-Za-z_][A-Za-z0-9_]*)$',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    if (-not $match.Success -or $match.Groups['class'].Value -cne 'LockFreeChurnIntegrationTests') {
+        throw "Configured churn evidence test '$mapping' must name one method on LockFreeChurnIntegrationTests."
+    }
+
+    $sourcePath = Join-Path $root $churnTestSourceRelativePath
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $method = $match.Groups['method'].Value
+    $methodPattern = '(?ms)^[ \t]*\[Fact\][ \t]*\r?\n' +
+        '(?:[ \t]*\[[^\r\n]+\][ \t]*\r?\n)*' +
+        '[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task(?:<[^>\r\n]+>)?)[ \t]+' +
+        [regex]::Escape($method) + '[ \t]*\('
+    if ([regex]::Matches($source, $methodPattern).Count -ne 1) {
+        throw "Configured churn evidence method '$mapping' must identify exactly one [Fact] in $churnTestSourceRelativePath."
+    }
+
+    return [pscustomobject]@{
+        testNameFragment = $mapping
+        fullyQualifiedName = "$churnTestNamespace.$mapping"
+        sourcePath = $churnTestSourceRelativePath
+    }
+}
+
 function Assert-QualificationConfiguration {
     Assert-KnownProvenance $repositoryProvenance 'start'
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
@@ -1156,6 +1207,7 @@ function Assert-QualificationConfiguration {
             throw "Leak assertion '$($assertion.id)' lacks an executable test mapping."
         }
     }
+    [void](Get-ChurnQualificationTestContract $config)
 
     Assert-ExactStringSet 'referenceModelFamilies' @($config.completionEvidence.referenceModelFamilies) @(
         'publish-publish', 'publish-reserve', 'reserve-reserve', 'commit-acquire',
@@ -1323,6 +1375,147 @@ function Assert-TrxStepEvidence {
         'nonPassed=0',
         "trxFiles=$(@($rows.file | Sort-Object -Unique).Count)")
     return $passed
+}
+
+function Assert-ExactPassedTrxRows {
+    param(
+        [Parameter(Mandatory)][object[]]$Rows,
+        [Parameter(Mandatory)][string[]]$ExpectedTestNames)
+
+    if ($ExpectedTestNames.Count -eq 0) {
+        throw 'Exact TRX verification requires at least one expected test name.'
+    }
+    $expected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($testName in $ExpectedTestNames) {
+        if ([string]::IsNullOrWhiteSpace($testName) -or -not $expected.Add($testName)) {
+            throw 'Exact TRX verification contains an empty or duplicate expected test name.'
+        }
+    }
+
+    $passed = @($Rows | Where-Object { [string]$_.outcome -ceq 'Passed' })
+    $nonPassed = @($Rows | Where-Object { [string]$_.outcome -cne 'Passed' })
+    if ($nonPassed.Count -ne 0) {
+        $outcomes = @($Rows | Group-Object outcome | Sort-Object Name | ForEach-Object {
+            "$($_.Name)=$($_.Count)"
+        }) -join ', '
+        throw "TRX evidence must contain only Passed rows; outcomes=[$outcomes]."
+    }
+    if ($passed.Count -ne $ExpectedTestNames.Count) {
+        throw "TRX evidence has $($passed.Count) passed rows; expected exactly $($ExpectedTestNames.Count)."
+    }
+
+    $actual = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($row in $passed) {
+        $testName = [string]$row.testName
+        if ([string]::IsNullOrWhiteSpace($testName) -or -not $actual.Add($testName)) {
+            throw "TRX evidence contains an empty or duplicate passed test name '$testName'."
+        }
+    }
+    if (-not $actual.SetEquals($expected)) {
+        throw "TRX evidence test names must be exactly [$($ExpectedTestNames -join ', ')]; actual [$(@($passed.testName) -join ', ')]."
+    }
+
+    return $passed
+}
+
+function Assert-ExactTrxStepEvidence {
+    param(
+        [Parameter(Mandatory)][string]$Step,
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string[]]$ExpectedTestNames)
+
+    $rows = @(Get-TrxResults $Directory)
+    try {
+        $passed = @(Assert-ExactPassedTrxRows $rows $ExpectedTestNames)
+    }
+    catch {
+        Fail-StepValidation $Step $_.Exception.Message
+    }
+    Set-StepValidation $Step 'passed' 'exact-trx-test-execution-proven' @(
+        "passed=$($passed.Count)",
+        'nonPassed=0',
+        "trxFiles=$(@($rows.file | Sort-Object -Unique).Count)",
+        "exactTestNames=$($ExpectedTestNames -join ',')")
+    return $passed
+}
+
+function Invoke-ChurnQualificationVerifierSelfTest {
+    $contract = Get-ChurnQualificationTestContract $config
+    $validRow = [pscustomobject]@{
+        testName = $contract.fullyQualifiedName
+        outcome = 'Passed'
+        file = 'synthetic.trx'
+    }
+    [void](Assert-ExactPassedTrxRows @($validRow) @($contract.fullyQualifiedName))
+    $assertions = 1
+
+    $differentMappings = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $differentMappings.requiredLeakAssertions[1].testNameContains =
+        'LockFreeChurnIntegrationTests.BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn'
+    $mappingRejected = $false
+    try {
+        [void](Get-ChurnQualificationTestContract $differentMappings)
+    }
+    catch {
+        $mappingRejected = $_.Exception.Message -like '*must map to one identical test method*'
+    }
+    if (-not $mappingRejected) {
+        throw 'Churn qualification verifier self-test accepted two distinct churn leak-evidence mappings.'
+    }
+    $assertions++
+
+    $missingMethod = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    foreach ($assertion in @($missingMethod.requiredLeakAssertions | Where-Object evidenceStep -CEQ 'churn')) {
+        $assertion.testNameContains = 'LockFreeChurnIntegrationTests.MissingConfiguredChurnEvidenceMethod'
+    }
+    $sourceRejected = $false
+    try {
+        [void](Get-ChurnQualificationTestContract $missingMethod)
+    }
+    catch {
+        $sourceRejected = $_.Exception.Message -match 'must identify exactly one \[Fact\]'
+    }
+    if (-not $sourceRejected) {
+        throw 'Churn qualification verifier self-test accepted a configured method absent from source.'
+    }
+    $assertions++
+
+    $siblingRow = [pscustomobject]@{
+        testName = "$churnTestNamespace.LockFreeChurnIntegrationTests.BenchmarkFixedKeysSurviveRepeatedEightProcessPublishRemoveChurn"
+        outcome = 'Passed'
+        file = 'synthetic.trx'
+    }
+    $wrongRow = [pscustomobject]@{
+        testName = "$churnTestNamespace.LockFreeChurnIntegrationTests.WrongChurnEvidence"
+        outcome = 'Passed'
+        file = 'synthetic.trx'
+    }
+    $nonPassedRow = [pscustomobject]@{
+        testName = $contract.fullyQualifiedName
+        outcome = 'Failed'
+        file = 'synthetic.trx'
+    }
+    $negativeCases = @(
+        [pscustomobject]@{ name = 'missing'; rows = @() },
+        [pscustomobject]@{ name = 'extra-sibling'; rows = @($validRow, $siblingRow) },
+        [pscustomobject]@{ name = 'wrong-only'; rows = @($wrongRow) },
+        [pscustomobject]@{ name = 'duplicate'; rows = @($validRow, $validRow) },
+        [pscustomobject]@{ name = 'non-passed'; rows = @($nonPassedRow) })
+    foreach ($case in $negativeCases) {
+        $rejected = $false
+        try {
+            [void](Assert-ExactPassedTrxRows @($case.rows) @($contract.fullyQualifiedName))
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "Churn exact-TRX verifier self-test accepted invalid case '$($case.name)'."
+        }
+        $assertions++
+    }
+
+    return $assertions
 }
 
 function Get-FamilyCompletionSeed {
@@ -4539,11 +4732,13 @@ $commonTest = @('-c', $Configuration, '--nologo', '--no-build', '--no-restore')
 
 try {
     Assert-QualificationConfiguration
+    $churnQualificationContract = Get-ChurnQualificationTestContract $config
     Add-EvidenceResult 'configuration-contract' 'passed' 'schema-and-contract-values-validated' @(
         "schemaVersion=$($config.schemaVersion)",
         "tier=$Tier",
         "performanceMode=$($selected.performanceMode)",
         "sc017TransitionCount=$(Get-Sc017SourceTransitionCount)",
+        "churnQualificationTest=$($churnQualificationContract.fullyQualifiedName)",
         "boundedOperationSlackMilliseconds=$($config.boundedOperationSlackMilliseconds)",
         "leakAssertions=$(@($config.requiredLeakAssertions).Count)") @([IO.Path]::GetRelativePath($root, $configPath))
 
@@ -4555,6 +4750,13 @@ try {
                 "sourceTransitionCount=$(Get-Sc017SourceTransitionCount)",
                 'all PR/nightly/release tier counts accepted',
                 'one-below-source transition count rejected')
+        $churnVerifierAssertions = Invoke-ChurnQualificationVerifierSelfTest
+        Add-EvidenceResult 'churn-qualification-verifier-self-test' 'passed' `
+            'configured-exact-test-and-trx-cardinality-positive-and-negative-cases-passed' @(
+                "assertions=$churnVerifierAssertions",
+                "exactTest=$($churnQualificationContract.fullyQualifiedName)",
+                'one configured mapping and one exact Passed row accepted',
+                'distinct/missing mappings plus missing/extra/wrong/duplicate/non-passed rows rejected')
         $markerParserAssertions = Invoke-ProductionRaceMarkerParserSelfTest
         Add-EvidenceResult 'production-race-marker-parser-self-test' 'passed' `
             'closed-marker-grammar-positive-and-negative-cases-passed' @(
@@ -4583,7 +4785,8 @@ try {
             'scripts/validate-lock-free-os.ps1',
             'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj',
             'tests/SharedMemoryStore.LinearizabilityTests/SharedMemoryStore.LinearizabilityTests.csproj',
-            'tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj')
+            'tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj',
+            $churnTestSourceRelativePath)
         $missing = @($requiredInputs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $root $_)) })
         if ($missing.Count -ne 0) {
             throw "Qualification dry-run inputs are missing: $($missing -join ', ')."
@@ -4702,15 +4905,17 @@ try {
         New-Item -ItemType Directory -Path $churnTrx | Out-Null
         Invoke-BoundedStep 'churn' $dotnet (@(
             'test', 'tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj') + $commonTest + @(
-            '--filter', 'FullyQualifiedName~LockFreeChurnIntegrationTests',
+            '--filter', "FullyQualifiedName=$($churnQualificationContract.fullyQualifiedName)",
             '--logger', 'trx', '--results-directory', $churnTrx)) @{
                 SMS_LOCK_FREE_CHURN_CYCLES = [int64]$selected.churnCycles
             }
-        Assert-TrxStepEvidence 'churn' $churnTrx 1 @(
-            'LockFreeChurnIntegrationTests.CollisionHeavyMultiProcessRemoveReuseRestoresCapacityAndKeepsLateLatencyBounded') | Out-Null
+        Assert-ExactTrxStepEvidence 'churn' $churnTrx @(
+            $churnQualificationContract.fullyQualifiedName) | Out-Null
         $churnResult = Get-StepResult 'churn'
         $churnResult.qualification = 'configured-churn-and-final-capacity-proof-passed'
-        $churnResult.validation = @($churnResult.validation) + "configuredCyclesPerWorker=$([int64]$selected.churnCycles)"
+        $churnResult.validation = @($churnResult.validation) + @(
+            "configuredCyclesPerWorker=$([int64]$selected.churnCycles)",
+            "configuredTest=$($churnQualificationContract.fullyQualifiedName)")
 
         $recoveryTrx = Join-Path $runRoot 'trx/recovery'
         New-Item -ItemType Directory -Path $recoveryTrx | Out-Null
