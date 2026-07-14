@@ -455,7 +455,7 @@ public sealed class LockFreeDisposalIntegrationTests
             case DisposalOperation.ReservationProjection:
             {
                 Span<byte> span = context.Reservation.GetSpan();
-                return Projection(span.Length, span.IsEmpty ? (byte)0 : span[0]);
+                return Projection(span.Length);
             }
 
             case DisposalOperation.Advance:
@@ -473,13 +473,13 @@ public sealed class LockFreeDisposalIntegrationTests
             case DisposalOperation.ValueProjection:
             {
                 ReadOnlySpan<byte> span = context.Lease.ValueSpan;
-                return Projection(span.Length, span.IsEmpty ? (byte)0 : span[0]);
+                return Projection(span.Length);
             }
 
             case DisposalOperation.DescriptorProjection:
             {
                 ReadOnlySpan<byte> span = context.Lease.DescriptorSpan;
-                return Projection(span.Length, span.IsEmpty ? (byte)0 : span[0]);
+                return Projection(span.Length);
             }
 
             case DisposalOperation.Release:
@@ -489,11 +489,16 @@ public sealed class LockFreeDisposalIntegrationTests
                 return Status(context.First.TryRemove(context.PublishedKey));
 
             case DisposalOperation.RecoverLeases:
-                return Status(context.First.TryRecoverLeases(new LeaseRecoveryOptions(true), out _));
+                // This theory deliberately races another handle's ordinary work.
+                // The current-process override requires process-wide quiescence,
+                // so exercise the concurrency-safe recovery mode here.
+                return Status(context.First.TryRecoverLeases(
+                    new LeaseRecoveryOptions(RecoverCurrentProcessLeases: false),
+                    out _));
 
             case DisposalOperation.RecoverReservations:
                 return Status(context.First.TryRecoverReservations(
-                    new ReservationRecoveryOptions(true),
+                    new ReservationRecoveryOptions(RecoverCurrentProcessReservations: false),
                     out _));
 
             case DisposalOperation.Diagnostics:
@@ -516,19 +521,9 @@ public sealed class LockFreeDisposalIntegrationTests
             or DisposalOperation.ValueProjection
             or DisposalOperation.DescriptorProjection)
         {
+            // Disposal may invalidate borrowed storage after projection returns,
+            // so this race may inspect the projection shape but not its bytes.
             Assert.Contains(observation.ProjectedLength, new[] { 0, 2 });
-            if (observation.ProjectedLength == 2)
-            {
-                byte expectedFirstByte = operation switch
-                {
-                    DisposalOperation.ReservationProjection => 0,
-                    DisposalOperation.ValueProjection => 7,
-                    DisposalOperation.DescriptorProjection => 9,
-                    _ => throw new ArgumentOutOfRangeException(nameof(operation))
-                };
-                Assert.Equal(expectedFirstByte, observation.FirstByte);
-            }
-
             return;
         }
 
@@ -628,10 +623,9 @@ public sealed class LockFreeDisposalIntegrationTests
         Assert.Contains(status, new[] { StoreStatus.Success, StoreStatus.NotFound });
     }
 
-    private static OperationObservation Status(StoreStatus status) => new(status, 0, 0);
+    private static OperationObservation Status(StoreStatus status) => new(status, 0);
 
-    private static OperationObservation Projection(int length, byte firstByte) =>
-        new(null, length, firstByte);
+    private static OperationObservation Projection(int length) => new(null, length);
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
         SharedMemoryStoreOptions.CreateLockFree(
@@ -671,8 +665,7 @@ public sealed class LockFreeDisposalIntegrationTests
 
     private readonly record struct OperationObservation(
         StoreStatus? Status,
-        int ProjectedLength,
-        byte FirstByte);
+        int ProjectedLength);
 
     /// <summary>
     /// Owns the platform synchronization primitive on one dedicated thread.
