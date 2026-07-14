@@ -436,7 +436,30 @@ no unresolved High or Medium issue. The sole accepted Low boundary remains the
 bounded Linux cold-open cost of scanning a flat rendezvous namespace after
 extreme historical store-name churn; it does not touch an open store's hot path.
 These results establish convergence only. The decision remains pending until
-the new R2 final paths below pass on one immutable source state.
+the new final paths below pass on one immutable source state.
+
+### Rejected R2 final invocation
+
+The R2 Linux command was mistakenly started by Windows PowerShell. The preserved
+schema-3 report at
+`artifacts/lock-free-os-validation/009-final-r2-linux-x64.json` correctly
+classified the host as Windows and returned `not-qualified`: every completed
+architecture, atomic, raw, no-lock, crash, Release-test, Docker, sample, and pack
+row passed, but Windows lacked the required native/Python prerequisites and
+Linux-only tiny-performance, `strace`, and SIGSTOP rows were optional and
+inapplicable, so the report could not satisfy the intended Linux contract.
+Its SHA-256 is
+`090651C119CADD7DAC2C545D04F595FD9E65F5CEFAFC1B9B79EDA009F66EAA7C`.
+No production or harness defect was implicated, but the immutable R2 candidate
+is rejected in full.
+
+The replacement command now explicitly enters an Ubuntu login shell before
+running PowerShell. A Linux-x64 validation-only execution passed every
+structural row with report SHA-256
+`AE16F3AED1A9E0FE5113F20AD3AB2F28AE194E5CF0717F6372BF87362A51666C`.
+That validates host selection and orchestration, not release evidence. The R2
+exact-HEAD product, harness, and freeze reviews found no new High or Medium
+issue; the accepted cold-open Low remains unchanged.
 
 ## Accepted design boundaries
 
@@ -471,15 +494,15 @@ These are intentional contract boundaries, not open findings:
 
 All of the following prelinked artifacts must exist and report success:
 
-1. [artifacts/lock-free-qualification/009-final-r2-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json)
-3. [artifacts/lock-free-qualification/009-final-r2-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json)
-4. [artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-r2-release/summary.json](../../artifacts/lock-free-qualification/009-final-r2-release/summary.json)
-6. [artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json)
-7. [artifacts/lock-free-qualification/009-final-r2-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r2-release/os-validation.json)
-8. [artifacts/lock-free-os-validation/009-final-r2-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.json)
-9. [artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json)
+1. [artifacts/lock-free-qualification/009-final-r3-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json)
+2. [artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-r3-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-r3-release/summary.json](../../artifacts/lock-free-qualification/009-final-r3-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-r3-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r3-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-r3-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 

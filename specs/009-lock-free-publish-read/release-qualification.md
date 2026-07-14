@@ -11,10 +11,10 @@ the authoritative final record, even when it reports `failed`,
 
 | Tier or platform | Authoritative raw evidence |
 |---|---|
-| PR | [`009-final-r2-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json) and [`009-final-r2-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json) |
-| Nightly | [`009-final-r2-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json) and [`009-final-r2-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-nightly/sync-probe.json) |
-| Release | [`009-final-r2-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r2-release/summary.json), [`009-final-r2-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r2-release/sync-probe.json), and the runner-created Windows [`009-final-r2-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r2-release/os-validation.json) |
-| Linux x64 | [`009-final-r2-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r2-linux-x64.evidence/linux-tiny-performance.json) |
+| PR | [`009-final-r3-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json) and [`009-final-r3-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json) |
+| Nightly | [`009-final-r3-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json) and [`009-final-r3-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-nightly/sync-probe.json) |
+| Release | [`009-final-r3-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r3-release/summary.json), [`009-final-r3-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r3-release/sync-probe.json), and the runner-created Windows [`009-final-r3-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r3-release/os-validation.json) |
+| Linux x64 | [`009-final-r3-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r3-linux-x64.evidence/linux-tiny-performance.json) |
 
 The predicate is:
 
@@ -68,18 +68,17 @@ Run from the clean commit. The ignored `artifacts/` tree retains authoritative
 raw evidence without changing repository provenance.
 
 ```powershell
-# Linux x64, on the same clean commit
-pwsh ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release `
-  -OutputPath artifacts/lock-free-os-validation/009-final-r2-linux-x64.json
+# Linux x64, explicitly inside Ubuntu on the same clean commit
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r3-linux-x64.json'
 
 # Windows x64, on that same clean commit
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier pr `
-  -EvidenceRunId 009-final-r2-pr
+  -EvidenceRunId 009-final-r3-pr
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier nightly `
-  -EvidenceRunId 009-final-r2-nightly
+  -EvidenceRunId 009-final-r3-nightly
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier release `
-  -EvidenceRunId 009-final-r2-release `
-  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r2-linux-x64.json
+  -EvidenceRunId 009-final-r3-release `
+  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r3-linux-x64.json
 ```
 
 The configured release run is the exact 100,000,000-operation mixed workload,
@@ -194,4 +193,30 @@ are respectively
 `9788BF7222BFE8B77E4512EECFEE9788BD1D898763AABBA0417F16D2AF8DE3EC`,
 and `8BC2FD8F2BBFA288EE67610E43155186E5A445443059586BF1AEC34F8C7DAA35`.
 All R2 artifacts named in this section are diagnostic lineage only. They do not
-replace the frozen common-provenance R2 final sequence linked above.
+replace the frozen common-provenance final sequence linked above.
+
+## Rejected R2 final invocation
+
+The second candidate is preserved at
+`artifacts/lock-free-os-validation/009-final-r2-linux-x64.json`. It is schema 3
+`not-qualified` with report SHA-256
+`090651C119CADD7DAC2C545D04F595FD9E65F5CEFAFC1B9B79EDA009F66EAA7C`
+and clean provenance for commit `00c0dda2f3412bdba0faac487cc5ab5596ced7fb`,
+tree `a960691095f5a555aa95869eeb233d561231d64d`, and source-manifest SHA-256
+`92BAA2E3DF0BE60BFB3FF314821A98ECAE3F3BCA730CA36BC008E46D3C03D981`.
+The command was mistakenly launched by Windows PowerShell, so the report
+correctly identified a Windows host: completed architecture, atomic, raw,
+no-lock, crash, Release-test, Docker, sample, and pack rows passed, while the
+required native and Python rows rejected the missing Windows `cmake` and the
+Linux-only tiny-performance/`strace`/SIGSTOP rows were optional and not
+applicable. The report therefore cannot satisfy the intended Linux contract.
+This is an operator-platform failure, not a product or completed-test failure,
+and it invalidates the entire R2 candidate.
+
+Before the R3 freeze, the explicit Ubuntu login-shell command above passed
+validation-only orchestration as Linux x64 with every structural self-test
+passed. That diagnostic report is
+`artifacts/lock-free-os-validation/009-r3-linux-invocation-validate.json`, SHA-256
+`AE16F3AED1A9E0FE5113F20AD3AB2F28AE194E5CF0717F6372BF87362A51666C`.
+It proves correct platform selection and orchestration only; it is not final
+qualification evidence.

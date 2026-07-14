@@ -4,10 +4,10 @@
 
 This report is frozen before the one-shot runs and is not edited afterward.
 The short convergence conclusion is **PASS if and only if** the final PR
-[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r2-pr/summary.json)
+[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r3-pr/summary.json)
 has schema 4, tier `pr`, `validationOnly: false`, and `overallStatus: passed`,
 and its hashed
-[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r2-pr/sync-probe.json)
+[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r3-pr/sync-probe.json)
 passes every exact row, count, provenance, correctness, raw-visibility, and
 short-performance check enforced by the runner. Its start/completion provenance
 must be identical and clean, and must match the final nightly and release
@@ -15,9 +15,9 @@ summaries. Otherwise the short conclusion is **FAIL** or **NOT QUALIFIED** as
 reported by the raw JSON; this tracked report cannot promote it.
 
 The same clean commit then has to pass the immutable
-[`009-final-r2-nightly`](../../../artifacts/lock-free-qualification/009-final-r2-nightly/summary.json)
+[`009-final-r3-nightly`](../../../artifacts/lock-free-qualification/009-final-r3-nightly/summary.json)
 and
-[`009-final-r2-release`](../../../artifacts/lock-free-qualification/009-final-r2-release/summary.json)
+[`009-final-r3-release`](../../../artifacts/lock-free-qualification/009-final-r3-release/summary.json)
 gates before the short result can contribute to release qualification. Raw
 JSON remains in the ignored immutable `artifacts/` tree; no copy is maintained
 under tracked `specs/` and no tracked post-run edit is permitted.
@@ -39,6 +39,14 @@ configurations, and 108/108 suspension rows. Its summary SHA-256 is
 and its synchronization-probe SHA-256 is
 `9788BF7222BFE8B77E4512EECFEE9788BD1D898763AABBA0417F16D2AF8DE3EC`.
 This is a successful convergence diagnostic, not the frozen final PR result.
+
+The attempted R2 Linux final is preserved with SHA-256
+`090651C119CADD7DAC2C545D04F595FD9E65F5CEFAFC1B9B79EDA009F66EAA7C`.
+It was launched on Windows, correctly reported `not-qualified`, and contributes
+no final Linux evidence. The corrected Ubuntu invocation passed Linux-x64
+validation-only orchestration with SHA-256
+`AE16F3AED1A9E0FE5113F20AD3AB2F28AE194E5CF0717F6372BF87362A51666C`;
+that is an invocation check only, not a benchmark or final result.
 
 Two still-earlier one-second smoke artifacts are also retained:
 
