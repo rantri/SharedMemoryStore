@@ -16,9 +16,12 @@ public sealed class LockFreeInsertCancellationRaceTests
     private const int OverflowSlotCount = 17;
     private const int OverflowAnchorCount = 16;
     private const int RaceSlotCount = 4;
+    // The finite budget is real wall-clock time. Leave enough pre-checkpoint
+    // setup margin for parallel full-solution runs, then wait past that same
+    // deadline so the controlled schedule still proves the expired-budget path.
     private static readonly StoreWaitOptions FiniteRaceWait =
-        new(TimeSpan.FromMilliseconds(50));
-    private static readonly TimeSpan ExpiredRaceDelay = TimeSpan.FromMilliseconds(150);
+        new(TimeSpan.FromSeconds(2));
+    private static readonly TimeSpan ExpiredRaceDelay = TimeSpan.FromMilliseconds(2_250);
 
     [Fact]
     public Task PreparedInsertCanceledAfterCurrentOperationRevalidationDoesNotReportCorruption() =>

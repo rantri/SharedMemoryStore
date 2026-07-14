@@ -536,7 +536,7 @@ internal static class AtomicCommands
         ref var acknowledgement = ref words[AcknowledgementOffset];
         for (long iteration = 1; iteration <= iterations; iteration++)
         {
-            if (!WaitForExact(ref acknowledgement, iteration - 1))
+            if (!WaitForExact(ref acknowledgement, iteration - 1, "publication-producer/acknowledgement"))
             {
                 return TimeoutExitCode;
             }
@@ -569,7 +569,7 @@ internal static class AtomicCommands
         ref var acknowledgement = ref words[AcknowledgementOffset];
         for (long iteration = 1; iteration <= iterations; iteration++)
         {
-            if (!WaitForExact(ref publication, iteration))
+            if (!WaitForExact(ref publication, iteration, "publication-consumer/publication"))
             {
                 return TimeoutExitCode;
             }
@@ -663,7 +663,10 @@ internal static class AtomicCommands
         Volatile.Write(ref ready, 1);
         for (long iteration = 1; iteration <= iterations; iteration++)
         {
-            if (!WaitForExact(ref phase, iteration))
+            if (!WaitForExact(
+                    ref phase,
+                    iteration,
+                    role == 0 ? "dekker-worker-0/phase" : "dekker-worker-1/phase"))
             {
                 return TimeoutExitCode;
             }
@@ -714,14 +717,16 @@ internal static class AtomicCommands
         ref var seen0 = ref words[DekkerSeen0Offset];
         ref var seen1 = ref words[DekkerSeen1Offset];
 
-        if (!WaitForExact(ref ready0, 1) || !WaitForExact(ref ready1, 1))
+        if (!WaitForExact(ref ready0, 1, "dekker-coordinator/ready0")
+            || !WaitForExact(ref ready1, 1, "dekker-coordinator/ready1"))
         {
             return TimeoutExitCode;
         }
 
         for (long iteration = 1; iteration <= iterations; iteration++)
         {
-            if (!WaitForExact(ref done0, iteration - 1) || !WaitForExact(ref done1, iteration - 1))
+            if (!WaitForExact(ref done0, iteration - 1, "dekker-coordinator/done0-previous")
+                || !WaitForExact(ref done1, iteration - 1, "dekker-coordinator/done1-previous"))
             {
                 return TimeoutExitCode;
             }
@@ -732,7 +737,8 @@ internal static class AtomicCommands
             Volatile.Write(ref seen1, -1);
             Volatile.Write(ref phase, iteration);
 
-            if (!WaitForExact(ref done0, iteration) || !WaitForExact(ref done1, iteration))
+            if (!WaitForExact(ref done0, iteration, "dekker-coordinator/done0-current")
+                || !WaitForExact(ref done1, iteration, "dekker-coordinator/done1-current"))
             {
                 return TimeoutExitCode;
             }
@@ -771,21 +777,30 @@ internal static class AtomicCommands
             && iterations is > 0 and <= 1_000_000;
     }
 
-    private static bool WaitForExact(ref long word, long expected)
+    private static bool WaitForExact(ref long word, long expected, string context)
     {
         var deadline = Stopwatch.GetTimestamp() + (long)(WaitTimeout.TotalSeconds * Stopwatch.Frequency);
         var spin = new SpinWait();
-        while (Volatile.Read(ref word) != expected)
+        while (true)
         {
+            var observed = Volatile.Read(ref word);
+            if (observed == expected)
+            {
+                return true;
+            }
+
             if (Stopwatch.GetTimestamp() >= deadline)
             {
+                Console.Error.WriteLine(
+                    "Atomic wait timeout: context=" + context
+                    + "; expected=" + expected.ToString(CultureInfo.InvariantCulture)
+                    + "; observed=" + observed.ToString(CultureInfo.InvariantCulture)
+                    + ".");
                 return false;
             }
 
             spin.SpinOnce();
         }
-
-        return true;
     }
 }
 
