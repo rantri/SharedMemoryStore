@@ -10,7 +10,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $artifactsRoot = [IO.Path]::GetFullPath((Join-Path $repositoryRoot 'artifacts'))
-$workPath = [IO.Path]::GetFullPath((Join-Path $repositoryRoot $ArtifactsDirectory))
+$requestedWorkPath = if ([IO.Path]::IsPathRooted($ArtifactsDirectory)) {
+    [IO.Path]::GetFullPath($ArtifactsDirectory)
+}
+else {
+    [IO.Path]::GetFullPath((Join-Path $repositoryRoot $ArtifactsDirectory))
+}
 
 function Invoke-Checked {
     param(
@@ -24,27 +29,112 @@ function Invoke-Checked {
     }
 }
 
-function Assert-ArtifactPath {
-    param([Parameter(Mandatory)][string]$Path)
+function Test-MultiConfigBuild {
+    param([Parameter(Mandatory)][string]$BuildPath)
 
-    $fullPath = [IO.Path]::GetFullPath($Path)
-    $prefix = $artifactsRoot + [IO.Path]::DirectorySeparatorChar
-    if (-not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Validation output must stay below '$artifactsRoot'; received '$fullPath'."
+    $cachePath = Join-Path $BuildPath 'CMakeCache.txt'
+    $entry = Get-Content -LiteralPath $cachePath |
+        Where-Object { $_.StartsWith('CMAKE_CONFIGURATION_TYPES:', [StringComparison]::Ordinal) } |
+        Select-Object -First 1
+    if ($null -eq $entry) {
+        return $false
     }
 
-    return $fullPath
+    $separator = $entry.IndexOf('=')
+    return $separator -ge 0 -and -not [string]::IsNullOrWhiteSpace($entry.Substring($separator + 1))
 }
 
-function Reset-Directory {
+function Reset-ArtifactScratchDirectory {
     param([Parameter(Mandatory)][string]$Path)
 
-    $fullPath = Assert-ArtifactPath $Path
-    if (Test-Path -LiteralPath $fullPath) {
-        Remove-Item -LiteralPath $fullPath -Recurse -Force
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $normalizedRoot = [IO.Path]::GetFullPath($repositoryRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $rootPrefix = $normalizedRoot + [IO.Path]::DirectorySeparatorChar
+    $normalizedArtifactsRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $artifactsPrefix = $normalizedArtifactsRoot + [IO.Path]::DirectorySeparatorChar
+    $target = [IO.Path]::GetFullPath($Path).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    if (-not $target.StartsWith($artifactsPrefix, $comparison)) {
+        throw "Python validation output must stay below '$normalizedArtifactsRoot'; received '$target'."
     }
-    New-Item -ItemType Directory -Path $fullPath -Force | Out-Null
-    return $fullPath
+
+    $relativeTarget = [IO.Path]::GetRelativePath($normalizedRoot, $target).Replace('\', '/')
+    $git = (Get-Command git -ErrorAction Stop).Source
+    & $git -C $normalizedRoot check-ignore --quiet --no-index -- $relativeTarget 2>$null
+    $ignoreExitCode = $LASTEXITCODE
+    if ($ignoreExitCode -eq 1) {
+        throw "Python validation scratch path must be covered by repository ignore rules: '$relativeTarget'."
+    }
+    if ($ignoreExitCode -ne 0) {
+        throw "Could not verify repository ignore coverage for Python validation scratch path '$relativeTarget'."
+    }
+    $protectedEntries = @(
+        & $git -C $normalizedRoot --literal-pathspecs ls-files --cached --others --exclude-standard -- $relativeTarget 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not prove that Python validation scratch path '$relativeTarget' contains only ignored output."
+    }
+    if ($protectedEntries.Count -ne 0) {
+        throw "Refusing to reset Python validation scratch path '$relativeTarget' because it contains tracked or nonignored entry '$($protectedEntries[0])'."
+    }
+
+    $ancestor = [IO.Path]::GetDirectoryName($target)
+    while (-not (Test-Path -LiteralPath $ancestor)) {
+        $parent = [IO.Directory]::GetParent($ancestor)
+        if ($null -eq $parent) {
+            throw "Repository root was not reached while checking Python validation scratch path '$target'."
+        }
+        $ancestor = $parent.FullName
+    }
+    while ($true) {
+        $ancestorItem = Get-Item -LiteralPath $ancestor -Force
+        if (-not $ancestorItem.PSIsContainer `
+            -or ($ancestorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing to reset Python validation through non-directory or linked ancestor '$ancestor'."
+        }
+        if ($ancestor.Equals($normalizedRoot, $comparison)) {
+            break
+        }
+        if (-not $ancestor.StartsWith($rootPrefix, $comparison)) {
+            throw "Python validation ancestor escaped the repository while checking '$target'."
+        }
+        $parent = [IO.Directory]::GetParent($ancestor)
+        if ($null -eq $parent) {
+            throw "Repository root was not reached while checking Python validation scratch path '$target'."
+        }
+        $ancestor = $parent.FullName
+    }
+
+    $item = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    if ($null -ne $item -or (Test-Path -LiteralPath $target)) {
+        if ($null -eq $item) {
+            throw "Refusing to reset an uninspectable Python validation scratch path '$target'."
+        }
+        if (-not $item.PSIsContainer `
+            -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing to reset non-directory or linked Python validation scratch path '$target'."
+        }
+        $linkedDescendants = @(Get-ChildItem -LiteralPath $target -Recurse -Force -ErrorAction Stop |
+            Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 } |
+            Sort-Object { $_.FullName.Length } -Descending)
+        foreach ($linkedDescendant in $linkedDescendants) {
+            Remove-Item -LiteralPath $linkedDescendant.FullName -Force
+            if (Test-Path -LiteralPath $linkedDescendant.FullName) {
+                throw "Could not unlink Python validation entry '$($linkedDescendant.FullName)'."
+            }
+        }
+        Remove-Item -LiteralPath $target -Recurse -Force
+        $remainingItem = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+        if ($null -ne $remainingItem -or (Test-Path -LiteralPath $target)) {
+            throw "Python validation scratch path remained after guarded reset: '$target'."
+        }
+    }
+
+    return (New-Item -ItemType Directory -Path $target -Force).FullName
 }
 
 function Get-VenvPython {
@@ -88,7 +178,7 @@ function Assert-ArchiveContainsSuffix {
     }
 }
 
-$workPath = Reset-Directory $workPath
+$workPath = Reset-ArtifactScratchDirectory $requestedWorkPath
 $nativeBuildPath = Join-Path $workPath 'native-build'
 $stagedSourcePath = Join-Path $workPath 'source-package'
 $buildEnvironmentPath = Join-Path $workPath 'build-environment'
@@ -105,18 +195,27 @@ $expectedPythonFiles = @('__init__.py', '_native.py', 'enums.py', 'store.py')
 $configureArguments = @(
     '-S', $repositoryRoot,
     '-B', $nativeBuildPath,
+    "-DCMAKE_BUILD_TYPE=$Configuration",
     '-DSMS_BUILD_TESTS=OFF',
     '-DSMS_BUILD_SAMPLES=OFF',
     '-DSMS_INSTALL=ON',
     '-DSMS_PYTHON_INSTALL_DIR=shared_memory_store'
 )
-if (-not $IsWindows) {
-    $configureArguments += "-DCMAKE_BUILD_TYPE=$Configuration"
-}
 
 Invoke-Checked $cmake @configureArguments
-Invoke-Checked $cmake '--build' $nativeBuildPath '--config' $Configuration '--parallel'
-Invoke-Checked $cmake '--install' $nativeBuildPath '--config' $Configuration '--component' 'Python' '--prefix' $stagedSourcePath
+$multiConfig = Test-MultiConfigBuild $nativeBuildPath
+$buildArguments = @('--build', $nativeBuildPath)
+if ($multiConfig) {
+    $buildArguments += @('--config', $Configuration)
+}
+$buildArguments += '--parallel'
+Invoke-Checked $cmake @buildArguments
+$installArguments = @('--install', $nativeBuildPath)
+if ($multiConfig) {
+    $installArguments += @('--config', $Configuration)
+}
+$installArguments += @('--component', 'Python', '--prefix', $stagedSourcePath)
+Invoke-Checked $cmake @installArguments
 
 $stagedPackagePath = Join-Path $stagedSourcePath 'shared_memory_store'
 foreach ($file in $expectedPythonFiles) {

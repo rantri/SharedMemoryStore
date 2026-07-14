@@ -158,17 +158,39 @@ when you do not need the status.
 
 ## Remove and Reuse
 
-Removal removes the key from the visible index. If no readers hold leases, the
-slot is reclaimed immediately. If readers still hold leases, removal returns
-`RemovePending`, new acquires for that key fail, and final release reclaims the
-slot.
+Removal first makes the key logically absent. It returns `RemovePending` when an
+active lease protects that generation or when the caller's bounded policy ends
+before post-removal classification or reclamation completes. Existing leases
+remain readable, new acquires for that key fail, and final release, a later
+remove, or allocation-pressure helping can finish physical reclamation. A
+`Success` result confirms that the bounded lease classification found no
+protecting lease, but callers should still use capacity outcomes rather than
+assume that this call alone completed every physical cleanup step.
+
+`LeaseTableFull` is an exact physical-capacity result, not an exhausted-scan
+guess. The lock-free profile confirms two identical, structurally valid,
+all-non-Free lease-control snapshots. A released/moving record or contention on
+the handle-local proof buffer follows `StoreWaitOptions` and may yield
+`StoreBusy`; malformed controls yield `CorruptStore`.
 
 ```csharp
 var remove = store.TryRemove(key);
 ```
 
 Publishing the same key while the value is still published, pending removal, or
-pending reservation returns `DuplicateKey`.
+owned by `Reserved(ExplicitReservation)` returns `DuplicateKey`. An internal
+`Reserved(AtomicPublication)` used by `TryPublish` or `TryPublishSegments`
+remains tentative and does not alone justify that result. Because lock-free-v2
+candidate claim follows an initial lookup but precedes final arbitration, a
+raced caller can return genuine `StoreFull` when no candidate is reusable.
+The result is certified by two identical, structurally valid, all-non-Free
+slot-control snapshots. `Initializing`/`Reserved` require a structurally valid
+configured participant token; all other states require participant zero and
+`Retired` additionally requires the terminal generation. A malformed state,
+generation, or owner shape returns `CorruptStore`, even if both snapshots contain
+the same malformed word. Movement or a free slot is contention and is retried
+according to the supplied `StoreWaitOptions` rather than reported as false
+capacity exhaustion.
 
 ## Direct Reservation Ingest
 
@@ -193,6 +215,14 @@ completion returns `ReservationIncomplete`. Advancing beyond the remaining
 payload length returns `ReservationWriteOutOfRange`. `Abort()` and active
 reservation disposal remove the pending key without exposing partial bytes.
 
+In the lock-free profile, `TryReserve` records `ExplicitReservation` and orders
+when its exact slot changes from `Initializing` to `Reserved`. The earlier state
+is a tentative physical claim: other callers may help it, but it does not alone
+justify `DuplicateKey`. Normal recovery preserves a lifecycle owned by an exact
+live Active participant. A stale owner or one that has published exact
+`Closing`/`Recovering` authority can be recovered; the current-process override
+is an administrative quiescent-shutdown policy described below.
+
 Writable spans are valid only while the reservation is pending and the store
 handle remains open. Use `DangerousGetMemory` only for trusted direct-I/O
 adapters, such as stream or socket reads that require `Memory<byte>`. The
@@ -209,11 +239,22 @@ ReadOnlySequence<byte> payload = GetPayloadSequence();
 var publish = store.TryPublishSegments(key, payload, descriptor, out var copiedBytes);
 ```
 
-The helper acquires shared synchronization once, reserves a contiguous slot,
-copies each segment in order, and publishes only after the copied byte count
-matches the sequence length. A copy or validation failure reclaims the internal
-slot before synchronization is released, so bounded contention cannot strand a
-caller-inaccessible reservation.
+The helper reserves a contiguous slot, copies each segment in order, and
+publishes only after the copied byte count matches the sequence length. Under
+the legacy profile it holds the operation's shared lock through cleanup. Under
+the lock-free v2 profile it uses the caller's local retry budget and publishes
+only helpable shared transitions; no operation-wide cross-process lock is
+acquired. A copy, validation, timeout, or pre-order cancellation failure
+relinquishes ownership or hands it to exact-generation cleanup, so bounded
+contention cannot strand a caller-inaccessible reservation.
+
+In lock-free v2, both this helper and `TryPublish` record
+`AtomicPublication`. Their internal `Initializing` and `Reserved` states are
+tentative; the one public operation orders only when the slot becomes
+`Published`. A same-key caller helps/revalidates those states and may return
+`DuplicateKey` only after a public duplicate witness appears, or `StoreBusy`
+when its bounded budget expires. Tentative states still occupy physical slot
+capacity and can therefore contribute to `StoreFull`.
 
 ## Diagnostics
 
@@ -250,6 +291,22 @@ var reservationRecovery = store.TryRecoverReservations(
 Use recovery for controlled owner workflows, tests, or cleanup after abnormal
 termination. Normal readers and producers should still release leases, commit or
 abort reservations, and dispose store handles directly.
+
+`RecoverCurrentProcessLeases: false` remains safe while lease activity continues.
+Before using the true test/controlled-shutdown override, stop and drain lease
+acquisition, `ValueSpan`/`DescriptorSpan` projection, borrowed-span consumption,
+and release across every current-process handle attached to that mapping. Keep
+the process quiescent until recovery returns; the store does not impose a
+hot-path gate to enforce this administrative precondition.
+
+`RecoverCurrentProcessReservations: false` likewise preserves reservations and
+atomic publications whose exact participant remains live Active. Before using
+the true reservation override, stop and drain `TryReserve`, `TryPublish`,
+`TryPublishSegments`, writable projection and borrowed-memory use, `Advance`,
+`Commit`, `Abort`, reservation disposal, and `MemoryStore` handle disposal
+across every current-process handle attached to the mapping. Keep that
+writer/view quiescence until recovery returns. Racing the override with those
+operations is outside the supported result contract.
 
 ## Dispose
 

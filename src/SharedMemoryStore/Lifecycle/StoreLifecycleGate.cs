@@ -1,58 +1,132 @@
+using System.Diagnostics;
+
 namespace SharedMemoryStore.Lifecycle;
 
 internal sealed class StoreLifecycleGate
 {
-    private const int Open = 0;
-    private const int Disposing = 1;
-    private const int Disposed = 2;
+    private const long EntryClosed = long.MinValue;
+    private const long ActiveCountMask = long.MaxValue;
 
-    private readonly object _sync = new();
-    private int _state;
-    private int _activeOperations;
+    private readonly ManualResetEventSlim _disposeCompleted = new(initialState: false);
+    private long _lifetimeWord;
+    private int _isDisposed;
 
-    public bool IsDisposed => Volatile.Read(ref _state) == Disposed;
+    public bool IsDisposed => Volatile.Read(ref _isDisposed) != 0;
 
-    public bool IsDisposingOrDisposed => Volatile.Read(ref _state) != Open;
+    public bool IsDisposingOrDisposed => (Volatile.Read(ref _lifetimeWord) & EntryClosed) != 0;
 
     public bool TryEnter(out Operation operation)
     {
-        lock (_sync)
+        while (true)
         {
-            if (_state != Open)
+            var observed = Volatile.Read(ref _lifetimeWord);
+            if ((observed & EntryClosed) != 0)
             {
                 operation = default;
                 return false;
             }
 
-            _activeOperations++;
-            operation = new Operation(this);
-            return true;
+            if ((observed & ActiveCountMask) == ActiveCountMask)
+            {
+                throw new InvalidOperationException("The active operation count is exhausted.");
+            }
+
+            if (Interlocked.CompareExchange(ref _lifetimeWord, observed + 1, observed) == observed)
+            {
+                operation = new Operation(this);
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attempts to enter a public operation without allowing process-local CAS
+    /// contention to sit outside the caller's operation-wide wait/work bound.
+    /// A zero timeout receives one CAS attempt; finite and infinite policies
+    /// retain the same cancellation semantics as the shared protocol budget.
+    /// </summary>
+    public StoreStatus TryEnter(
+        StoreWaitOptions waitOptions,
+        long started,
+        out Operation operation)
+    {
+        var spinner = new SpinWait();
+        while (true)
+        {
+            var observed = Volatile.Read(ref _lifetimeWord);
+            if ((observed & EntryClosed) != 0)
+            {
+                operation = default;
+                return StoreStatus.StoreDisposed;
+            }
+
+            if (!waitOptions.IsValid)
+            {
+                operation = default;
+                return StoreStatus.UnknownFailure;
+            }
+
+            if (waitOptions.CancellationToken.IsCancellationRequested)
+            {
+                operation = default;
+                return StoreStatus.OperationCanceled;
+            }
+
+            if (!waitOptions.IsInfinite
+                && waitOptions.Timeout > TimeSpan.Zero
+                && Stopwatch.GetElapsedTime(started) >= waitOptions.Timeout)
+            {
+                operation = default;
+                return StoreStatus.StoreBusy;
+            }
+
+            if ((observed & ActiveCountMask) == ActiveCountMask)
+            {
+                throw new InvalidOperationException("The active operation count is exhausted.");
+            }
+
+            if (Interlocked.CompareExchange(ref _lifetimeWord, observed + 1, observed) == observed)
+            {
+                operation = new Operation(this);
+                return StoreStatus.Success;
+            }
+
+            if (waitOptions.Timeout == TimeSpan.Zero)
+            {
+                operation = default;
+                return (Volatile.Read(ref _lifetimeWord) & EntryClosed) != 0
+                    ? StoreStatus.StoreDisposed
+                    : StoreStatus.StoreBusy;
+            }
+
+            spinner.SpinOnce();
         }
     }
 
     public bool TryBeginDispose()
     {
-        lock (_sync)
+        while (true)
         {
-            if (_state == Disposed)
+            var observed = Volatile.Read(ref _lifetimeWord);
+            if ((observed & EntryClosed) != 0)
             {
-                return false;
-            }
-
-            if (_state == Disposing)
-            {
-                while (_state != Disposed)
+                if (Volatile.Read(ref _isDisposed) == 0)
                 {
-                    Monitor.Wait(_sync);
+                    _disposeCompleted.Wait();
                 }
 
                 return false;
             }
 
-            _state = Disposing;
-            while (_activeOperations != 0)
+            if (Interlocked.CompareExchange(ref _lifetimeWord, observed | EntryClosed, observed) != observed)
             {
-                Monitor.Wait(_sync);
+                continue;
+            }
+
+            var spinner = new SpinWait();
+            while ((Volatile.Read(ref _lifetimeWord) & ActiveCountMask) != 0)
+            {
+                spinner.SpinOnce();
             }
 
             return true;
@@ -61,22 +135,16 @@ internal sealed class StoreLifecycleGate
 
     public void CompleteDispose()
     {
-        lock (_sync)
-        {
-            _state = Disposed;
-            Monitor.PulseAll(_sync);
-        }
+        Volatile.Write(ref _isDisposed, 1);
+        _disposeCompleted.Set();
     }
 
     private void Exit()
     {
-        lock (_sync)
+        var remaining = Interlocked.Decrement(ref _lifetimeWord);
+        if ((remaining & ActiveCountMask) == ActiveCountMask)
         {
-            _activeOperations--;
-            if (_activeOperations == 0)
-            {
-                Monitor.PulseAll(_sync);
-            }
+            throw new InvalidOperationException("An operation exited without a matching entry.");
         }
     }
 

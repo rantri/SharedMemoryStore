@@ -27,14 +27,14 @@ internal static class WindowsSharedMemoryRegion
                 OpenMode.OpenExisting => MemoryMappedFile.OpenExisting(
                     resourceName.WindowsRegionName,
                     MemoryMappedFileRights.ReadWrite),
-                _ => MemoryMappedFile.CreateOrOpen(
-                    resourceName.WindowsRegionName,
-                    options.TotalBytes,
-                    MemoryMappedFileAccess.ReadWrite)
+                _ => OpenExistingOrCreate(resourceName.WindowsRegionName, options.TotalBytes)
             };
 
-            accessor = mapping.CreateViewAccessor(0, options.TotalBytes, MemoryMappedFileAccess.ReadWrite);
-            region = MemoryMappedStoreRegion.Create(mapping, accessor, options.TotalBytes);
+            // A zero-length view projects the actual mapping capacity. In particular, an
+            // opener with larger requested dimensions can still inspect an existing small
+            // mapping's header and report IncompatibleLayout instead of failing view creation.
+            accessor = mapping.CreateViewAccessor(0, 0, MemoryMappedFileAccess.ReadWrite);
+            region = MemoryMappedStoreRegion.Create(mapping, accessor);
             mapping = null;
             accessor = null;
             return StoreOpenStatus.Success;
@@ -67,6 +67,30 @@ internal static class WindowsSharedMemoryRegion
         {
             accessor?.Dispose();
             mapping?.Dispose();
+        }
+    }
+
+    private static MemoryMappedFile OpenExistingOrCreate(string mappingName, long requestedCapacity)
+    {
+        try
+        {
+            return MemoryMappedFile.OpenExisting(mappingName, MemoryMappedFileRights.ReadWrite);
+        }
+        catch (FileNotFoundException)
+        {
+            try
+            {
+                return MemoryMappedFile.CreateNew(
+                    mappingName,
+                    requestedCapacity,
+                    MemoryMappedFileAccess.ReadWrite);
+            }
+            catch (IOException)
+            {
+                // Another creator won after the initial probe. Opening its mapping also
+                // avoids projecting our requested capacity onto that existing resource.
+                return MemoryMappedFile.OpenExisting(mappingName, MemoryMappedFileRights.ReadWrite);
+            }
         }
     }
 }

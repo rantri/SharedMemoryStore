@@ -1,12 +1,17 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using SharedMemoryStore.Diagnostics;
+using SharedMemoryStore.Engines;
 using SharedMemoryStore.Ingest;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.Layout;
+using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.Leasing;
 using SharedMemoryStore.Lifecycle;
+using SharedMemoryStore.LockFree;
 using SharedMemoryStore.Options;
 using SharedMemoryStore.Slots;
 
@@ -31,6 +36,7 @@ public sealed unsafe class MemoryStore : IDisposable
     private readonly bool _leaseRecoveryEnabled;
     private readonly ReservationMemoryManager _reservationMemory;
     private readonly StoreLifecycleGate _lifecycle = new();
+    private readonly IStoreEngine? _engine;
     private long _indexCompactionCount;
     private bool _disposed;
 
@@ -40,6 +46,9 @@ public sealed unsafe class MemoryStore : IDisposable
         StoreLayout layout,
         bool leaseRecoveryEnabled)
     {
+        _engine = null;
+        Profile = StoreProfile.Legacy;
+        ProtocolInfo = new StoreProtocolInfo(StoreProfile.Legacy, 1, 2, 1, 0, 0);
         _region = region;
         _synchronization = synchronization;
         _layout = layout;
@@ -54,6 +63,36 @@ public sealed unsafe class MemoryStore : IDisposable
         _reservationMemory = new ReservationMemoryManager(region, layout);
     }
 
+    internal MemoryStore(IStoreEngine engine)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        _engine = engine;
+        Profile = engine.Profile;
+        ProtocolInfo = engine.ProtocolInfo;
+        _region = null!;
+        _synchronization = null!;
+        _layout = default;
+        _index = null!;
+        _slots = null!;
+        _writer = null!;
+        _reader = null!;
+        _reclaimer = null!;
+        _leases = null!;
+        _diagnostics = null!;
+        _reservationMemory = null!;
+    }
+
+    /// <summary>
+    /// Gets the explicitly selected layout and concurrency profile used by this handle.
+    /// </summary>
+    public StoreProfile Profile { get; }
+
+    /// <summary>
+    /// Gets the immutable persisted layout and resource-protocol identity, independently of the
+    /// package version.
+    /// </summary>
+    public StoreProtocolInfo ProtocolInfo { get; }
+
     /// <summary>
     /// Creates or opens a named store using the supplied options and the default bounded wait policy.
     /// </summary>
@@ -63,7 +102,8 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Creates or opens a named store using the supplied options and caller-selected wait policy.
+    /// Creates or opens a named store using the supplied options and caller-selected cold-path
+    /// lifecycle/participant wait policy.
     /// </summary>
     public static StoreOpenStatus TryCreateOrOpen(
         in SharedMemoryStoreOptions options,
@@ -88,11 +128,59 @@ public sealed unsafe class MemoryStore : IDisposable
             return validation;
         }
 
+        if (options.Profile == StoreProfile.LockFree
+            && !LayoutV2Constants.IsSupportedArchitecture(RuntimeInformation.ProcessArchitecture))
+        {
+            return StoreOpenStatus.UnsupportedPlatform;
+        }
+
         var waitStartTimestamp = Stopwatch.GetTimestamp();
         var mappingStatus = SharedStorePlatform.TryOpen(options, waitOptions, out var region, out var synchronization);
         if (mappingStatus != StoreOpenStatus.Success || region is null || synchronization is null)
         {
             return mappingStatus;
+        }
+
+        if (options.Profile == StoreProfile.LockFree)
+        {
+            if (!TryGetRemainingWaitOptions(
+                    waitOptions,
+                    waitStartTimestamp,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus remainingStatus))
+            {
+                region.Dispose();
+                synchronization.Dispose();
+                return ToOpenStatus(remainingStatus);
+            }
+
+            StoreOpenStatus lockFreeStatus;
+            try
+            {
+                lockFreeStatus = StoreEngineFactory.TryWrapLockFree(
+                    options,
+                    remainingWait,
+                    region,
+                    synchronization,
+                    out store);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                lockFreeStatus = StoreOpenStatus.AccessDenied;
+            }
+            catch (Exception)
+            {
+                lockFreeStatus = StoreOpenStatus.MappingFailed;
+            }
+
+            if (lockFreeStatus != StoreOpenStatus.Success)
+            {
+                region.Dispose();
+                synchronization.Dispose();
+                store = null;
+            }
+
+            return lockFreeStatus;
         }
 
         MemoryStore candidate;
@@ -135,7 +223,7 @@ public sealed unsafe class MemoryStore : IDisposable
             return initializeStatus;
         }
 
-        store = candidate;
+        store = StoreEngineFactory.WrapLegacy(candidate);
         return StoreOpenStatus.Success;
     }
 
@@ -148,7 +236,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes immutable payload bytes using the supplied wait policy for shared synchronization.
+    /// Publishes immutable payload bytes using the supplied profile-specific bounded wait policy.
     /// </summary>
     public StoreStatus TryPublish(
         ReadOnlySpan<byte> key,
@@ -156,6 +244,23 @@ public sealed unsafe class MemoryStore : IDisposable
         ReadOnlySpan<byte> descriptor,
         StoreWaitOptions waitOptions)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryPublish(key, value, descriptor, remainingWait);
+            }
+        }
+
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             return Record(enterStatus);
@@ -231,11 +336,14 @@ public sealed unsafe class MemoryStore : IDisposable
     /// </summary>
     /// <remarks>
     /// The reservation remains invisible to readers until commit succeeds.
+    /// A reservation is a single-producer lifecycle; concurrent access through copied reservation
+    /// structs is unsupported.
     /// Callers write through immediate <see cref="ValueReservation.GetSpan(int)"/> views or advanced
     /// <see cref="ValueReservation.DangerousGetMemory(int)"/> direct-I/O views and must advance exactly
     /// <paramref name="payloadLength"/> bytes before commit. Disposing an active reservation aborts it,
     /// and descriptor bytes are immutable after reservation creation.
     /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public StoreStatus TryReserve(
         ReadOnlySpan<byte> key,
         int payloadLength,
@@ -246,7 +354,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Reserves store-owned payload storage using the supplied wait policy for shared synchronization.
+    /// Reserves store-owned payload storage using the supplied profile-specific bounded wait policy.
     /// </summary>
     public StoreStatus TryReserve(
         ReadOnlySpan<byte> key,
@@ -255,6 +363,31 @@ public sealed unsafe class MemoryStore : IDisposable
         StoreWaitOptions waitOptions,
         out ValueReservation reservation)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                reservation = default;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                var status = _engine.TryReserve(
+                    key,
+                    payloadLength,
+                    descriptor,
+                    remainingWait,
+                    out var handle);
+                reservation = status == StoreStatus.Success ? new ValueReservation(this, handle) : default;
+                return status;
+            }
+        }
+
         reservation = default;
 
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
@@ -335,7 +468,7 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Publishes a segmented payload after acquiring shared synchronization with the supplied wait policy.
+    /// Publishes a segmented payload using the supplied profile-specific bounded wait policy.
     /// </summary>
     public StoreStatus TryPublishSegments(
         ReadOnlySpan<byte> key,
@@ -344,6 +477,29 @@ public sealed unsafe class MemoryStore : IDisposable
         StoreWaitOptions waitOptions,
         out long copiedBytes)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                copiedBytes = 0;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryPublishSegments(
+                    key,
+                    payload,
+                    descriptor,
+                    remainingWait,
+                    out copiedBytes);
+            }
+        }
+
         copiedBytes = 0;
         if (payload.Length > int.MaxValue)
         {
@@ -436,10 +592,30 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Acquires a read lease using the supplied wait policy for shared synchronization.
+    /// Acquires a shared read lease using the supplied profile-specific bounded wait policy.
     /// </summary>
     public StoreStatus TryAcquire(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions, out ValueLease lease)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                lease = default;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                var status = _engine.TryAcquire(key, remainingWait, out var handle);
+                lease = status == StoreStatus.Success ? new ValueLease(this, handle) : default;
+                return status;
+            }
+        }
+
         lease = default;
 
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
@@ -501,7 +677,8 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Removes the value identified by the supplied key and reclaims its slot when no active lease protects it.
+    /// Logically removes the value identified by the supplied key and cooperatively reclaims its
+    /// storage after every protecting lease is released or safely recovered.
     /// </summary>
     public StoreStatus TryRemove(ReadOnlySpan<byte> key)
     {
@@ -509,10 +686,31 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Removes the value identified by the supplied key using the supplied wait policy for shared synchronization.
+    /// Logically removes the value using the supplied profile-specific bounded wait policy. After
+    /// the removal ordering point the key is logically absent. The RemovePending
+    /// (<see cref="StoreStatus.RemovePending"/>) result reports either a protecting lease or
+    /// incomplete bounded post-removal work; physical
+    /// reclamation may complete cooperatively after this call returns.
     /// </summary>
     public StoreStatus TryRemove(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryRemove(key, remainingWait);
+            }
+        }
+
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             return Record(enterStatus);
@@ -558,19 +756,50 @@ public sealed unsafe class MemoryStore : IDisposable
     /// <summary>
     /// Explicitly recovers stale active lease records according to the supplied owner policy.
     /// </summary>
+    /// <remarks>
+    /// When <see cref="LeaseRecoveryOptions.RecoverCurrentProcessLeases"/> is true, the caller
+    /// must first quiesce lease acquisition, projection, borrowed-span use, and release across
+    /// every current-process handle attached to this mapping, and keep them quiescent until this
+    /// call returns. False remains safe during normal concurrent lease activity.
+    /// </remarks>
     public StoreStatus TryRecoverLeases(in LeaseRecoveryOptions options, out LeaseRecoveryReport report)
     {
         return TryRecoverLeases(options, StoreWaitOptions.Default, out report);
     }
 
     /// <summary>
-    /// Explicitly recovers stale active lease records using the supplied wait policy for shared synchronization.
+    /// Explicitly recovers stale active lease records using the supplied profile-specific bounded wait policy.
     /// </summary>
+    /// <remarks>
+    /// When <see cref="LeaseRecoveryOptions.RecoverCurrentProcessLeases"/> is true, the caller
+    /// must first quiesce lease acquisition, projection, borrowed-span use, and release across
+    /// every current-process handle attached to this mapping, and keep them quiescent until this
+    /// call returns. The library deliberately adds no hot-path gate for this administrative
+    /// test/controlled-shutdown override.
+    /// </remarks>
     public StoreStatus TryRecoverLeases(
         in LeaseRecoveryOptions options,
         StoreWaitOptions waitOptions,
         out LeaseRecoveryReport report)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                report = default;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryRecoverLeases(options, remainingWait, out report);
+            }
+        }
+
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             report = default;
@@ -622,13 +851,31 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Explicitly recovers stale pending reservations using the supplied wait policy for shared synchronization.
+    /// Explicitly recovers stale pending reservations using the supplied profile-specific bounded wait policy.
     /// </summary>
     public StoreStatus TryRecoverReservations(
         in ReservationRecoveryOptions options,
         StoreWaitOptions waitOptions,
         out ReservationRecoveryReport report)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                report = default;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryRecoverReservations(options, remainingWait, out report);
+            }
+        }
+
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             report = default;
@@ -689,10 +936,31 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Attempts to create a caller-formatted diagnostic snapshot using the supplied wait policy.
+    /// Attempts to create a bounded, moment-in-time diagnostic snapshot using the supplied
+    /// profile-specific wait policy without imposing a global data-path pause.
     /// </summary>
     public StoreStatus TryGetDiagnostics(StoreWaitOptions waitOptions, out DiagnosticsSnapshot snapshot)
     {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                snapshot = engineEnterStatus == StoreStatus.StoreDisposed
+                    ? CreateDisposedSnapshot()
+                    : default;
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.TryGetDiagnostics(remainingWait, out snapshot);
+            }
+        }
+
         if (!TryEnterOperation(waitOptions, out var operation, out var enterStatus))
         {
             snapshot = enterStatus == StoreStatus.StoreDisposed ? CreateDisposedSnapshot() : default;
@@ -725,10 +993,17 @@ public sealed unsafe class MemoryStore : IDisposable
     }
 
     /// <summary>
-    /// Releases this store handle and invalidates future operations, lease spans, and reservation spans.
+    /// Releases this local store handle and invalidates future operations, lease spans, and
+    /// reservation spans without disposing other handles attached to the mapping.
     /// </summary>
     public void Dispose()
     {
+        if (!_lifecycle.IsDisposingOrDisposed
+            && _engine is ILockFreeCheckpointEmitter checkpointEmitter)
+        {
+            checkpointEmitter.ReachCheckpoint(LockFreeCheckpointId.DisposalBeforeLocalGateClose);
+        }
+
         if (!_lifecycle.TryBeginDispose())
         {
             return;
@@ -736,6 +1011,12 @@ public sealed unsafe class MemoryStore : IDisposable
 
         try
         {
+            if (_engine is not null)
+            {
+                _engine.Dispose();
+                return;
+            }
+
             var lockTaken = TryEnterStoreLock(StoreWaitOptions.Default, out _);
             if (lockTaken)
             {
@@ -756,8 +1037,433 @@ public sealed unsafe class MemoryStore : IDisposable
         finally
         {
             _lifecycle.CompleteDispose();
-            _synchronization.Dispose();
+            if (_engine is null)
+            {
+                _synchronization.Dispose();
+            }
         }
+    }
+
+    internal ReservationHandle CreateLegacyReservationHandle(
+        int slotIndex,
+        SlotLifecycleId lifecycleId,
+        int payloadLength)
+    {
+        return new ReservationHandle(
+            unchecked((ulong)Header.StoreId),
+            unchecked((ulong)lifecycleId.ReuseEpoch),
+            EncodeLegacySlotBinding(slotIndex, lifecycleId.Generation),
+            payloadLength);
+    }
+
+    internal LeaseHandle CreateLegacyLeaseHandle(
+        int slotIndex,
+        SlotLifecycleId lifecycleId,
+        int leaseRecordId)
+    {
+        return new LeaseHandle(
+            unchecked((ulong)Header.StoreId),
+            unchecked((ulong)lifecycleId.ReuseEpoch),
+            EncodeLegacySlotBinding(slotIndex, lifecycleId.Generation),
+            checked((uint)(leaseRecordId + 1)));
+    }
+
+    internal bool IsLeaseActive(in LeaseHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return false;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.IsLeaseActive(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return false;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out var leaseRecordId)
+            && IsLeaseActive(slotIndex, lifecycleId, leaseRecordId);
+    }
+
+    internal int GetValueLength(in LeaseHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return 0;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetValueLength(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return 0;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out _)
+            ? GetValueLength(slotIndex, lifecycleId)
+            : 0;
+    }
+
+    internal int GetDescriptorLength(in LeaseHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return 0;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetDescriptorLength(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return 0;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out _)
+            ? GetDescriptorLength(slotIndex, lifecycleId)
+            : 0;
+    }
+
+    internal ReadOnlySpan<byte> GetValueSpan(LeaseHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return ReadOnlySpan<byte>.Empty;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetValueSpan(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out _)
+            ? GetValueSpan(slotIndex, lifecycleId)
+            : ReadOnlySpan<byte>.Empty;
+    }
+
+    internal ReadOnlySpan<byte> GetDescriptorSpan(LeaseHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return ReadOnlySpan<byte>.Empty;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetDescriptorSpan(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return ReadOnlySpan<byte>.Empty;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out _)
+            ? GetDescriptorSpan(slotIndex, lifecycleId)
+            : ReadOnlySpan<byte>.Empty;
+    }
+
+    internal StoreStatus ReleaseLease(in LeaseHandle handle, StoreWaitOptions waitOptions)
+    {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.ReleaseLease(handle, remainingWait);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return StoreStatus.StoreDisposed;
+        }
+
+        return TryDecodeLegacyLeaseHandle(handle, out var slotIndex, out var lifecycleId, out var leaseRecordId)
+            ? ReleaseLease(slotIndex, lifecycleId, leaseRecordId, waitOptions)
+            : StoreStatus.InvalidLease;
+    }
+
+    internal bool IsReservationPending(in ReservationHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return false;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.IsReservationPending(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return false;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            && IsReservationPending(slotIndex, lifecycleId);
+    }
+
+    internal int GetReservationBytesWritten(in ReservationHandle handle)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return 0;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetReservationBytesWritten(handle);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return 0;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? GetReservationBytesWritten(slotIndex, lifecycleId)
+            : 0;
+    }
+
+    internal Span<byte> GetReservationSpan(ReservationHandle handle, int sizeHint)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return Span<byte>.Empty;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.GetReservationSpan(handle, sizeHint);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return Span<byte>.Empty;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? GetReservationSpan(slotIndex, lifecycleId, sizeHint)
+            : Span<byte>.Empty;
+    }
+
+    internal Memory<byte> GetReservationMemory(ReservationHandle handle, int sizeHint)
+    {
+        if (_engine is not null)
+        {
+            if (!_lifecycle.TryEnter(out var engineOperation))
+            {
+                return Memory<byte>.Empty;
+            }
+
+            using (engineOperation)
+            {
+                return _engine.DangerousGetReservationMemory(handle, sizeHint);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return Memory<byte>.Empty;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? GetReservationMemory(slotIndex, lifecycleId, sizeHint)
+            : Memory<byte>.Empty;
+    }
+
+    internal StoreStatus AdvanceReservation(
+        in ReservationHandle handle,
+        int byteCount,
+        StoreWaitOptions waitOptions)
+    {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.AdvanceReservation(handle, byteCount, remainingWait);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return StoreStatus.StoreDisposed;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? AdvanceReservation(slotIndex, lifecycleId, byteCount, waitOptions)
+            : StoreStatus.InvalidReservation;
+    }
+
+    internal StoreStatus CommitReservation(in ReservationHandle handle, StoreWaitOptions waitOptions)
+    {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.CommitReservation(handle, remainingWait);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return StoreStatus.StoreDisposed;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? CommitReservation(slotIndex, lifecycleId, waitOptions)
+            : StoreStatus.InvalidReservation;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal StoreStatus AbortReservation(
+        in ReservationHandle handle,
+        bool countAbort,
+        StoreWaitOptions waitOptions)
+    {
+        if (_engine is not null)
+        {
+            if (!TryEnterEngineOperation(
+                    waitOptions,
+                    out var engineOperation,
+                    out StoreWaitOptions remainingWait,
+                    out StoreStatus engineEnterStatus))
+            {
+                return _engine.RecordFacadeStatus(engineEnterStatus);
+            }
+
+            using (engineOperation)
+            {
+                return _engine.AbortReservation(handle, remainingWait);
+            }
+        }
+
+        if (_lifecycle.IsDisposingOrDisposed)
+        {
+            return StoreStatus.StoreDisposed;
+        }
+
+        return TryDecodeLegacyReservationHandle(handle, out var slotIndex, out var lifecycleId)
+            ? AbortReservation(slotIndex, lifecycleId, countAbort, waitOptions)
+            : StoreStatus.InvalidReservation;
+    }
+
+    internal static int DecodeLegacySlotIndex(ulong slotBinding) => unchecked((int)(uint)slotBinding) - 1;
+
+    internal static int DecodeLegacyLeaseRecordId(in LeaseHandle handle) => unchecked((int)handle.LeaseToken) - 1;
+
+    internal static SlotLifecycleId DecodeLegacyLifecycle(in LeaseHandle handle) =>
+        new(checked((int)(handle.SlotBinding >> 32)), unchecked((long)handle.ParticipantToken));
+
+    internal static SlotLifecycleId DecodeLegacyLifecycle(in ReservationHandle handle) =>
+        new(checked((int)(handle.SlotBinding >> 32)), unchecked((long)handle.ParticipantToken));
+
+    private static ulong EncodeLegacySlotBinding(int slotIndex, int generation) =>
+        ((ulong)checked((uint)generation) << 32) | checked((uint)(slotIndex + 1));
+
+    private bool TryDecodeLegacyReservationHandle(
+        in ReservationHandle handle,
+        out int slotIndex,
+        out SlotLifecycleId lifecycleId)
+    {
+        slotIndex = -1;
+        lifecycleId = default;
+        if (handle.StoreId != unchecked((ulong)Header.StoreId))
+        {
+            return false;
+        }
+
+        slotIndex = DecodeLegacySlotIndex(handle.SlotBinding);
+        lifecycleId = DecodeLegacyLifecycle(handle);
+        return slotIndex >= 0 && slotIndex < _layout.SlotCount && lifecycleId.IsValid;
+    }
+
+    private bool TryDecodeLegacyLeaseHandle(
+        in LeaseHandle handle,
+        out int slotIndex,
+        out SlotLifecycleId lifecycleId,
+        out int leaseRecordId)
+    {
+        slotIndex = -1;
+        lifecycleId = default;
+        leaseRecordId = -1;
+        if (handle.StoreId != unchecked((ulong)Header.StoreId))
+        {
+            return false;
+        }
+
+        slotIndex = DecodeLegacySlotIndex(handle.SlotBinding);
+        lifecycleId = DecodeLegacyLifecycle(handle);
+        leaseRecordId = DecodeLegacyLeaseRecordId(handle);
+        return slotIndex >= 0 && slotIndex < _layout.SlotCount
+            && leaseRecordId >= 0 && leaseRecordId < _layout.LeaseRecordCount
+            && lifecycleId.IsValid;
     }
 
     internal bool IsLeaseActive(int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
@@ -895,26 +1601,28 @@ public sealed unsafe class MemoryStore : IDisposable
         }
     }
 
-    internal StoreLayout Layout => _layout;
+    private MemoryStore LegacyCore => _engine is Engines.LegacyV12.LegacyV12StoreEngine legacy ? legacy.Core : this;
 
-    internal ref StoreHeader Header => ref *(StoreHeader*)_region.Pointer;
+    internal StoreLayout Layout => LegacyCore._layout;
 
-    internal ref SharedSlotMetadata GetSlotForTesting(int slotIndex) => ref _slots.GetSlot(slotIndex);
+    internal ref StoreHeader Header => ref *(StoreHeader*)LegacyCore._region.Pointer;
 
-    internal ref SharedLeaseRecord GetLeaseRecordForTesting(int leaseRecordId) => ref _leases.GetRecord(leaseRecordId);
+    internal ref SharedSlotMetadata GetSlotForTesting(int slotIndex) => ref LegacyCore._slots.GetSlot(slotIndex);
 
-    internal void SetSlotSearchCursorForTesting(int nextSearch) => _slots.SetNextSearchForTesting(nextSearch);
+    internal ref SharedLeaseRecord GetLeaseRecordForTesting(int leaseRecordId) => ref LegacyCore._leases.GetRecord(leaseRecordId);
 
-    internal void SetLeaseSearchCursorForTesting(int nextSearch) => _leases.SetNextSearchForTesting(nextSearch);
+    internal void SetSlotSearchCursorForTesting(int nextSearch) => LegacyCore._slots.SetNextSearchForTesting(nextSearch);
+
+    internal void SetLeaseSearchCursorForTesting(int nextSearch) => LegacyCore._leases.SetNextSearchForTesting(nextSearch);
 
     internal void SetSlotLifecycleForTesting(int slotIndex, SlotLifecycleId lifecycleId)
     {
-        ref var slot = ref _slots.GetSlot(slotIndex);
+        ref var slot = ref LegacyCore._slots.GetSlot(slotIndex);
         slot.Generation = lifecycleId.Generation;
         slot.ReuseEpoch = lifecycleId.ReuseEpoch;
     }
 
-    internal IndexStateCounts CountIndexStatesForTesting() => _index.CountStates();
+    internal IndexStateCounts CountIndexStatesForTesting() => LegacyCore._index.CountStates();
 
     internal bool IsReservationPending(int slotIndex, SlotLifecycleId lifecycleId)
     {
@@ -1159,10 +1867,28 @@ public sealed unsafe class MemoryStore : IDisposable
 
     private StoreOpenStatus InitializeOrValidate(SharedMemoryStoreOptions options)
     {
+        // Existing regions are mapped at their actual backing capacity so an
+        // opposite-profile header can be rejected without first projecting the
+        // caller's requested (possibly much larger) view. Prove the complete
+        // fixed v1 header is mapped before creating a ref to it.
+        if (_region.Capacity < Marshal.SizeOf<StoreHeader>())
+        {
+            return StoreOpenStatus.IncompatibleLayout;
+        }
+
         ref var header = ref Header;
         if (options.OpenMode == OpenMode.CreateNew || header.Magic == 0)
         {
             if (options.OpenMode == OpenMode.OpenExisting)
+            {
+                return StoreOpenStatus.IncompatibleLayout;
+            }
+
+            // Initialization clears RequiredBytes and publishes TotalBytes in
+            // the header. Both lengths must describe storage actually mapped by
+            // this handle before either write is attempted.
+            if (_region.Capacity < _layout.RequiredBytes
+                || _region.Capacity < _layout.TotalBytes)
             {
                 return StoreOpenStatus.IncompatibleLayout;
             }
@@ -1177,6 +1903,17 @@ public sealed unsafe class MemoryStore : IDisposable
             || header.LayoutMajorVersion != LayoutConstants.LayoutMajorVersion
             || !_layout.MatchesHeader(header)
             || !ValidateSectionBounds(header))
+        {
+            return StoreOpenStatus.IncompatibleLayout;
+        }
+
+        // Header and section validation proves the requested v1 topology, but
+        // it does not prove that a live backing file was not truncated after the
+        // header was committed. Never accept the layout unless both its declared
+        // extent and its computed required extent fit in the actual view.
+        if (header.TotalBytes < _layout.RequiredBytes
+            || _region.Capacity < header.TotalBytes
+            || _region.Capacity < _layout.RequiredBytes)
         {
             return StoreOpenStatus.IncompatibleLayout;
         }
@@ -1266,6 +2003,72 @@ public sealed unsafe class MemoryStore : IDisposable
         return descriptor.Length > _layout.MaxDescriptorBytes
             ? StoreStatus.DescriptorTooLarge
             : StoreStatus.Success;
+    }
+
+    private bool TryEnterEngineOperation(
+        StoreWaitOptions waitOptions,
+        out StoreLifecycleGate.Operation operation,
+        out StoreWaitOptions remainingWait,
+        out StoreStatus status)
+    {
+        long started = Stopwatch.GetTimestamp();
+        status = _lifecycle.TryEnter(waitOptions, started, out operation);
+        if (status != StoreStatus.Success)
+        {
+            remainingWait = default;
+            return false;
+        }
+
+        if (TryGetRemainingWaitOptions(
+                waitOptions,
+                started,
+                out remainingWait,
+                out status))
+        {
+            return true;
+        }
+
+        operation.Dispose();
+        operation = default;
+        return false;
+    }
+
+    private static bool TryGetRemainingWaitOptions(
+        StoreWaitOptions waitOptions,
+        long started,
+        out StoreWaitOptions remainingWait,
+        out StoreStatus status)
+    {
+        remainingWait = default;
+        if (!waitOptions.IsValid)
+        {
+            status = StoreStatus.UnknownFailure;
+            return false;
+        }
+
+        if (waitOptions.CancellationToken.IsCancellationRequested)
+        {
+            status = StoreStatus.OperationCanceled;
+            return false;
+        }
+
+        if (waitOptions.IsInfinite || waitOptions.Timeout == TimeSpan.Zero)
+        {
+            remainingWait = waitOptions;
+            status = StoreStatus.Success;
+            return true;
+        }
+
+        TimeSpan remaining = waitOptions.Timeout - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero)
+        {
+            status = StoreStatus.StoreBusy;
+            return false;
+        }
+
+        remainingWait = new StoreWaitOptions(remaining, waitOptions.CancellationToken);
+        status = StoreStatus.Success;
+        return true;
     }
 
     private bool TryEnterOperation(
@@ -1376,8 +2179,13 @@ public sealed unsafe class MemoryStore : IDisposable
         _region.Dispose();
     }
 
-    private DiagnosticsSnapshot CreateDisposedSnapshot()
+    internal DiagnosticsSnapshot CreateDisposedSnapshot()
     {
+        if (_engine is not null)
+        {
+            return _engine.CreateDisposedDiagnosticsSnapshot();
+        }
+
         return _diagnostics.CreateSnapshot(
             _layout.TotalBytes,
             _layout.SlotCount,
@@ -1413,6 +2221,17 @@ public sealed unsafe class MemoryStore : IDisposable
             Volatile.Write(ref Header.StoreState, LayoutConstants.StoreCorrupt);
         }
 
+        _diagnostics.Record(status);
+        return status;
+    }
+
+    /// <summary>
+    /// Records a status rejected by the outer profile-neutral facade. This is
+    /// deliberately diagnostics-only so it remains safe after failed lifecycle
+    /// entry and while another thread may be disposing mapped resources.
+    /// </summary>
+    internal StoreStatus RecordFacadeStatus(StoreStatus status)
+    {
         _diagnostics.Record(status);
         return status;
     }

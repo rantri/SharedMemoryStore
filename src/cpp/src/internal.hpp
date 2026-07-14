@@ -25,6 +25,7 @@ static_assert(
     "SharedMemoryStore mapped layout requires a little-endian target.");
 
 constexpr std::int32_t magic = 0x31534D53;
+constexpr std::int32_t lock_free_magic = 0x32534D53;
 constexpr std::int32_t alignment = 8;
 
 constexpr std::int32_t store_initializing = 0;

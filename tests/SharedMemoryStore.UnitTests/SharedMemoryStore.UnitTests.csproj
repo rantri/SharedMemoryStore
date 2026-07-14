@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
@@ -20,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SharedMemoryStore\SharedMemoryStore.csproj" />
+    <ProjectReference Include="..\SharedMemoryStore.LockFreeAgent\SharedMemoryStore.LockFreeAgent.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

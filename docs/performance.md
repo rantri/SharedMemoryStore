@@ -80,6 +80,14 @@ pending removals, and pending reservations. `LeaseRecordCount` must cover
 concurrent active readers. `MaxKeyBytes`, `MaxDescriptorBytes`, and
 `MaxValueBytes` must cover encoded keys, descriptors, and payloads.
 
+Every lock-free open handle also allocates private `long[SlotCount]` and
+`long[LeaseRecordCount]` capacity-proof buffers at open time. Budget about eight
+bytes per configured value slot or lease record per process/handle. The slot
+buffer is roughly 8 MiB at 1,048,575 slots; the lease buffer is 1 KiB for 128
+records, 64 KiB for 8,192, and 8 MiB for 1,048,576. The buffers are reused on
+rare full-candidate paths; they add no per-operation allocation and no shared or
+OS synchronization.
+
 Use [Diagnostics](diagnostics.md) to track `StoreFull`, `LeaseTableFull`,
 `CapacityPressureCount`, active leases, active reservations, pending removals,
 and key-index health.

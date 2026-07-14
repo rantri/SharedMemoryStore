@@ -9,7 +9,7 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <PackageId>SharedMemoryStore</PackageId>
-    <Version>1.0.2</Version>
+    <Version>2.0.0</Version>
     <Authors>SharedMemoryStore contributors</Authors>
     <Company>SharedMemoryStore</Company>
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
@@ -19,7 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/rantri/SharedMemoryStore</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>NuGet SharedMemoryStore 1.0.2 preserves Linux, Windows, and same-host Docker support, corrects Linux layout-mismatch reporting, and rejects unsupported managed processes early while preserving the public API, status values, BCL-only runtime surface, layout 1.2, and resource naming 1. Repository source adds independently versioned native C++ and Python 0.1.0 sibling distributions using C ABI 1.0, validated with .NET on Windows and Linux; v1.0.2 neither includes them in NuGet nor publishes them to PyPI or a native package registry.</PackageReleaseNotes>
+    <PackageReleaseNotes>NuGet SharedMemoryStore 2.0.0 adds an explicitly selected C# layout 2.0 lock-free key-value profile and resource protocol 2, including zero-copy reservation publication, shared read leases, generation-fenced removal/reuse, participant records, explicit recovery, and additive diagnostics. The legacy profile remains the default and preserves mapped layout 1.2, resource naming 1, existing status numbers, and Linux, Windows, and same-host Docker support. Layout 1.2 and 2.0 mappings are distinct: upgrade and rollback require drain, close, recreate, and application-owned republish; there is no in-place conversion or mixed-layout writer mode. Independently versioned C++ and Python 0.1.0 distributions remain layout 1.2-only and fail closed on layout 2.0.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <AssemblyName>SharedMemoryStore</AssemblyName>

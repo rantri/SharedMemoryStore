@@ -72,6 +72,9 @@ demonstrates chunked writes into `ValueReservation.GetSpan()`, exact
 `Advance()` progress, trusted stream reads through
 `ValueReservation.DangerousGetMemory()`, `Commit()`, `Abort()`, reader
 acquisition, cleanup, a pipeline adapter, and `TryPublishSegments`.
+The socket, stream, and pipeline adapters feed application-owned bytes into a
+keyed reservation; they do not turn SharedMemoryStore into a stream, queue,
+broker, or delivery coordinator.
 
 Focused commands:
 

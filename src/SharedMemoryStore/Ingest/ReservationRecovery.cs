@@ -8,7 +8,12 @@ namespace SharedMemoryStore
     /// <summary>
     /// Options for explicit stale reservation recovery.
     /// </summary>
-    /// <param name="RecoverCurrentProcessReservations">When true, current-process pending reservations may be recovered for tests and controlled shutdown.</param>
+    /// <param name="RecoverCurrentProcessReservations">
+    /// When true, current-process Reserved reservations may be recovered for tests
+    /// and controlled shutdown after the application has quiesced every writer.
+    /// Initializing reservations remain protected until their participant enters
+    /// the explicit Closing or Recovering handoff.
+    /// </param>
     public readonly record struct ReservationRecoveryOptions(bool RecoverCurrentProcessReservations);
 
     /// <summary>

@@ -1,12 +1,18 @@
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.Versioning;
+using System.Text;
 
 namespace SharedMemoryStore.Interop;
 
 [SupportedOSPlatform("linux")]
 internal static class LinuxSharedMemoryRegion
 {
+    private const string ReleaseMarkerSegment = ".released.";
+    private const string FinalizedReleaseMarkerSuffix = ".ready";
+    private const int MaximumReleaseMarkerBytes = 1024;
+    private static readonly StoreWaitOptions OwnerReleaseWaitOptions = new(TimeSpan.FromMilliseconds(250));
+
     public static StoreOpenStatus TryOpen(
         PlatformResourceName resourceName,
         SharedMemoryStoreOptions options,
@@ -29,22 +35,36 @@ internal static class LinuxSharedMemoryRegion
             try
             {
                 LinuxSharedMemoryDirectory.EnsureExists(Path.GetDirectoryName(resourceName.LinuxRegionPath) ?? ".");
-                var liveOwners = ReadLiveOwnerRecords(resourceName.LinuxOwnersPath);
-                var hasLiveResource = File.Exists(resourceName.LinuxRegionPath) && liveOwners.Count > 0;
+                ReconcileReleaseMarkers(resourceName);
+                OwnerSnapshot ownerSnapshot = ReadOwnerSnapshot(resourceName);
+                List<string> committedOwners = ownerSnapshot.CommittedOwners;
+                // A live witness makes the existing sidecar an already-committed
+                // conservative owner set. It need not be rewritten or fully
+                // reclassified merely to attach another handle. When no owner is
+                // live, commit the filtered empty set before stale-anchor cleanup.
+                if (!ownerSnapshot.HasLiveOwner)
+                {
+                    WriteOwners(resourceName.LinuxOwnersPath, committedOwners);
+                }
+
+                SweepUnreferencedOwnerAnchors(resourceName.LinuxOwnersPath, committedOwners);
+                var hasLiveResource = File.Exists(resourceName.LinuxRegionPath)
+                    && ownerSnapshot.HasLiveOwner;
                 if (!hasLiveResource)
                 {
                     DeleteStaleResources(resourceName);
+                    committedOwners = [];
                 }
 
                 return options.OpenMode switch
                 {
                     OpenMode.CreateNew when hasLiveResource => StoreOpenStatus.AlreadyExists,
                     OpenMode.OpenExisting when !hasLiveResource => StoreOpenStatus.NotFound,
-                    OpenMode.CreateNew => CreateRegion(resourceName, options, out region),
-                    OpenMode.OpenExisting => OpenExistingRegion(resourceName, options, out region),
+                    OpenMode.CreateNew => CreateRegion(resourceName, options, committedOwners, out region),
+                    OpenMode.OpenExisting => OpenExistingRegion(resourceName, options, committedOwners, out region),
                     _ => hasLiveResource
-                        ? OpenExistingRegion(resourceName, options, out region)
-                        : CreateRegion(resourceName, options, out region)
+                        ? OpenExistingRegion(resourceName, options, committedOwners, out region)
+                        : CreateRegion(resourceName, options, committedOwners, out region)
                 };
             }
             catch (UnauthorizedAccessException)
@@ -65,6 +85,7 @@ internal static class LinuxSharedMemoryRegion
     private static StoreOpenStatus CreateRegion(
         PlatformResourceName resourceName,
         SharedMemoryStoreOptions options,
+        IReadOnlyList<string> committedOwners,
         out MemoryMappedStoreRegion? region)
     {
         region = null;
@@ -88,7 +109,12 @@ internal static class LinuxSharedMemoryRegion
         try
         {
             stream.SetLength(options.TotalBytes);
-            return CreateMappedRegion(resourceName, options.TotalBytes, stream, out region);
+            return CreateMappedRegion(
+                resourceName,
+                options.TotalBytes,
+                stream,
+                committedOwners,
+                out region);
         }
         catch
         {
@@ -101,6 +127,7 @@ internal static class LinuxSharedMemoryRegion
     private static StoreOpenStatus OpenExistingRegion(
         PlatformResourceName resourceName,
         SharedMemoryStoreOptions options,
+        IReadOnlyList<string> committedOwners,
         out MemoryMappedStoreRegion? region)
     {
         region = null;
@@ -116,26 +143,30 @@ internal static class LinuxSharedMemoryRegion
             FileShare.ReadWrite | FileShare.Delete);
         File.SetUnixFileMode(resourceName.LinuxRegionPath, LinuxSharedMemoryDirectory.PrivateFileMode);
 
-        if (stream.Length < options.TotalBytes)
-        {
-            stream.Dispose();
-            return StoreOpenStatus.IncompatibleLayout;
-        }
-
-        return CreateMappedRegion(resourceName, stream.Length, stream, out region);
+        // Always map the existing file at its actual capacity. Header validation decides
+        // whether the requested dimensions/profile are compatible; the requested size must
+        // never prevent probing a readable existing mapping.
+        return CreateMappedRegion(
+            resourceName,
+            stream.Length,
+            stream,
+            committedOwners,
+            out region);
     }
 
     private static StoreOpenStatus CreateMappedRegion(
         PlatformResourceName resourceName,
         long mappingCapacity,
         FileStream stream,
+        IReadOnlyList<string> committedOwners,
         out MemoryMappedStoreRegion? region)
     {
         region = null;
-        var ownerRecord = CreateOwnerRecord();
+        var ownerRecord = CreateOwnerRecord(out Guid ownerToken);
         MemoryMappedFile? mapping = null;
         MemoryMappedViewAccessor? accessor = null;
         MemoryMappedStoreRegion? candidate = null;
+        LinuxOwnerAnchor? ownerAnchor = null;
         var ownerRegistered = false;
         try
         {
@@ -148,28 +179,49 @@ internal static class LinuxSharedMemoryRegion
                 leaveOpen: false);
 
             accessor = mapping.CreateViewAccessor(0, mappingCapacity, MemoryMappedFileAccess.ReadWrite);
+            ownerAnchor = LinuxOwnerAnchor.Create(resourceName.LinuxOwnersPath, ownerToken);
+            LinuxOwnerAnchor registeredAnchor = ownerAnchor;
             candidate = MemoryMappedStoreRegion.Create(
                 mapping,
                 accessor,
-                mappingCapacity,
                 () =>
                 {
-                    if (ownerRegistered)
+                    OwnerReleaseOutcome releaseOutcome = ownerRegistered
+                        ? ReleaseOwner(resourceName, ownerRecord)
+                        : OwnerReleaseOutcome.OwnerAbsent;
+                    if (releaseOutcome != OwnerReleaseOutcome.Failed)
                     {
-                        ReleaseOwner(resourceName, ownerRecord);
+                        // The exact owner line is either absent or covered by a
+                        // durable finalized release marker. Both are authoritative
+                        // after the mapped view has already been unmapped.
+                        registeredAnchor.Dispose();
                     }
                 });
             mapping = null;
             accessor = null;
-            RegisterOwner(resourceName.LinuxOwnersPath, ownerRecord);
+            CommitOwnerRegistration(resourceName, committedOwners, ownerRecord);
+            // Publish the callback state at the sidecar replacement commit point.
+            // The pre-registration sweep already covered every unreferenced
+            // artifact visible at lifecycle entry. A crash after anchor creation
+            // but before this commit is repaired by the next cold lifecycle.
             ownerRegistered = true;
             region = candidate;
             candidate = null;
+            ownerAnchor = null;
             return StoreOpenStatus.Success;
         }
         catch
         {
-            candidate?.Dispose();
+            if (candidate is not null)
+            {
+                candidate.Dispose();
+                candidate = null;
+                // The callback owns the anchor outcome, including deliberate
+                // retention after a bounded release-marker fallback.
+                ownerAnchor = null;
+            }
+
+            ownerAnchor?.Dispose();
             accessor?.Dispose();
             mapping?.Dispose();
             stream.Dispose();
@@ -177,55 +229,136 @@ internal static class LinuxSharedMemoryRegion
         }
     }
 
-    private static string CreateOwnerRecord()
+    private static string CreateOwnerRecord(out Guid ownerToken)
     {
+        ownerToken = Guid.NewGuid();
         return string.Join(
             ':',
             Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
             GetProcessStartToken(Environment.ProcessId),
-            Guid.NewGuid().ToString("N"));
+            ownerToken.ToString("N"));
     }
 
-    private static void RegisterOwner(string ownersPath, string ownerRecord)
+    private static void CommitOwnerRegistration(
+        PlatformResourceName resourceName,
+        IReadOnlyList<string> committedOwners,
+        string ownerRecord)
     {
-        var owners = ReadLiveOwnerRecords(ownersPath);
-        owners.Add(ownerRecord);
-        WriteOwners(ownersPath, owners);
+        var nextOwners = new List<string>(committedOwners.Count + 1);
+        nextOwners.AddRange(committedOwners);
+        nextOwners.Add(ownerRecord);
+        WriteOwners(resourceName.LinuxOwnersPath, nextOwners);
     }
 
-    private static void ReleaseOwner(PlatformResourceName resourceName, string ownerRecord)
+    private static OwnerReleaseOutcome ReleaseOwner(
+        PlatformResourceName resourceName,
+        string ownerRecord)
     {
+        var ownerCommittedAbsent = false;
         try
         {
             var lifecycleLockStatus = LinuxFileLock.TryAcquire(
                 resourceName.LinuxLifecycleLockPath,
-                StoreWaitOptions.Infinite,
+                OwnerReleaseWaitOptions,
                 out var lifecycleLock);
             if (lifecycleLockStatus != StoreStatus.Success || lifecycleLock is null)
             {
-                return;
+                return TryPublishReleaseMarker(resourceName, ownerRecord)
+                    ? OwnerReleaseOutcome.FinalizedMarkerPublished
+                    : OwnerReleaseOutcome.Failed;
             }
 
             using (lifecycleLock)
             {
-                var owners = ReadLiveOwnerRecords(resourceName.LinuxOwnersPath);
+                ReconcileReleaseMarkers(resourceName);
+                OwnerScan ownerScan = ReadLiveOwnerRecords(resourceName);
+                var owners = ownerScan.LiveOwners;
                 owners.RemoveAll(owner => string.Equals(owner, ownerRecord, StringComparison.Ordinal));
+                // The sidecar replacement is the commit point. Marker deletion and stale
+                // resource cleanup must happen only after this exact owner is absent there.
+                WriteOwners(resourceName.LinuxOwnersPath, owners);
+                ownerCommittedAbsent = true;
+                SweepUnreferencedOwnerAnchors(resourceName.LinuxOwnersPath, owners);
                 if (owners.Count == 0)
                 {
                     DeleteStaleResources(resourceName);
-                    return;
                 }
-
-                WriteOwners(resourceName.LinuxOwnersPath, owners);
             }
         }
         catch
         {
-            // Cleanup is best effort; later opens re-check owner liveness before reusing stale files.
+            // The finalized marker below makes this exact release replayable by a later C# opener.
         }
+
+        if (ownerCommittedAbsent)
+        {
+            return OwnerReleaseOutcome.OwnerAbsent;
+        }
+
+        return TryPublishReleaseMarker(resourceName, ownerRecord)
+            ? OwnerReleaseOutcome.FinalizedMarkerPublished
+            : OwnerReleaseOutcome.Failed;
     }
 
-    private static List<string> ReadLiveOwnerRecords(string ownersPath)
+    private static OwnerScan ReadLiveOwnerRecords(PlatformResourceName resourceName)
+    {
+        var owners = new List<string>();
+        foreach (var trimmed in ReadOwnerRecords(resourceName.LinuxOwnersPath))
+        {
+            if (IsOwnerRecordLive(resourceName.LinuxOwnersPath, trimmed))
+            {
+                owners.Add(trimmed);
+            }
+        }
+
+        return new OwnerScan(owners);
+    }
+
+    private static OwnerSnapshot ReadOwnerSnapshot(PlatformResourceName resourceName)
+    {
+        List<string> committedOwners = ReadOwnerRecords(resourceName.LinuxOwnersPath);
+        foreach (string owner in committedOwners)
+        {
+            if (IsOwnerRecordLive(resourceName.LinuxOwnersPath, owner))
+            {
+                // One authoritative live witness is sufficient to prove that the
+                // mapping remains owned. Preserve the complete committed sidecar
+                // so attach cost does not grow with every prior process. Full
+                // stale-record pruning remains a release/no-live responsibility.
+                return new OwnerSnapshot(committedOwners, HasLiveOwner: true);
+            }
+        }
+
+        return new OwnerSnapshot([], HasLiveOwner: false);
+    }
+
+    private static bool IsOwnerRecordLive(string ownersPath, string ownerRecord)
+    {
+        if (!TryReadOwnerIdentity(ownerRecord, out int processId, out string? startToken))
+        {
+            return false;
+        }
+
+        if (TryReadOwnerToken(ownerRecord, out Guid ownerToken))
+        {
+            LinuxOwnerAnchorState anchorState = LinuxOwnerAnchor.Probe(ownersPath, ownerToken);
+            if (anchorState is LinuxOwnerAnchorState.Locked or LinuxOwnerAnchorState.Ambiguous)
+            {
+                return true;
+            }
+
+            if (anchorState == LinuxOwnerAnchorState.Unlocked)
+            {
+                return false;
+            }
+        }
+
+        // Missing anchors are expected for C++/Python and older managed
+        // owners. Preserve the resource-v1 PID/start-token classification.
+        return IsProcessLive(processId, startToken);
+    }
+
+    private static List<string> ReadOwnerRecords(string ownersPath)
     {
         if (!File.Exists(ownersPath))
         {
@@ -236,19 +369,187 @@ internal static class LinuxSharedMemoryRegion
         foreach (var line in File.ReadAllLines(ownersPath))
         {
             var trimmed = line.Trim();
-            if (trimmed.Length == 0)
-            {
-                continue;
-            }
-
-            if (TryReadOwnerIdentity(trimmed, out var processId, out var startToken)
-                && IsProcessLive(processId, startToken))
+            if (trimmed.Length != 0)
             {
                 owners.Add(trimmed);
             }
         }
 
         return owners;
+    }
+
+    private static void ReconcileReleaseMarkers(PlatformResourceName resourceName)
+    {
+        var finalizedMarkers = EnumerateReleaseMarkerArtifacts(resourceName, finalizedOnly: true);
+        if (finalizedMarkers.Length == 0)
+        {
+            return;
+        }
+
+        var owners = ReadOwnerRecords(resourceName.LinuxOwnersPath);
+        var reconciledMarkers = new List<string>(finalizedMarkers.Length);
+        var releasedTokens = new List<Guid>(finalizedMarkers.Length);
+        foreach (var markerPath in finalizedMarkers)
+        {
+            if (!TryReadReleaseMarker(resourceName, markerPath, out var releasedOwner))
+            {
+                // A finalized marker is a protocol record, not disposable debris. Retain
+                // malformed state and fail the cold operation closed rather than risking
+                // deletion of a still-owned mapping.
+                throw new InvalidDataException($"Invalid owner-release marker '{Path.GetFileName(markerPath)}'.");
+            }
+
+            owners.RemoveAll(owner => string.Equals(owner, releasedOwner, StringComparison.Ordinal));
+            reconciledMarkers.Add(markerPath);
+            if (TryReadOwnerToken(releasedOwner, out Guid releasedToken))
+            {
+                releasedTokens.Add(releasedToken);
+            }
+        }
+
+        if (reconciledMarkers.Count == 0)
+        {
+            return;
+        }
+
+        // Rewrite even when every exact line was already absent. This makes a crash after
+        // the prior rewrite but before marker deletion idempotently replayable.
+        WriteOwners(resourceName.LinuxOwnersPath, owners);
+        foreach (Guid releasedToken in releasedTokens)
+        {
+            // A same-process bounded close may have retained its flock until a
+            // later lifecycle action committed this exact line absent.
+            LinuxOwnerAnchor.ReleaseLocalAfterOwnerAbsent(
+                resourceName.LinuxOwnersPath,
+                releasedToken);
+        }
+
+        foreach (var markerPath in reconciledMarkers)
+        {
+            DeleteIfExists(markerPath);
+        }
+    }
+
+    private static bool TryReadReleaseMarker(
+        PlatformResourceName resourceName,
+        string markerPath,
+        out string ownerRecord)
+    {
+        ownerRecord = string.Empty;
+        var markerInfo = new FileInfo(markerPath);
+        if (!markerInfo.Exists
+            || markerInfo.Length <= 0
+            || markerInfo.Length > MaximumReleaseMarkerBytes
+            || markerInfo.LinkTarget is not null
+            || (markerInfo.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            return false;
+        }
+
+        var markerName = Path.GetFileName(markerPath);
+        var prefix = Path.GetFileName(resourceName.LinuxOwnersPath) + ReleaseMarkerSegment;
+        if (!markerName.StartsWith(prefix, StringComparison.Ordinal)
+            || !markerName.EndsWith(FinalizedReleaseMarkerSuffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var uniqueToken = markerName[
+            prefix.Length..^FinalizedReleaseMarkerSuffix.Length];
+        if (!Guid.TryParseExact(uniqueToken, "N", out _))
+        {
+            return false;
+        }
+
+        var candidate = File.ReadAllText(markerPath, Encoding.UTF8).Trim();
+        if (candidate.Length == 0 || candidate.IndexOfAny('\r', '\n') >= 0)
+        {
+            return false;
+        }
+
+        var parts = candidate.Split(':', 3);
+        if (parts.Length != 3
+            || !Guid.TryParseExact(parts[2], "N", out _)
+            || !string.Equals(parts[2], uniqueToken, StringComparison.OrdinalIgnoreCase)
+            || !TryReadOwnerIdentity(candidate, out var processId, out _)
+            || processId <= 0)
+        {
+            return false;
+        }
+
+        ownerRecord = candidate;
+        return true;
+    }
+
+    private static bool TryPublishReleaseMarker(
+        PlatformResourceName resourceName,
+        string ownerRecord)
+    {
+        string? temporaryPath = null;
+        var published = false;
+        try
+        {
+            var ownerParts = ownerRecord.Split(':', 3);
+            if (ownerParts.Length != 3 || !Guid.TryParseExact(ownerParts[2], "N", out var uniqueToken))
+            {
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(resourceName.LinuxOwnersPath) ?? ".";
+            LinuxSharedMemoryDirectory.EnsureExists(directory);
+            var finalPath = resourceName.LinuxOwnersPath
+                + ReleaseMarkerSegment
+                + uniqueToken.ToString("N")
+                + FinalizedReleaseMarkerSuffix;
+            temporaryPath = finalPath + ".tmp." + Guid.NewGuid().ToString("N");
+            using (var stream = new FileStream(temporaryPath, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
+            }))
+            {
+                using (var writer = new StreamWriter(
+                    stream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    bufferSize: 256,
+                    leaveOpen: true))
+                {
+                    writer.WriteLine(ownerRecord);
+                    writer.Flush();
+                }
+
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.SetUnixFileMode(temporaryPath, LinuxSharedMemoryDirectory.PrivateFileMode);
+            File.Move(temporaryPath, finalPath, overwrite: true);
+            temporaryPath = null;
+            published = true;
+            File.SetUnixFileMode(finalPath, LinuxSharedMemoryDirectory.PrivateFileMode);
+        }
+        catch
+        {
+            // Unmapping/Dispose must complete even if the private resource directory is damaged.
+            // The live owner record remains conservative when marker publication is impossible.
+        }
+        finally
+        {
+            if (temporaryPath is not null)
+            {
+                try
+                {
+                    DeleteIfExists(temporaryPath);
+                }
+                catch
+                {
+                    // Stale-resource cleanup removes release-marker temporary artifacts.
+                }
+            }
+        }
+
+        return published;
     }
 
     private static void WriteOwners(string ownersPath, List<string> owners)
@@ -308,6 +609,14 @@ internal static class LinuxSharedMemoryRegion
         }
 
         return true;
+    }
+
+    private static bool TryReadOwnerToken(string ownerRecord, out Guid ownerToken)
+    {
+        ownerToken = default;
+        var parts = ownerRecord.Split(':', 3);
+        return parts.Length == 3
+            && Guid.TryParseExact(parts[2], "N", out ownerToken);
     }
 
     private static bool IsProcessLive(int processId, string? startToken)
@@ -382,10 +691,78 @@ internal static class LinuxSharedMemoryRegion
 
     private static void DeleteStaleResources(PlatformResourceName resourceName)
     {
+        // Callers commit an owner-sidecar rewrite before entering this method. A marker
+        // arriving after their reconciliation is safe to remove only when its owner was
+        // also absent from the just-classified live set.
         DeleteIfExists(resourceName.LinuxRegionPath);
         DeleteIfExists(resourceName.LinuxSynchronizationPath);
         DeleteIfExists(resourceName.LinuxOwnersPath);
         DeleteIfExists(resourceName.LinuxOwnersPath + ".tmp");
+        foreach (var markerPath in EnumerateReleaseMarkerArtifacts(resourceName, finalizedOnly: false))
+        {
+            DeleteIfExists(markerPath);
+        }
+    }
+
+    private static void SweepUnreferencedOwnerAnchors(
+        string ownersPath,
+        IEnumerable<string> committedOwners)
+    {
+        // Production callers hold .lifecycle and invoke this only with the
+        // unchanged committed sidecar or after a replacement sidecar commit.
+        // It repairs a crash between anchor creation/locking and publication of
+        // that anchor's owner line without adding work to a key-value path.
+        var referencedOwnerTokens = new HashSet<Guid>();
+        foreach (string owner in committedOwners)
+        {
+            if (TryReadExactOwnerToken(owner, out Guid ownerToken))
+            {
+                referencedOwnerTokens.Add(ownerToken);
+            }
+        }
+
+        LinuxOwnerAnchor.SweepUnreferencedArtifacts(ownersPath, referencedOwnerTokens);
+    }
+
+    private static bool TryReadExactOwnerToken(string ownerRecord, out Guid ownerToken)
+    {
+        ownerToken = default;
+        string[] parts = ownerRecord.Split(':', 3);
+        if (parts.Length != 3
+            || !int.TryParse(
+                parts[0],
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out int processId)
+            || processId <= 0
+            || !string.Equals(
+                parts[0],
+                processId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal)
+            || !Guid.TryParseExact(parts[2], "N", out ownerToken)
+            || !string.Equals(parts[2], ownerToken.ToString("N"), StringComparison.Ordinal))
+        {
+            ownerToken = default;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string[] EnumerateReleaseMarkerArtifacts(
+        PlatformResourceName resourceName,
+        bool finalizedOnly)
+    {
+        var directory = Path.GetDirectoryName(resourceName.LinuxOwnersPath) ?? ".";
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        var pattern = Path.GetFileName(resourceName.LinuxOwnersPath)
+            + ReleaseMarkerSegment
+            + (finalizedOnly ? "*" + FinalizedReleaseMarkerSuffix : "*");
+        return Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
     }
 
     private static void DeleteIfExists(string path)
@@ -407,5 +784,16 @@ internal static class LinuxSharedMemoryRegion
             StoreStatus.UnsupportedPlatform => StoreOpenStatus.UnsupportedPlatform,
             _ => StoreOpenStatus.MappingFailed
         };
+    }
+
+    private sealed record OwnerScan(List<string> LiveOwners);
+
+    private sealed record OwnerSnapshot(List<string> CommittedOwners, bool HasLiveOwner);
+
+    private enum OwnerReleaseOutcome
+    {
+        OwnerAbsent,
+        FinalizedMarkerPublished,
+        Failed
     }
 }

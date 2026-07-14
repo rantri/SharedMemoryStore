@@ -2,10 +2,11 @@
 
 This guide is the maintainer checklist for preparing independently versioned
 managed, native, and Python releases. The current source identities are NuGet
-`SharedMemoryStore` `1.0.2`, CMake `SharedMemoryStore` `0.1.0`, Python
-`shared-memory-store` `0.1.0`, C ABI `1.0`, mapped layout `1.2`, and resource
-naming `1`. Update this guide when any distribution, ABI, protocol, support,
-security, documentation, or sample contract changes.
+`SharedMemoryStore` `2.0.0`, CMake `SharedMemoryStore` `0.1.0`, Python
+`shared-memory-store` `0.1.0`, C ABI `1.0`, managed mapped layouts `1.2`/`2.0`,
+and resource protocols `1`/`2`. Native and Python remain layout-1.2/resource-1
+only. Update this guide when any distribution, ABI, protocol, support, security,
+documentation, or sample contract changes.
 
 ## Automated Release Process
 
@@ -287,8 +288,8 @@ The repository now contains the implementation and packaging inputs for:
   conformance fixtures, test-only JSON-lines agents, and the ordered 3x3 core
   exchange harness.
 
-These sibling distributions do not change the managed `1.0.2` public API,
-status numbers, NuGet runtime dependencies, or mapped layout. Their `0.1.0`
+These sibling distributions remain independently versioned beside managed
+`2.0.0`; they do not implement its layout-2.0 lock-free protocol. Their `0.1.0`
 versions are alpha lines and are not included in the NuGet package.
 
 Before publishing native or Python artifacts or describing a platform as

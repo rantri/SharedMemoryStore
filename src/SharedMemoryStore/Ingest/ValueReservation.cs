@@ -1,115 +1,81 @@
+using SharedMemoryStore.Engines;
 using SharedMemoryStore.Layout;
+using System.Runtime.CompilerServices;
 
 namespace SharedMemoryStore;
 
 /// <summary>
-/// Lifecycle token for one pending store-owned payload reservation.
+/// Exclusive single-producer lifecycle token for one pending store-owned payload reservation.
+/// The struct may be copied for ordinary value passing, but concurrent lifecycle or writable-view
+/// calls through copied tokens are unsupported. Safe writable views end at the next lifecycle
+/// action and are invalid after commit, abort, recovery, token disposal, or store disposal.
 /// </summary>
 public struct ValueReservation : IDisposable
 {
     private readonly MemoryStore? _store;
-    private readonly int _slotIndex;
-    private readonly SlotLifecycleId _lifecycleId;
-    private readonly int _payloadLength;
+    private readonly ReservationHandle _handle;
 
-    internal ValueReservation(MemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int payloadLength)
+    internal ValueReservation(MemoryStore store, in ReservationHandle handle)
     {
         _store = store;
-        _slotIndex = slotIndex;
-        _lifecycleId = lifecycleId;
-        _payloadLength = payloadLength;
+        _handle = handle;
+    }
+
+    internal ValueReservation(MemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int payloadLength)
+        : this(store, store.CreateLegacyReservationHandle(slotIndex, lifecycleId, payloadLength))
+    {
     }
 
     /// <summary>Gets a value indicating whether this token still references a pending reservation.</summary>
-    public readonly bool IsValid => _store?.IsReservationPending(_slotIndex, _lifecycleId) == true;
+    public readonly bool IsValid => _store?.IsReservationPending(_handle) == true;
 
     /// <summary>Gets the announced payload length, in bytes.</summary>
-    public readonly int PayloadLength => IsValid ? _payloadLength : 0;
+    public readonly int PayloadLength => IsValid ? _handle.PayloadLength : 0;
 
     /// <summary>Gets the number of payload bytes advanced by the producer.</summary>
-    public readonly int BytesWritten => _store?.GetReservationBytesWritten(_slotIndex, _lifecycleId) ?? 0;
+    public readonly int BytesWritten => _store?.GetReservationBytesWritten(_handle) ?? 0;
 
     /// <summary>Gets the number of payload bytes that remain before the reservation can commit.</summary>
     public readonly int RemainingBytes => Math.Max(0, PayloadLength - BytesWritten);
 
     /// <summary>
-    /// Gets an immediate writable span over remaining store-owned payload bytes while the reservation is pending.
+    /// Gets an immediate writable span over remaining store-owned payload bytes while pending.
+    /// The span is borrowed until the next reservation lifecycle action.
     /// </summary>
-    /// <param name="sizeHint">Minimum useful remaining size requested by the caller, or zero for any remaining bytes.</param>
-    public readonly Span<byte> GetSpan(int sizeHint = 0)
-    {
-        return _store is null
-            ? Span<byte>.Empty
-            : _store.GetReservationSpan(_slotIndex, _lifecycleId, sizeHint);
-    }
+    public readonly Span<byte> GetSpan(int sizeHint = 0) =>
+        _store is null ? Span<byte>.Empty : _store.GetReservationSpan(_handle, sizeHint);
 
     /// <summary>
-    /// Gets advanced writable memory over remaining store-owned payload bytes while the reservation is pending.
+    /// Gets retained-capable writable memory whose logical lifetime is still bounded by this
+    /// reservation; accessing it after that lifetime is explicitly unsafe.
     /// </summary>
-    /// <remarks>
-    /// This method is intended for trusted direct I/O adapters that require <see cref="Memory{T}"/>,
-    /// such as socket or stream reads into the store. The returned memory is retained-capable and must
-    /// not be used after commit, abort, recovery, disposal, store disposal, or slot reuse.
-    /// </remarks>
-    /// <param name="sizeHint">Minimum useful remaining size requested by the caller, or zero for any remaining bytes.</param>
-    public readonly Memory<byte> DangerousGetMemory(int sizeHint = 0)
-    {
-        return _store is null
-            ? Memory<byte>.Empty
-            : _store.GetReservationMemory(_slotIndex, _lifecycleId, sizeHint);
-    }
+    public readonly Memory<byte> DangerousGetMemory(int sizeHint = 0) =>
+        _store is null ? Memory<byte>.Empty : _store.GetReservationMemory(_handle, sizeHint);
 
-    /// <summary>
-    /// Advances the exact number of payload bytes written into the current writable view.
-    /// </summary>
-    public readonly StoreStatus Advance(int byteCount)
-    {
-        return _store?.AdvanceReservation(_slotIndex, _lifecycleId, byteCount) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Advances the exact number of payload bytes written into the current writable view.</summary>
+    public readonly StoreStatus Advance(int byteCount) => Advance(byteCount, StoreWaitOptions.Default);
 
-    /// <summary>
-    /// Advances the exact number of payload bytes written using the supplied wait policy.
-    /// </summary>
-    public readonly StoreStatus Advance(int byteCount, StoreWaitOptions waitOptions)
-    {
-        return _store?.AdvanceReservation(_slotIndex, _lifecycleId, byteCount, waitOptions) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Advances written bytes using the supplied profile-specific bounded wait policy.</summary>
+    public readonly StoreStatus Advance(int byteCount, StoreWaitOptions waitOptions) =>
+        _store?.AdvanceReservation(_handle, byteCount, waitOptions) ?? StoreStatus.InvalidReservation;
 
-    /// <summary>
-    /// Commits the reservation atomically after exactly the announced payload length has been advanced.
-    /// </summary>
-    public readonly StoreStatus Commit()
-    {
-        return _store?.CommitReservation(_slotIndex, _lifecycleId) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Commits the reservation after exactly the announced payload length has been advanced.</summary>
+    public readonly StoreStatus Commit() => Commit(StoreWaitOptions.Default);
 
-    /// <summary>
-    /// Commits the reservation using the supplied wait policy.
-    /// </summary>
-    public readonly StoreStatus Commit(StoreWaitOptions waitOptions)
-    {
-        return _store?.CommitReservation(_slotIndex, _lifecycleId, waitOptions) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Commits the reservation using the supplied profile-specific bounded wait policy.</summary>
+    public readonly StoreStatus Commit(StoreWaitOptions waitOptions) =>
+        _store?.CommitReservation(_handle, waitOptions) ?? StoreStatus.InvalidReservation;
 
-    /// <summary>
-    /// Aborts the pending reservation, removes its pending key, and returns the slot to reusable storage.
-    /// </summary>
-    public readonly StoreStatus Abort()
-    {
-        return _store?.AbortReservation(_slotIndex, _lifecycleId, countAbort: true) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Aborts the pending reservation and makes its storage reusable.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public readonly StoreStatus Abort() => Abort(StoreWaitOptions.Default);
 
-    /// <summary>
-    /// Aborts the reservation using the supplied wait policy.
-    /// </summary>
-    public readonly StoreStatus Abort(StoreWaitOptions waitOptions)
-    {
-        return _store?.AbortReservation(_slotIndex, _lifecycleId, countAbort: true, waitOptions) ?? StoreStatus.InvalidReservation;
-    }
+    /// <summary>Aborts the reservation using the supplied profile-specific bounded wait policy.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    public readonly StoreStatus Abort(StoreWaitOptions waitOptions) =>
+        _store?.AbortReservation(_handle, countAbort: true, waitOptions) ?? StoreStatus.InvalidReservation;
 
-    /// <summary>
-    /// Aborts the reservation on a best-effort basis when it is still pending; completed reservations are left unchanged.
-    /// </summary>
+    /// <summary>Best-effort abort of a still-current reservation.</summary>
     public readonly void Dispose()
     {
         if (IsValid)
@@ -118,7 +84,9 @@ public struct ValueReservation : IDisposable
         }
     }
 
-    internal readonly int SlotIndexForTesting => _slotIndex;
+    internal readonly int SlotIndexForTesting => MemoryStore.DecodeLegacySlotIndex(_handle.SlotBinding);
 
-    internal readonly SlotLifecycleId LifecycleIdForTesting => _lifecycleId;
+    internal readonly SlotLifecycleId LifecycleIdForTesting => MemoryStore.DecodeLegacyLifecycle(_handle);
+
+    internal readonly ReservationHandle HandleForEngine => _handle;
 }

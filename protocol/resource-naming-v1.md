@@ -77,6 +77,12 @@ keyed by the absolute lock-file path because POSIX record locks alone do not
 provide the required same-process ownership boundary. Release unlocks the byte
 range before releasing the local mutex.
 
+This prohibition applies to the interoperable `.lock` and `.lifecycle`
+resources. A current C# participant may also hold `flock` on its own private
+per-owner liveness anchor as described below. That anchor is not a replacement
+for either protocol record lock and no foreign participant is required to lock
+it.
+
 Retries observe cancellation and bounded time using a monotonic clock. The
 managed baseline retries at intervals no longer than 10 milliseconds or the
 remaining timeout. A foreign implementation may use a shorter interval but
@@ -96,6 +102,34 @@ plus the process start time in .NET UTC ticks. The unique token is a lowercase
 32-hex-digit GUID without separators. Owner readers also tolerate legacy
 PID-only lines conservatively, but writers emit all three fields.
 
+Current C# packages add one private liveness artifact for each managed owner:
+
+```text
+<resource-fragment>.owners.anchor.<32-hex-unique-token>
+```
+
+The artifact is mode `0600`; its suffix is the unchanged third field of the
+owner line. The managed process holds an exclusive open-description `flock` for
+the lifetime of its mapped view. This is an additive managed safety extension,
+not a new owner-line field or a requirement on resource-protocol-1 C++, Python,
+or older C# participants. Those participants neither create nor interpret the
+artifact.
+
+The canonical anchor name is the exact `.owners` path plus `.anchor.` and the
+owner token rendered as 32 lowercase hexadecimal digits. Anchor reconciliation
+is scoped to that one store: names with any other prefix, suffix length, case,
+or token syntax are malformed for this purpose and are never selected for
+automatic deletion.
+
+While holding `.lifecycle`, a current C# reader classifies a valid referenced
+anchor before consulting PID state: a contended lock is authoritative evidence
+that the owner is live, including when its PID is hidden by another PID
+namespace; an acquirable lock is stale. A missing anchor preserves the normal
+PID/start-token rule for implementations that do not create anchors. Access
+failure, a symbolic link, a directory, or any other ambiguous probe is retained
+conservatively. A same-process registry and a separately opened probe descriptor
+make local probing explicit rather than relying on process-scoped lock behavior.
+
 Owner updates occur while holding `.lifecycle`. A reader trims each line, splits
 it into at most three colon-separated parts, and requires the first part to be a
 positive decimal PID. It compares a start token only when all three parts are
@@ -106,11 +140,45 @@ an owner when liveness cannot be determined. Updates write the complete set to
 `.owners.tmp`, force mode `0600`, then atomically replace `.owners`; best-effort
 cleanup removes a leftover temporary file.
 
+An owner-sidecar rewrite that excludes an unlocked owner commits before its
+anchor is deleted. On orderly managed close, the mapped view is released first;
+the anchor is unlocked only after the exact owner line is committed absent or a
+finalized exact-owner release marker has been atomically published. Process
+termination closes the anchor descriptor and releases `flock` automatically, so
+the next lifecycle operation can classify the stale line and remove a canonical
+artifact only when its independent probe proves deletion safe.
+
+While holding `.lifecycle`, a current C# lifecycle operation performs an
+advisory orphan-anchor sweep only after the replacement `.owners` sidecar has
+committed. It derives the referenced-token set from canonical three-field lines
+in that committed sidecar and considers only canonical anchor names for this
+store. Each unreferenced candidate is opened through a separate descriptor with
+`O_NOFOLLOW` and verified to be a regular file before a nonblocking exclusive
+`flock` is attempted. The candidate is deleted only while that separate lock is
+held. Referenced or locked anchors, ambiguous probes, non-regular files,
+symbolic links, directories, malformed names, and artifacts that cannot be
+enumerated, opened, inspected, locked, or deleted because of an access error
+are retained conservatively. The sweep is cold lifecycle repair for a crash
+between anchor creation and owner-line publication; it is never a key-value
+operation path.
+
+A finalized release-marker fallback records permission to release the local
+anchor; it does not assert that the owner line or anchor pathname has already
+been removed. Either artifact can remain until a later lifecycle operation
+reconciles the marker, commits the filtered sidecar, and repeats the conservative
+anchor sweep.
+
 When no live owner remains, stale cleanup removes `.region`, `.lock`, `.owners`,
-and `.owners.tmp`. The `.lifecycle` file is deliberately retained because it is
-the rendezvous used while cleanup is in progress and by later openers. Closing a
-non-final handle removes only its owner record. Closing the final live handle
-performs the same stale-resource deletion while holding the lifecycle lock.
+`.owners.tmp`, and applicable release-marker artifacts. It does not blindly
+remove every per-owner anchor. Exact anchors are deleted by orderly owner
+release or by the post-commit sweep only when they are canonical, unreferenced,
+regular files whose lock is acquirable; every uncertain artifact remains for a
+later reconciliation or operator diagnosis. The `.lifecycle` file is
+deliberately retained because it is the rendezvous used while cleanup is in
+progress and by later openers. Closing a non-final handle commits removal of
+only its exact owner record and then attempts the same safe anchor cleanup.
+Closing the final live handle performs stale-resource deletion while holding
+the lifecycle lock and remains subject to the same conservative anchor rules.
 
 The sidecar start token protects resource cleanup from PID reuse. Layout-1.2
 lease and reservation records themselves contain only a PID; their explicit

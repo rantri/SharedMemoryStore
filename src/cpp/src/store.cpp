@@ -123,6 +123,10 @@ sms_open_status Store::initialize_or_validate(const Options& options) noexcept {
         initialize_header();
         return SMS_OPEN_SUCCESS;
     }
+    // Native ABI 1.0 is intentionally layout-v1.2-only. Recognize SMS2 solely
+    // to reject it before any v1 directory, slot, lease, descriptor, or payload
+    // address is calculated.
+    if (h.Magic == lock_free_magic) return SMS_OPEN_INCOMPATIBLE_LAYOUT;
     if (h.Magic != magic || h.LayoutMajorVersion != SMS_LAYOUT_MAJOR_VERSION ||
         !layout_.matches(h) || !layout_.bounds_valid(h)) {
         return SMS_OPEN_INCOMPATIBLE_LAYOUT;

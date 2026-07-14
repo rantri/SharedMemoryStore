@@ -110,7 +110,7 @@ function Invoke-DockerCleanConsumerValidation {
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SharedMemoryStore" Version="1.0.2" />
+    <PackageReference Include="SharedMemoryStore" Version="2.0.0" />
   </ItemGroup>
 </Project>
 '@

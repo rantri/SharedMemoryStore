@@ -6,12 +6,14 @@
   </Configurations>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj" />
+    <Project Path="benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/BasicUsage/BasicUsage.csproj" />
     <Project Path="samples/DockerSharedMemory/DockerSharedMemory.csproj" />
     <Project Path="samples/FrameValue/FrameValue.csproj" />
     <Project Path="samples/HostedServiceIntegration/HostedServiceIntegration.csproj" />
+    <Project Path="samples/LockFreeBrokerKeys/LockFreeBrokerKeys.csproj" />
     <Project Path="samples/ZeroCopyIngest/ZeroCopyIngest.csproj" />
   </Folder>
   <Folder Name="/src/">
@@ -23,6 +25,8 @@
     <Project Path="tests/SharedMemoryStore.InteropAgent/SharedMemoryStore.InteropAgent.csproj" />
     <Project Path="tests/SharedMemoryStore.InteropTests/SharedMemoryStore.InteropTests.csproj" />
     <Project Path="tests/SharedMemoryStore.LeaseOwnerTool/SharedMemoryStore.LeaseOwnerTool.csproj" />
+    <Project Path="tests/SharedMemoryStore.LinearizabilityTests/SharedMemoryStore.LinearizabilityTests.csproj" />
+    <Project Path="tests/SharedMemoryStore.LockFreeAgent/SharedMemoryStore.LockFreeAgent.csproj" />
     <Project Path="tests/SharedMemoryStore.UnitTests/SharedMemoryStore.UnitTests.csproj" />
   </Folder>
 </Solution>

@@ -131,19 +131,38 @@ announce payload length and descriptor bytes before payload writes, expose
 runtime-appropriate writable views, record exact progress, and publish only
 after an exact commit.
 
-Pending reservations are invisible to readers but occupy capacity and block
-duplicate keys. Abort, dispose, and recovery remove the pending index entry
-before reclaiming the slot. Public memory lifetime rules are in the
+Successfully ordered explicit reservations are invisible to readers, occupy
+capacity, and block duplicate keys. Lock-free v2 records immutable
+`PublicationIntent` ordinary metadata for each current lifecycle. `TryReserve`
+uses `ExplicitReservation` and orders at `Initializing -> Reserved`; the
+`TryPublish` and `TryPublishSegments` convenience workflows use
+`AtomicPublication`, remain tentative through internal `Reserved`, and order
+only at `Reserved -> Published`. Tentative `Initializing` and
+`Reserved(AtomicPublication)` claims are helpable and consume physical capacity
+but do not alone block a duplicate key. Abort, dispose, and recovery remove the
+pending index entry before reclaiming the slot. Public memory lifetime rules are
+in the
 [reservation memory contract](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md).
 
 ## Synchronization and Waits
 
-Public operations synchronize through the platform store lock and the
-process-local lifecycle gate. Windows uses named synchronization. Linux uses a
-deterministic shared lock resource in the runtime shared-memory location.
-`StoreWaitOptions` controls how long an operation waits for shared
-synchronization. Busy and canceled waits return `StoreBusy` or
+Legacy-profile public operations synchronize through the platform store lock
+and the process-local lifecycle gate. Windows uses named synchronization; Linux
+uses a deterministic shared lock resource in the runtime shared-memory
+location. Lock-free-v2 steady-state operations instead use bounded mapped
+atomics, helping, and generation revalidation, and never enter that global
+operation lock. `StoreWaitOptions` bounds either legacy lock waiting or v2 local
+retry/helping. Busy and canceled waits return `StoreBusy` or
 `OperationCanceled`.
+
+Lock-free directory observations are cached atomic-reference witnesses, not
+ownership of a slot. Before reporting a would-be corrupt binding, v2 rereads the
+exact raw reference word around a fresh stable classification of its separately
+decoded slot binding. A primary/overflow source equals the binding; a versioned
+spill summary is the complete encoded `Present(binding)` source word. Source
+movement causes a budgeted lookup or maintenance retry, while only an unchanged
+exact source enclosing a repeated malformed slot may fail closed. This
+source/slot/source rule adds no shared epoch, multi-word atomic, or global owner.
 
 The native adapters reproduce the same Windows mapping/mutex and Linux region,
 byte-range lock, owner-sidecar, lifecycle-lock, permission, and cleanup rules.
@@ -163,7 +182,11 @@ Recovery is explicit and owner-scoped:
   active, unsupported, and failed records.
 
 Recovery exists to make cleanup policy observable. It must not become automatic
-background reclamation.
+background reclamation. Normal v2 recovery preserves owner-controlled resources
+whose exact participant is live Active. Current-process lease or reservation
+overrides are administrative test/controlled-shutdown policies and require the
+corresponding process-wide borrowed-view and operation quiescence; racing an
+override with current-process activity is outside the supported result contract.
 
 ## Diagnostics
 
@@ -184,6 +207,21 @@ warm-up. Public performance wording must remain evidence-bounded and tied to
 benchmark commands or measured validation notes. See
 [Performance scope](performance.md) and
 [`benchmarks/SharedMemoryStore.Benchmarks/`](../benchmarks/SharedMemoryStore.Benchmarks/).
+
+Each lock-free open handle eagerly owns a process-local `long[SlotCount]`
+scratch snapshot used only to certify rare `StoreFull` candidates. It costs
+approximately eight bytes per slot (about 8 MiB at the v2 slot ceiling), is
+reused without per-operation allocation, and is protected by a nonblocking
+local guard. The guard and buffer are not mapped state and cannot serialize
+another process or handle.
+
+The same handle owns a separate `long[LeaseRecordCount]` snapshot and local
+guard for rare `LeaseTableFull` candidates. Both capacity outcomes require two
+same-order, structurally valid, entirely non-Free, exactly equal collects; a
+malformed control fails closed, while movement, reusable capacity, or local
+guard contention follows the caller's wait policy. The lease buffer has the same
+eight-bytes-per-record private-memory cost and likewise adds no shared or OS
+synchronization.
 
 ## Portability Model
 

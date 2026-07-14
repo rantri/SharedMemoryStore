@@ -47,7 +47,10 @@ if (args.Length == 2
     return;
 }
 
-BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
+// Assembly discovery intentionally includes LockFreeProfileBenchmarks alongside
+// the existing reliability suites; use --filter *LockFreeProfileBenchmarks* for
+// the v1.2-versus-v2 allocation/collision/recovery comparison.
+BenchmarkSwitcher.FromAssembly(typeof(LockFreeProfileBenchmarks).Assembly).Run(args);
 
 static FrameThroughputValidationResult RunSimplePublishSustained()
 {

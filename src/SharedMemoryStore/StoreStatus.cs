@@ -32,11 +32,16 @@ public enum StoreOpenStatus
     /// <summary>The runtime failed to create or open the memory mapping.</summary>
     MappingFailed = 8,
 
-    /// <summary>The store could not be opened because shared synchronization was busy for the selected wait policy.</summary>
+    /// <summary>
+    /// The selected open bound expired during cold lifecycle coordination or participant claim.
+    /// </summary>
     StoreBusy = 9,
 
-    /// <summary>The open or create operation was canceled before shared synchronization was acquired.</summary>
-    OperationCanceled = 10
+    /// <summary>The open or create operation was canceled before a handle became active.</summary>
+    OperationCanceled = 10,
+
+    /// <summary>No reusable layout-v2 participant record is currently available.</summary>
+    ParticipantTableFull = 11
 }
 
 /// <summary>
@@ -74,7 +79,10 @@ public enum StoreStatus
     /// <summary>The lease has already been released.</summary>
     LeaseAlreadyReleased = 9,
 
-    /// <summary>Removal was requested while active leases still protect the slot.</summary>
+    /// <summary>
+    /// The key is logically absent, but active leases protect its generation or bounded
+    /// post-removal classification and physical reclamation work remains incomplete.
+    /// </summary>
     RemovePending = 10,
 
     /// <summary>The current platform does not support the requested operation.</summary>
@@ -107,9 +115,12 @@ public enum StoreStatus
     /// <summary>The supplied key is empty or otherwise invalid.</summary>
     InvalidKey = 20,
 
-    /// <summary>Shared synchronization was busy for the selected wait policy.</summary>
+    /// <summary>
+    /// The selected wait bound expired: legacy shared synchronization was busy, or a lock-free
+    /// operation exhausted its bounded local retry, revalidation, helping, or backoff budget.
+    /// </summary>
     StoreBusy = 21,
 
-    /// <summary>The operation was canceled before shared synchronization was acquired.</summary>
+    /// <summary>The operation was canceled before its documented ordering point.</summary>
     OperationCanceled = 22
 }
