@@ -19,6 +19,7 @@ public sealed class LockFreeDirectoryGenerationStressTests
     private const string RepetitionsVariable = "SMS_DIRECTORY_GENERATION_STRESS_REPETITIONS";
     private const string SeedVariable = "SMS_DIRECTORY_GENERATION_STRESS_SEED";
     private const ulong DefaultSeed = 0x5C01_700D_D1CE_7001UL;
+    private const int QualificationTransitionCount = 50;
     private const int CanonicalBucket = 0;
     private const int PrimarySlotCount = 1;
     private const int OverflowSlotCount = 17;
@@ -332,6 +333,8 @@ public sealed class LockFreeDirectoryGenerationStressTests
 
     private static void ValidateTransitionMatrix()
     {
+        Assert.Equal(QualificationTransitionCount, TransitionCases.Length);
+
         LockFreeCheckpointId[] catalog = LockFreeCheckpointCatalog.Entries
             .Where(static entry => entry.Family == LockFreeCheckpointFamily.Directory)
             .Select(static entry => entry.Id)

@@ -19,7 +19,7 @@
       "suspensionBaselineSeconds": 1,
       "suspensionPauseSeconds": 1,
       "suspensionWarmupSeconds": 1,
-      "directoryGenerationStressRepetitions": 46
+      "directoryGenerationStressRepetitions": 50
     },
     "nightly": {
       "stepTimeoutSeconds": 7200,

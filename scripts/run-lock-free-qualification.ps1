@@ -1041,6 +1041,57 @@ function Assert-BenchmarkScenarioStoreDimensions {
     }
 }
 
+function Get-Sc017SourceTransitionCount {
+    $sourcePath = Join-Path $root 'tests/SharedMemoryStore.UnitTests/LockFreeDirectoryGenerationStressTests.cs'
+    $source = Get-Content -LiteralPath $sourcePath -Raw
+    $matches = [regex]::Matches(
+        $source,
+        '(?m)^\s*private const int QualificationTransitionCount = (?<count>[1-9][0-9]*);\s*$')
+    if ($matches.Count -ne 1) {
+        throw 'The SC-017 test must declare exactly one machine-readable QualificationTransitionCount.'
+    }
+
+    return [Convert]::ToInt64(
+        $matches[0].Groups['count'].Value,
+        [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Assert-Sc017TierConfiguration {
+    param(
+        [Parameter(Mandatory)]$QualificationConfig,
+        [Parameter(Mandatory)][int64]$TransitionCount)
+
+    $tiers = Get-RequiredPropertyValue $QualificationConfig 'tiers' 'qualification config'
+    foreach ($tierName in @('pr', 'nightly', 'release')) {
+        $tierConfig = Get-RequiredPropertyValue $tiers $tierName 'qualification config tiers'
+        $configured = Get-StrictInt64 $tierConfig 'directoryGenerationStressRepetitions' `
+            "qualification tier '$tierName'" 1 [int64]::MaxValue
+        if ($configured -lt $TransitionCount) {
+            throw "Qualification tier '$tierName' directoryGenerationStressRepetitions must be at least the source-owned SC-017 transition count $TransitionCount; actual=$configured."
+        }
+    }
+}
+
+function Invoke-Sc017ConfigurationVerifierSelfTest {
+    $transitionCount = Get-Sc017SourceTransitionCount
+    Assert-Sc017TierConfiguration $config $transitionCount
+
+    $tampered = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $tampered.tiers.pr.directoryGenerationStressRepetitions = $transitionCount - 1
+    $rejected = $false
+    try {
+        Assert-Sc017TierConfiguration $tampered $transitionCount
+    }
+    catch {
+        $rejected = $_.Exception.Message -like '*must be at least the source-owned SC-017 transition count*'
+    }
+    if (-not $rejected) {
+        throw "SC-017 configuration verifier self-test accepted $($transitionCount - 1) repetitions for $transitionCount transitions."
+    }
+
+    return 2
+}
+
 function Assert-QualificationConfiguration {
     Assert-KnownProvenance $repositoryProvenance 'start'
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
@@ -1073,6 +1124,8 @@ function Assert-QualificationConfiguration {
     foreach ($property in $positiveProperties) {
         [void](Get-StrictInt64 $selected $property "qualification tier '$Tier'" 1 [int64]::MaxValue)
     }
+    $sc017TransitionCount = Get-Sc017SourceTransitionCount
+    Assert-Sc017TierConfiguration $config $sc017TransitionCount
     [void](Get-StrictInt64 $config 'seed' 'qualification config' 0 [int32]::MaxValue)
     [void](Get-StrictDouble $config 'suspensionMinimumHealthyThroughputRatio' 'qualification config' 0 1 -Positive)
     $expectedMode = if ($Tier -eq 'release') { 'full' } else { 'all' }
@@ -3287,6 +3340,33 @@ function Assert-Sc017Evidence {
     $step = Get-StepResult 'directory-generation-stress'
     $stdout = Get-Content -LiteralPath (Join-Path $root $step.stdout) -Raw
     $expectedSeedHex = ([uint64](Get-StrictInt64 $config 'seed' 'qualification config' 0 [int32]::MaxValue)).ToString('X16')
+    $transitionCount = Get-Sc017SourceTransitionCount
+    $startPattern = 'SC017 start: seed=0x' + [regex]::Escape($expectedSeedHex) +
+        '; configuredRepetitions=' + [regex]::Escape([string]$ExpectedRepetitions) +
+        '; transitionCount=' + [regex]::Escape([string]$transitionCount) +
+        '; distribution=quotient-plus-remainder\.'
+    if ($stdout -notmatch $startPattern) {
+        Fail-StepValidation 'directory-generation-stress' `
+            "Missing exact SC017 start evidence for $ExpectedRepetitions repetitions across $transitionCount transitions."
+    }
+
+    $transitionMarkers = [regex]::Matches(
+        $stdout,
+        'SC017 transition=(?<name>[a-z0-9-]+); seed=0x[0-9A-F]{16}; repetitions=(?<repetitions>[1-9][0-9]*); result=pass\.')
+    $uniqueNames = @($transitionMarkers | ForEach-Object { $_.Groups['name'].Value } | Sort-Object -Unique)
+    [int64]$markerRepetitions = 0
+    foreach ($marker in $transitionMarkers) {
+        $markerRepetitions += [Convert]::ToInt64(
+            $marker.Groups['repetitions'].Value,
+            [Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($transitionMarkers.Count -ne $transitionCount `
+        -or $uniqueNames.Count -ne $transitionCount `
+        -or $markerRepetitions -ne $ExpectedRepetitions) {
+        Fail-StepValidation 'directory-generation-stress' `
+            "SC017 transition evidence must contain exactly $transitionCount unique passing markers whose repetitions sum to $ExpectedRepetitions; markers=$($transitionMarkers.Count), unique=$($uniqueNames.Count), sum=$markerRepetitions."
+    }
+
     $pattern = 'SC017 complete: seed=0x' + [regex]::Escape($expectedSeedHex) + '; executedRepetitions=' +
         [regex]::Escape([string]$ExpectedRepetitions) +
         '; wrongGenerationMutations=0; corruption=0; falseMisses=0; leakedCapacity=0\.'
@@ -3297,6 +3377,8 @@ function Assert-Sc017Evidence {
 
     Set-StepValidation 'directory-generation-stress' 'passed' 'sc017-qualified-count-and-correctness' @(
         "executedRepetitions=$ExpectedRepetitions",
+        "transitionCount=$transitionCount",
+        "uniqueTransitionMarkers=$($uniqueNames.Count)",
         "seed=0x$expectedSeedHex",
         'wrongGenerationMutations=0',
         'corruption=0',
@@ -4461,10 +4543,18 @@ try {
         "schemaVersion=$($config.schemaVersion)",
         "tier=$Tier",
         "performanceMode=$($selected.performanceMode)",
+        "sc017TransitionCount=$(Get-Sc017SourceTransitionCount)",
         "boundedOperationSlackMilliseconds=$($config.boundedOperationSlackMilliseconds)",
         "leakAssertions=$(@($config.requiredLeakAssertions).Count)") @([IO.Path]::GetRelativePath($root, $configPath))
 
     if ($ValidateOnly) {
+        $sc017ConfigurationAssertions = Invoke-Sc017ConfigurationVerifierSelfTest
+        Add-EvidenceResult 'sc017-configuration-verifier-self-test' 'passed' `
+            'source-owned-transition-count-positive-and-negative-cases-passed' @(
+                "assertions=$sc017ConfigurationAssertions",
+                "sourceTransitionCount=$(Get-Sc017SourceTransitionCount)",
+                'all PR/nightly/release tier counts accepted',
+                'one-below-source transition count rejected')
         $markerParserAssertions = Invoke-ProductionRaceMarkerParserSelfTest
         Add-EvidenceResult 'production-race-marker-parser-self-test' 'passed' `
             'closed-marker-grammar-positive-and-negative-cases-passed' @(
