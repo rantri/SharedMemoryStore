@@ -53,7 +53,7 @@ public sealed class LockFreeOsTraceIntegrationTests
             // Give the cold open/unlock trace a distinct timestamp from the
             // measurement marker even on filesystems with coarse timestamps.
             Thread.Sleep(25);
-            File.WriteAllText(goPath, "go");
+            PublishMarker(goPath, "go");
             decimal intervalStart = ToUnixSeconds(File.GetLastWriteTimeUtc(goPath));
 
             Assert.True(WaitForFile(donePath, AgentTimeout), AgentFailure(process, "The traced agent did not finish its marked interval."));
@@ -448,6 +448,16 @@ public sealed class LockFreeOsTraceIntegrationTests
         }
 
         return true;
+    }
+
+    private static void PublishMarker(string path, string content)
+    {
+        // Publish the complete marker atomically. This also fixes the marker's
+        // mtime before the agent can observe it, so intervalStart cannot move
+        // past any traced operation begun after the go signal.
+        string temporaryPath = $"{path}.{Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}.tmp";
+        File.WriteAllText(temporaryPath, content);
+        File.Move(temporaryPath, path);
     }
 
     private static bool WaitForLinuxStoppedState(int processId, TimeSpan timeout)

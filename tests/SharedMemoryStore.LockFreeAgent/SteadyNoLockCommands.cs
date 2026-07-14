@@ -39,7 +39,7 @@ internal static class SteadyNoLockCommands
                 }
             }
 
-            File.WriteAllText(parsed.ReadyPath, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            PublishMarker(parsed.ReadyPath, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             if (!WaitForFile(parsed.GoPath))
             {
                 return TimeoutExitCode;
@@ -57,7 +57,7 @@ internal static class SteadyNoLockCommands
 
             // This write is the end marker. Do not add console/logging calls
             // above it: the parent traces the warmed go-to-done interval.
-            File.WriteAllText(parsed.DonePath, succeeded ? "ok" : "failed");
+            PublishMarker(parsed.DonePath, succeeded ? "ok" : "failed");
             if (!succeeded)
             {
                 Console.Error.WriteLine("A steady-no-lock operation returned an unexpected status.");
@@ -174,6 +174,16 @@ internal static class SteadyNoLockCommands
     }
 
     private static byte[] CreateKey() => [0x53, 0x4d, 0x53, 0x32, 0x4e, 0x4f, 0x4c, 0x4b];
+
+    private static void PublishMarker(string path, string content)
+    {
+        // File.WriteAllText publishes the destination name before its payload
+        // is complete. The parent synchronizes on name visibility, so publish
+        // a closed file with a same-directory atomic rename instead.
+        string temporaryPath = $"{path}.{Environment.ProcessId.ToString(CultureInfo.InvariantCulture)}.tmp";
+        File.WriteAllText(temporaryPath, content);
+        File.Move(temporaryPath, path);
+    }
 
     private static bool WaitForFile(string path)
     {
