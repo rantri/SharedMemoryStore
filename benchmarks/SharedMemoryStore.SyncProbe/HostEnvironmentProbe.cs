@@ -326,13 +326,10 @@ internal static class HostEnvironmentProbe
                 start.ArgumentList.Add(argument);
             }
 
-            using Process? process = Process.Start(start);
-            if (process is null || !process.WaitForExit(2_000) || process.ExitCode != 0)
-            {
-                return null;
-            }
-
-            return process.StandardOutput.ReadToEnd().Trim();
+            BoundedProcessResult result = BoundedProcessRunner.Run(
+                start,
+                TimeSpan.FromSeconds(2));
+            return result.Succeeded ? result.StandardOutput.Trim() : null;
         }
         catch
         {

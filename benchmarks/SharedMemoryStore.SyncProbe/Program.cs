@@ -154,6 +154,9 @@ static async Task<int> RunController(string[] args)
             secondBucket: 1)
         : default;
 
+    RepositoryProvenanceSnapshot repositoryProvenance = RepositoryEnvironmentProbe.Capture(args);
+    ProbeEnvironment probeEnvironment = CaptureEnvironment(repositoryProvenance);
+
     var runs = new List<RunResult>();
     foreach (StoreProfile profile in profiles)
     {
@@ -254,7 +257,7 @@ static async Task<int> RunController(string[] args)
     var report = new ProbeReport(
         SchemaVersion: ProbeReportSchema.CurrentVersion,
         TimestampUtc: DateTimeOffset.UtcNow,
-        Environment: CaptureEnvironment(),
+        Environment: probeEnvironment,
         Configuration: new ProbeConfiguration(
             mode,
             durationSeconds,
@@ -2697,12 +2700,12 @@ static long ReadNonNegativeLongEnvironment(string name, long fallback) =>
         ? value
         : fallback;
 
-static ProbeEnvironment CaptureEnvironment()
+static ProbeEnvironment CaptureEnvironment(RepositoryProvenanceSnapshot repositoryProvenance)
 {
     HostHardwareInfo hardware = HostEnvironmentProbe.Capture();
     return new ProbeEnvironment(
-        TryGetRepositoryCommit(),
-        TryGetRepositoryWorkingTreeState(),
+        repositoryProvenance.Commit,
+        repositoryProvenance.WorkingTreeState,
         TryGetFileSha256(typeof(Store).Assembly.Location),
         TryGetFileSha256(typeof(BenchmarkProtocol).Assembly.Location),
         RuntimeInformation.OSDescription,
@@ -2770,74 +2773,6 @@ static SortedDictionary<string, ProbeStoreDimensions> CreateScenarioStoreDimensi
     }
 
     return dimensions;
-}
-
-static string TryGetRepositoryCommit()
-{
-    try
-    {
-        var start = new ProcessStartInfo("git", "rev-parse HEAD")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        using Process? process = Process.Start(start);
-        if (process is null || !process.WaitForExit(2_000) || process.ExitCode != 0)
-        {
-            return "unknown";
-        }
-
-        return process.StandardOutput.ReadToEnd().Trim();
-    }
-    catch
-    {
-        return "unknown";
-    }
-}
-
-static string TryGetRepositoryWorkingTreeState()
-{
-    try
-    {
-        var start = new ProcessStartInfo(
-            "git",
-            "status --porcelain=v1 --untracked-files=normal")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        using Process? process = Process.Start(start);
-        if (process is null)
-        {
-            return "unknown";
-        }
-
-        Task<string> output = process.StandardOutput.ReadToEndAsync();
-        Task<string> error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(2_000) || process.ExitCode != 0)
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
-            _ = error.GetAwaiter().GetResult();
-            return "unknown";
-        }
-
-        _ = error.GetAwaiter().GetResult();
-        return string.IsNullOrWhiteSpace(output.GetAwaiter().GetResult())
-            ? "clean"
-            : "dirty";
-    }
-    catch
-    {
-        return "unknown";
-    }
 }
 
 static string TryGetFileSha256(string path)

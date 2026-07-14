@@ -4640,6 +4640,8 @@ try {
                 '--mixed-operations', [string]$selected.mixedOperations,
                 '--large-frames', [string]$selected.largeFrames,
                 '--large-frame-bytes', [string]$selected.largeFrameBytes,
+                '--repository-commit', [string]$repositoryProvenance.commit,
+                '--repository-working-tree-state', [string]$repositoryProvenance.workingTreeState,
                 '--output', $benchmarkOutput)
             Assert-SyncProbeEvidence $benchmarkOutput
 

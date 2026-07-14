@@ -2035,6 +2035,8 @@ try {
                 '--warmup', [string]$releaseConfig.performanceWarmupSeconds,
                 '--duration', [string]$releaseConfig.performanceDurationSeconds,
                 '--trials', [string]$releaseConfig.performanceTrials,
+                '--repository-commit', [string]$repositoryProvenance.repositoryCommit,
+                '--repository-working-tree-state', [string]$repositoryProvenance.workingTreeState,
                 '--output', $performancePath)
             $performanceRow = @($results | Where-Object name -eq 'linux-tiny-performance')
             if ($performanceRow.Count -ne 1) {

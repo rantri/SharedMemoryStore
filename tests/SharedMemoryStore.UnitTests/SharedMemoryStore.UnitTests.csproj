@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SharedMemoryStore\SharedMemoryStore.csproj" />
+    <ProjectReference Include="..\..\benchmarks\SharedMemoryStore.SyncProbe\SharedMemoryStore.SyncProbe.csproj" />
     <ProjectReference Include="..\SharedMemoryStore.LockFreeAgent\SharedMemoryStore.LockFreeAgent.csproj"
                       ReferenceOutputAssembly="false" />
   </ItemGroup>

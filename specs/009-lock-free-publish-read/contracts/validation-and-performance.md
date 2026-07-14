@@ -205,6 +205,14 @@ The multi-process harness emits JSON and records:
   latency, producer allocation counts, whether any copy counter is actually
   instrumented, structural copy-path evidence, and every status count.
 
+The qualification orchestrator supplies the probe's repository commit and
+working-tree state as one validated pair from its independently captured start
+provenance. The probe captures that pair, host metadata, and assembly hashes
+once before workload execution; standalone runs use bounded, fail-closed Git
+discovery when the pair is absent. Partial or malformed overrides are rejected.
+Qualification revalidates the reported pair against clean start/completion
+provenance, the normalized source manifest, and fresh tested-assembly hashes.
+
 Do not oversubscribe the machine. Give each participant one logical processor
 where possible. If required participants cannot be assigned, report the workload
 as not qualified rather than treating an underprovisioned result as a product

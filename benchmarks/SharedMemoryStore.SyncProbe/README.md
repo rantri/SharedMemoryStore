@@ -18,6 +18,15 @@ portable processor model, logical and physical processor counts, and total host
 memory; `Configuration.ScenarioStoreDimensions` binds every selected scenario
 to its exact slot/value/descriptor/key/lease/participant dimensions.
 
+Qualification orchestrators pass `--repository-commit` and
+`--repository-working-tree-state` as one validated pair from their independently
+captured start provenance. The probe captures that pair, host metadata, and
+assembly hashes once before it starts any workload. Standalone runs may omit
+both options and use bounded, fail-closed Git discovery instead; supplying only
+one option or an invalid commit/state is an error. Qualification still compares
+the report with clean start and completion provenance and the fresh assembly
+manifest, so the injected pair is not accepted on trust.
+
 `FullPayloadCopies` is retained for schema compatibility. A zero in that legacy
 field is not, by itself, a measured copy count. Consumers must also inspect:
 
