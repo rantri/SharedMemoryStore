@@ -929,68 +929,68 @@ static async Task<RunResult> RunBrokerTrial(
                     allProcesses.Add(process);
                 }
 
-            await AwaitReady(allProcesses, CancellationToken.None);
-            BenchmarkKeyCatalog keys = BenchmarkProtocol.CreateKeyCatalog(BrokerRotatingKeyCount);
-            await Task.Run(
-                () => WarmBrokerWorkers(
-                    producer,
-                    readers,
-                    observers,
-                    keys,
-                    frameBytes,
-                    warmupSeconds));
-            await Task.Run(() => ResetBrokerWorkers(allProcesses));
-            var readerFrames = new long[readerCount];
-            BrokerMeasuredResult measuredResult = await RunBrokerMeasuredOnDedicatedThread(
-                    producer,
-                    readers,
-                    observers,
-                    keys,
-                    readerFrames,
-                    frameBytes,
-                    durationSeconds,
-                    frameTarget);
-            StatusCounters counters = measuredResult.Counters;
-            long failures = measuredResult.Failures;
-            long frames = measuredResult.Frames;
-            var stop = new BrokerKeyMessage(BrokerMessageKind.Stop, string.Empty, 0, 0, 0, 0);
-            string stopLine = JsonSerializer.Serialize(stop, BenchmarkProtocol.JsonOptions);
-            foreach (Process process in allProcesses)
-            {
-                await process.StandardInput.WriteLineAsync(stopLine.AsMemory(), CancellationToken.None);
-                await process.StandardInput.FlushAsync(CancellationToken.None);
-            }
-
-            var summaries = new List<BrokerWorkerSummary>(allProcesses.Count);
-            foreach (Process process in allProcesses)
-            {
-                string? line = await process.StandardOutput.ReadLineAsync(CancellationToken.None);
-                string error = await process.StandardError.ReadToEndAsync(CancellationToken.None);
-                await process.WaitForExitAsync(CancellationToken.None);
-                if (process.ExitCode != 0 || line is null)
+                await AwaitReady(allProcesses, CancellationToken.None);
+                BenchmarkKeyCatalog keys = BenchmarkProtocol.CreateKeyCatalog(BrokerRotatingKeyCount);
+                await Task.Run(
+                    () => WarmBrokerWorkers(
+                        producer,
+                        readers,
+                        observers,
+                        keys,
+                        frameBytes,
+                        warmupSeconds));
+                await Task.Run(() => ResetBrokerWorkers(allProcesses));
+                var readerFrames = new long[readerCount];
+                BrokerMeasuredResult measuredResult = await RunBrokerMeasuredOnDedicatedThread(
+                        producer,
+                        readers,
+                        observers,
+                        keys,
+                        readerFrames,
+                        frameBytes,
+                        durationSeconds,
+                        frameTarget);
+                StatusCounters counters = measuredResult.Counters;
+                long failures = measuredResult.Failures;
+                long frames = measuredResult.Frames;
+                var stop = new BrokerKeyMessage(BrokerMessageKind.Stop, string.Empty, 0, 0, 0, 0);
+                string stopLine = JsonSerializer.Serialize(stop, BenchmarkProtocol.JsonOptions);
+                foreach (Process process in allProcesses)
                 {
-                    throw new InvalidOperationException($"Broker worker exited {process.ExitCode}: {error}");
+                    await process.StandardInput.WriteLineAsync(stopLine.AsMemory(), CancellationToken.None);
+                    await process.StandardInput.FlushAsync(CancellationToken.None);
                 }
 
-                summaries.Add(JsonSerializer.Deserialize<BrokerWorkerSummary>(line, BenchmarkProtocol.JsonOptions)
-                    ?? throw new InvalidOperationException("Broker worker returned invalid summary JSON."));
-            }
+                var summaries = new List<BrokerWorkerSummary>(allProcesses.Count);
+                foreach (Process process in allProcesses)
+                {
+                    string? line = await process.StandardOutput.ReadLineAsync(CancellationToken.None);
+                    string error = await process.StandardError.ReadToEndAsync(CancellationToken.None);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                    if (process.ExitCode != 0 || line is null)
+                    {
+                        throw new InvalidOperationException($"Broker worker exited {process.ExitCode}: {error}");
+                    }
 
-            failures += summaries.Sum(static summary => summary.Failures);
-            long operations = counters.TotalOperations + summaries.Sum(static summary => summary.Operations);
-            long bytesWritten = checked(frames * frameBytes);
-            long bytesRead = summaries.Sum(static summary => summary.BytesProcessed);
-            double measuredSeconds = Math.Max(measuredResult.Elapsed.TotalSeconds, 0.000_001);
-            double[] sortedSamples = measuredResult.SamplesMicroseconds.Order().ToArray();
-            double[] sortedEarly = measuredResult.EarlySamplesMicroseconds.Order().ToArray();
-            double[] sortedLate = measuredResult.LateSamplesMicroseconds.Order().ToArray();
-            double earlyP99 = Percentile(sortedEarly, 0.99);
-            double lateP99 = Percentile(sortedLate, 0.99);
-            double[] readerRates = readerFrames.Select(count => count / measuredSeconds).ToArray();
-            double fairness = JainFairness(readerRates);
-            int participantProcesses = readerCount + plan.ObserverCount + 1;
-            bool oversubscribed = participantProcesses > Environment.ProcessorCount;
-            var histograms = summaries.Select(static summary => summary.StatusHistogram).Append(counters.ToHistogram());
+                    summaries.Add(JsonSerializer.Deserialize<BrokerWorkerSummary>(line, BenchmarkProtocol.JsonOptions)
+                        ?? throw new InvalidOperationException("Broker worker returned invalid summary JSON."));
+                }
+
+                failures += summaries.Sum(static summary => summary.Failures);
+                long operations = counters.TotalOperations + summaries.Sum(static summary => summary.Operations);
+                long bytesWritten = checked(frames * frameBytes);
+                long bytesRead = summaries.Sum(static summary => summary.BytesProcessed);
+                double measuredSeconds = Math.Max(measuredResult.Elapsed.TotalSeconds, 0.000_001);
+                double[] sortedSamples = measuredResult.SamplesMicroseconds.Order().ToArray();
+                double[] sortedEarly = measuredResult.EarlySamplesMicroseconds.Order().ToArray();
+                double[] sortedLate = measuredResult.LateSamplesMicroseconds.Order().ToArray();
+                double earlyP99 = Percentile(sortedEarly, 0.99);
+                double lateP99 = Percentile(sortedLate, 0.99);
+                double[] readerRates = readerFrames.Select(count => count / measuredSeconds).ToArray();
+                double fairness = JainFairness(readerRates);
+                int participantProcesses = readerCount + plan.ObserverCount + 1;
+                bool oversubscribed = participantProcesses > Environment.ProcessorCount;
+                var histograms = summaries.Select(static summary => summary.StatusHistogram).Append(counters.ToHistogram());
 
                 return new RunResult(
                 profile.ToString(),

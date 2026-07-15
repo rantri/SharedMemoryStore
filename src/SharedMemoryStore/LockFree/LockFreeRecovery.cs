@@ -60,9 +60,9 @@ internal sealed class LockFreeRecovery
 
     /// <summary>
     /// Scans owner-controlled value-slot lifecycles, classifies their exact
-/// participant incarnations (or consumes an exact claim-closed handoff), and
-/// hands safely recoverable slots to the ordinary generation-fenced
-/// abort/unlink helper.
+    /// participant incarnations (or consumes an exact claim-closed handoff), and
+    /// hands safely recoverable slots to the ordinary generation-fenced
+    /// abort/unlink helper.
     /// </summary>
     internal StoreStatus TryRecoverReservations(
         in ReservationRecoveryOptions options,
@@ -370,131 +370,131 @@ internal sealed class LockFreeRecovery
                 switch (claim.Kind)
                 {
                     case ReservationRecoveryClaimKind.Acquired:
-                    {
-                        LockFreeCheckpoint.Reach(ref checkpoint, LockFreeCheckpointId.RecoveryAfterExactRecoveryCas);
-                        if (!postOwnershipCleanupStarted)
                         {
-                            postOwnershipCleanup = LockFreeOperationBudget.StartPostOwnershipCleanup();
-                            postOwnershipCleanupStarted = true;
-                        }
-
-                        StoreStatus help = HelpReservationRecovery(
-                            claim.SlotBinding,
-                            postOwnershipCleanup,
-                            ref checkpoint,
-                            currentUnreferencedPreMetadata);
-                        _ = ObserveStructuralStatus(help);
-                        if (help != StoreStatus.CorruptStore)
-                        {
-                            // The exact owner-to-Aborting CAS is the recovery
-                            // ordering point. Deadline/cancellation may stop
-                            // optional physical help, but cannot rewrite that
-                            // durable, universally helpable recovery outcome.
-                            counts.Recovered++;
-                        }
-                        else
-                        {
-                            counts.Failed++;
-                            report = counts.ToReport();
-                            return CorruptHere();
-                        }
-
-                        claimCompleted = true;
-                        break;
-                    }
-
-                    case ReservationRecoveryClaimKind.HelpRequired:
-                    {
-                        StoreStatus help = HelpReservationRecovery(
-                            claim.SlotBinding,
-                            budget,
-                            ref checkpoint,
-                            currentUnreferencedPreMetadata);
-                        _ = ObserveStructuralStatus(help);
-                        if (help is StoreStatus.StoreBusy or StoreStatus.OperationCanceled)
-                        {
-                            report = counts.ToReport();
-                            return counts.Recovered > 0 ? StoreStatus.Success : help;
-                        }
-
-                        if (help != StoreStatus.Success)
-                        {
-                            counts.Failed++;
-                            if (help == StoreStatus.CorruptStore)
+                            LockFreeCheckpoint.Reach(ref checkpoint, LockFreeCheckpointId.RecoveryAfterExactRecoveryCas);
+                            if (!postOwnershipCleanupStarted)
                             {
+                                postOwnershipCleanup = LockFreeOperationBudget.StartPostOwnershipCleanup();
+                                postOwnershipCleanupStarted = true;
+                            }
+
+                            StoreStatus help = HelpReservationRecovery(
+                                claim.SlotBinding,
+                                postOwnershipCleanup,
+                                ref checkpoint,
+                                currentUnreferencedPreMetadata);
+                            _ = ObserveStructuralStatus(help);
+                            if (help != StoreStatus.CorruptStore)
+                            {
+                                // The exact owner-to-Aborting CAS is the recovery
+                                // ordering point. Deadline/cancellation may stop
+                                // optional physical help, but cannot rewrite that
+                                // durable, universally helpable recovery outcome.
+                                counts.Recovered++;
+                            }
+                            else
+                            {
+                                counts.Failed++;
                                 report = counts.ToReport();
                                 return CorruptHere();
                             }
-                        }
-                        else
-                        {
-                            _telemetry.RecordHelpedTransition();
+
+                            claimCompleted = true;
+                            break;
                         }
 
-                        claimCompleted = true;
-                        break;
-                    }
+                    case ReservationRecoveryClaimKind.HelpRequired:
+                        {
+                            StoreStatus help = HelpReservationRecovery(
+                                claim.SlotBinding,
+                                budget,
+                                ref checkpoint,
+                                currentUnreferencedPreMetadata);
+                            _ = ObserveStructuralStatus(help);
+                            if (help is StoreStatus.StoreBusy or StoreStatus.OperationCanceled)
+                            {
+                                report = counts.ToReport();
+                                return counts.Recovered > 0 ? StoreStatus.Success : help;
+                            }
+
+                            if (help != StoreStatus.Success)
+                            {
+                                counts.Failed++;
+                                if (help == StoreStatus.CorruptStore)
+                                {
+                                    report = counts.ToReport();
+                                    return CorruptHere();
+                                }
+                            }
+                            else
+                            {
+                                _telemetry.RecordHelpedTransition();
+                            }
+
+                            claimCompleted = true;
+                            break;
+                        }
 
                     case ReservationRecoveryClaimKind.CompletedRace:
                         claimCompleted = true;
                         break;
 
                     case ReservationRecoveryClaimKind.OwnerStateChanged:
-                    {
-                        expected = claim.ObservedControl;
-                        StoreStatus revalidation = ValidateReservationMetadata(
-                            slotIndex,
-                            expected,
-                            ref slot,
-                            budget,
-                            out bool changedLifecycleStillCurrent,
-                            out bool changedUnreferencedPreMetadata);
-                        _ = ObserveStructuralStatus(revalidation);
-                        if (revalidation != StoreStatus.Success)
                         {
-                            if (revalidation == StoreStatus.CorruptStore)
-                            {
-                                counts.Failed++;
-                            }
-
-                            report = counts.ToReport();
-                            return revalidation == StoreStatus.CorruptStore || counts.Recovered == 0
-                                ? revalidation
-                                : StoreStatus.Success;
-                        }
-
-                        if (!changedLifecycleStillCurrent)
-                        {
-                            claimCompleted = true;
-                            break;
-                        }
-
-                        if (!CanRecoverReservation(
-                                State(expected),
-                                classification,
-                                options.RecoverCurrentProcessReservations))
-                        {
-                            long current = AtomicControlWord.LoadAcquire(ref slot.Control);
-                            structure = _slots.ValidateStructuralControl(current);
-                            if (structure != StoreStatus.Success)
-                            {
-                                counts.Failed++;
-                                report = counts.ToReport();
-                                return structure;
-                            }
-
-                            CountPreservedReservation(
-                                classification.Kind,
-                                current,
+                            expected = claim.ObservedControl;
+                            StoreStatus revalidation = ValidateReservationMetadata(
+                                slotIndex,
                                 expected,
-                                ref counts);
-                            claimCompleted = true;
+                                ref slot,
+                                budget,
+                                out bool changedLifecycleStillCurrent,
+                                out bool changedUnreferencedPreMetadata);
+                            _ = ObserveStructuralStatus(revalidation);
+                            if (revalidation != StoreStatus.Success)
+                            {
+                                if (revalidation == StoreStatus.CorruptStore)
+                                {
+                                    counts.Failed++;
+                                }
+
+                                report = counts.ToReport();
+                                return revalidation == StoreStatus.CorruptStore || counts.Recovered == 0
+                                    ? revalidation
+                                    : StoreStatus.Success;
+                            }
+
+                            if (!changedLifecycleStillCurrent)
+                            {
+                                claimCompleted = true;
+                                break;
+                            }
+
+                            if (!CanRecoverReservation(
+                                    State(expected),
+                                    classification,
+                                    options.RecoverCurrentProcessReservations))
+                            {
+                                long current = AtomicControlWord.LoadAcquire(ref slot.Control);
+                                structure = _slots.ValidateStructuralControl(current);
+                                if (structure != StoreStatus.Success)
+                                {
+                                    counts.Failed++;
+                                    report = counts.ToReport();
+                                    return structure;
+                                }
+
+                                CountPreservedReservation(
+                                    classification.Kind,
+                                    current,
+                                    expected,
+                                    ref counts);
+                                claimCompleted = true;
+                                break;
+                            }
+
+                            currentUnreferencedPreMetadata = changedUnreferencedPreMetadata;
                             break;
                         }
-
-                        currentUnreferencedPreMetadata = changedUnreferencedPreMetadata;
-                        break;
-                    }
 
                     case ReservationRecoveryClaimKind.Inconsistent:
                     default:

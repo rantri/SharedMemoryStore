@@ -1565,7 +1565,7 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
         in LockFreeOperationBudget budget)
     {
         var contentionAttempt = 0;
-        for (;;)
+        for (; ; )
         {
             StoreStatus lookup = _directory.TryLookup(
                 key,
@@ -1596,7 +1596,7 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
             }
 
             Reach(LockFreeCheckpointId.ReserveAfterExistingLookup);
-            for (;;)
+            for (; ; )
             {
                 StoreStatus classification = ClassifyDirectoryBindingWithSourceRevalidation(
                     exactBinding,
@@ -1644,62 +1644,62 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
                 switch (state)
                 {
                     case LockFreeSlotTable.InitializingState:
-                    {
-                        // Initializing is tentative for both public APIs. Help
-                        // the canonical insertion before checking the caller's
-                        // contention budget again; the help may establish the
-                        // explicit reserve ordering point.
-                        StoreStatus help = _directory.HelpMutationForKeyHash(
-                            keyHash,
-                            budget,
-                            ref _checkpoint,
-                            maxSteps: 8);
-                        if (help is not (StoreStatus.Success or StoreStatus.StoreBusy))
                         {
-                            return help;
-                        }
+                            // Initializing is tentative for both public APIs. Help
+                            // the canonical insertion before checking the caller's
+                            // contention budget again; the help may establish the
+                            // explicit reserve ordering point.
+                            StoreStatus help = _directory.HelpMutationForKeyHash(
+                                keyHash,
+                                budget,
+                                ref _checkpoint,
+                                maxSteps: 8);
+                            if (help is not (StoreStatus.Success or StoreStatus.StoreBusy))
+                            {
+                                return help;
+                            }
 
-                        StoreStatus postHelp = ClassifyDirectoryBindingWithSourceRevalidation(
-                            exactBinding,
-                            exactLocation,
-                            out bool postHelpSourceChanged,
-                            out int postHelpState,
-                            out _);
-                        if (postHelpSourceChanged)
-                        {
-                            break;
-                        }
+                            StoreStatus postHelp = ClassifyDirectoryBindingWithSourceRevalidation(
+                                exactBinding,
+                                exactLocation,
+                                out bool postHelpSourceChanged,
+                                out int postHelpState,
+                                out _);
+                            if (postHelpSourceChanged)
+                            {
+                                break;
+                            }
 
-                        if (postHelp == StoreStatus.NotFound)
-                        {
-                            break;
-                        }
+                            if (postHelp == StoreStatus.NotFound)
+                            {
+                                break;
+                            }
 
-                        if (postHelp != StoreStatus.Success
-                            && postHelp != StoreStatus.StoreBusy)
-                        {
-                            return postHelp;
-                        }
+                            if (postHelp != StoreStatus.Success
+                                && postHelp != StoreStatus.StoreBusy)
+                            {
+                                return postHelp;
+                            }
 
-                        if (postHelp == StoreStatus.Success
-                            && postHelpState != LockFreeSlotTable.InitializingState)
-                        {
-                            // Reclassify the newly reached terminal state before
-                            // consulting the wait budget. In particular, an
-                            // explicit helper-won Reserved state must dominate
-                            // a deadline observed immediately afterward.
+                            if (postHelp == StoreStatus.Success
+                                && postHelpState != LockFreeSlotTable.InitializingState)
+                            {
+                                // Reclassify the newly reached terminal state before
+                                // consulting the wait budget. In particular, an
+                                // explicit helper-won Reserved state must dominate
+                                // a deadline observed immediately afterward.
+                                continue;
+                            }
+
+                            if (!budget.TryContinueAfterContention(
+                                    contentionAttempt++,
+                                    out StoreStatus initializingTerminal))
+                            {
+                                return initializingTerminal;
+                            }
+
                             continue;
                         }
-
-                        if (!budget.TryContinueAfterContention(
-                                contentionAttempt++,
-                                out StoreStatus initializingTerminal))
-                        {
-                            return initializingTerminal;
-                        }
-
-                        continue;
-                    }
 
                     case LockFreeSlotTable.ReservedState:
                         if (publicationIntent == SlotPublicationIntent.ExplicitReservation)
@@ -1734,81 +1734,81 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
                         return StoreStatus.DuplicateKey;
 
                     case LockFreeSlotTable.RemoveRequestedState:
-                    {
-                        StoreStatus reclaim = _reclaimer.TryReclaim(
-                            exactBinding,
-                            budget,
-                            ref _checkpoint);
-                        StoreStatus normalized =
-                            LockFreeStoreEngine.NormalizeExistingGenerationReclaimOutcome(reclaim);
-                        if (normalized == StoreStatus.Success)
                         {
-                            break;
-                        }
+                            StoreStatus reclaim = _reclaimer.TryReclaim(
+                                exactBinding,
+                                budget,
+                                ref _checkpoint);
+                            StoreStatus normalized =
+                                LockFreeStoreEngine.NormalizeExistingGenerationReclaimOutcome(reclaim);
+                            if (normalized == StoreStatus.Success)
+                            {
+                                break;
+                            }
 
-                        if (normalized != StoreStatus.StoreBusy)
-                        {
-                            return normalized;
-                        }
+                            if (normalized != StoreStatus.StoreBusy)
+                            {
+                                return normalized;
+                            }
 
-                        if (!budget.TryContinueAfterContention(
-                                contentionAttempt++,
-                                out StoreStatus reclaimTerminal))
-                        {
-                            return reclaimTerminal;
-                        }
+                            if (!budget.TryContinueAfterContention(
+                                    contentionAttempt++,
+                                    out StoreStatus reclaimTerminal))
+                            {
+                                return reclaimTerminal;
+                            }
 
-                        continue;
-                    }
+                            continue;
+                        }
 
                     case LockFreeSlotTable.AbortingState:
-                    {
-                        StoreStatus cleanup = CompleteAbortingBinding(exactBinding, budget);
-                        if (cleanup == StoreStatus.Success)
                         {
-                            break;
-                        }
+                            StoreStatus cleanup = CompleteAbortingBinding(exactBinding, budget);
+                            if (cleanup == StoreStatus.Success)
+                            {
+                                break;
+                            }
 
-                        if (cleanup != StoreStatus.StoreBusy)
-                        {
-                            return cleanup;
-                        }
+                            if (cleanup != StoreStatus.StoreBusy)
+                            {
+                                return cleanup;
+                            }
 
-                        if (!budget.TryContinueAfterContention(
-                                contentionAttempt++,
-                                out StoreStatus abortTerminal))
-                        {
-                            return abortTerminal;
-                        }
+                            if (!budget.TryContinueAfterContention(
+                                    contentionAttempt++,
+                                    out StoreStatus abortTerminal))
+                            {
+                                return abortTerminal;
+                            }
 
-                        continue;
-                    }
+                            continue;
+                        }
 
                     case LockFreeSlotTable.ReclaimingState:
-                    {
-                        StoreStatus reclaim = _reclaimer.TryReclaim(
-                            exactBinding,
-                            budget,
-                            ref _checkpoint);
-                        if (reclaim == StoreStatus.Success)
                         {
-                            break;
-                        }
+                            StoreStatus reclaim = _reclaimer.TryReclaim(
+                                exactBinding,
+                                budget,
+                                ref _checkpoint);
+                            if (reclaim == StoreStatus.Success)
+                            {
+                                break;
+                            }
 
-                        if (reclaim != StoreStatus.StoreBusy)
-                        {
-                            return reclaim;
-                        }
+                            if (reclaim != StoreStatus.StoreBusy)
+                            {
+                                return reclaim;
+                            }
 
-                        if (!budget.TryContinueAfterContention(
-                                contentionAttempt++,
-                                out StoreStatus reclaimTerminal))
-                        {
-                            return reclaimTerminal;
-                        }
+                            if (!budget.TryContinueAfterContention(
+                                    contentionAttempt++,
+                                    out StoreStatus reclaimTerminal))
+                            {
+                                return reclaimTerminal;
+                            }
 
-                        continue;
-                    }
+                            continue;
+                        }
 
                     default:
                         return CorruptFrom(

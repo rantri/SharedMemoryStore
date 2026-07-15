@@ -453,10 +453,10 @@ public sealed class LockFreeDisposalIntegrationTests
                     out _));
 
             case DisposalOperation.ReservationProjection:
-            {
-                Span<byte> span = context.Reservation.GetSpan();
-                return Projection(span.Length);
-            }
+                {
+                    Span<byte> span = context.Reservation.GetSpan();
+                    return Projection(span.Length);
+                }
 
             case DisposalOperation.Advance:
                 return Status(context.Reservation.Advance(1));
@@ -471,16 +471,16 @@ public sealed class LockFreeDisposalIntegrationTests
                 return Status(context.First.TryAcquire(context.PublishedKey, out _));
 
             case DisposalOperation.ValueProjection:
-            {
-                ReadOnlySpan<byte> span = context.Lease.ValueSpan;
-                return Projection(span.Length);
-            }
+                {
+                    ReadOnlySpan<byte> span = context.Lease.ValueSpan;
+                    return Projection(span.Length);
+                }
 
             case DisposalOperation.DescriptorProjection:
-            {
-                ReadOnlySpan<byte> span = context.Lease.DescriptorSpan;
-                return Projection(span.Length);
-            }
+                {
+                    ReadOnlySpan<byte> span = context.Lease.DescriptorSpan;
+                    return Projection(span.Length);
+                }
 
             case DisposalOperation.Release:
                 return Status(context.Lease.Release());

@@ -184,39 +184,39 @@ internal static class CheckpointCrashCommands
 
             case LockFreeCheckpointId.CommitBeforePublicationCas:
             case LockFreeCheckpointId.CommitAfterPublicationCas:
-            {
-                StoreStatus reserve = PrepareReservation(store, parsed.OperationKey, parsed, out ValueReservation reservation);
-                return reserve == StoreStatus.Success ? reservation.Commit() : reserve;
-            }
+                {
+                    StoreStatus reserve = PrepareReservation(store, parsed.OperationKey, parsed, out ValueReservation reservation);
+                    return reserve == StoreStatus.Success ? reservation.Commit() : reserve;
+                }
 
             case LockFreeCheckpointId.AdvanceBeforeBytesAdvancedCas:
             case LockFreeCheckpointId.AdvanceAfterBytesAdvancedCas:
-            {
-                StoreStatus reserve = store.TryReserve(
-                    parsed.OperationKey,
-                    parsed.Value.Length,
-                    parsed.Descriptor,
-                    out ValueReservation reservation);
-                if (reserve != StoreStatus.Success)
                 {
-                    return reserve;
-                }
+                    StoreStatus reserve = store.TryReserve(
+                        parsed.OperationKey,
+                        parsed.Value.Length,
+                        parsed.Descriptor,
+                        out ValueReservation reservation);
+                    if (reserve != StoreStatus.Success)
+                    {
+                        return reserve;
+                    }
 
-                parsed.Value.CopyTo(reservation.GetSpan(parsed.Value.Length));
-                return reservation.Advance(parsed.Value.Length);
-            }
+                    parsed.Value.CopyTo(reservation.GetSpan(parsed.Value.Length));
+                    return reservation.Advance(parsed.Value.Length);
+                }
 
             case LockFreeCheckpointId.AbortBeforeAbortCas:
             case LockFreeCheckpointId.AbortAfterOwnershipReleaseCas:
             case LockFreeCheckpointId.AbortAfterUnlinkCompletion:
-            {
-                StoreStatus reserve = store.TryReserve(
-                    parsed.OperationKey,
-                    parsed.Value.Length,
-                    parsed.Descriptor,
-                    out ValueReservation reservation);
-                return reserve == StoreStatus.Success ? reservation.Abort() : reserve;
-            }
+                {
+                    StoreStatus reserve = store.TryReserve(
+                        parsed.OperationKey,
+                        parsed.Value.Length,
+                        parsed.Descriptor,
+                        out ValueReservation reservation);
+                    return reserve == StoreStatus.Success ? reservation.Abort() : reserve;
+                }
 
             case LockFreeCheckpointId.AcquireBeforeLeaseClaimCas:
             case LockFreeCheckpointId.AcquireAfterLeaseActivationBeforeFinalLookup:
@@ -226,24 +226,24 @@ internal static class CheckpointCrashCommands
             case LockFreeCheckpointId.ProjectBeforeHandleValidation:
             case LockFreeCheckpointId.ProjectAfterMetadataReadBeforeControlRevalidation:
             case LockFreeCheckpointId.ProjectAfterSpanProjection:
-            {
-                StoreStatus acquire = store.TryAcquire(parsed.ExistingKey, out ValueLease lease);
-                if (acquire != StoreStatus.Success)
                 {
-                    return acquire;
-                }
+                    StoreStatus acquire = store.TryAcquire(parsed.ExistingKey, out ValueLease lease);
+                    if (acquire != StoreStatus.Success)
+                    {
+                        return acquire;
+                    }
 
-                _ = lease.ValueSpan.Length;
-                return lease.Release();
-            }
+                    _ = lease.ValueSpan.Length;
+                    return lease.Release();
+                }
 
             case LockFreeCheckpointId.ReleaseBeforeActiveReleaseCas:
             case LockFreeCheckpointId.ReleaseAfterOwnershipReleaseCas:
             case LockFreeCheckpointId.ReleaseAfterRecordRecycle:
-            {
-                StoreStatus acquire = store.TryAcquire(parsed.ExistingKey, out ValueLease lease);
-                return acquire == StoreStatus.Success ? lease.Release() : acquire;
-            }
+                {
+                    StoreStatus acquire = store.TryAcquire(parsed.ExistingKey, out ValueLease lease);
+                    return acquire == StoreStatus.Success ? lease.Release() : acquire;
+                }
 
             case LockFreeCheckpointId.RemoveBeforeLogicalRemovalCas:
             case LockFreeCheckpointId.RemoveAfterLeaseClassification:
@@ -267,50 +267,50 @@ internal static class CheckpointCrashCommands
             case LockFreeCheckpointId.DirectoryAfterInsertCompletionStateValidationBeforeLocationRead:
             case LockFreeCheckpointId.DirectoryBeforeInsertOuterLoopBudgetCheck:
             case LockFreeCheckpointId.ReserveAfterDirectoryInsertBeforePendingClassification:
-            {
-                StoreStatus reserve = store.TryReserve(
-                    parsed.OperationKey,
-                    parsed.Value.Length,
-                    parsed.Descriptor,
-                    out ValueReservation reservation);
-                if (reserve != StoreStatus.Success)
                 {
-                    return reserve;
-                }
+                    StoreStatus reserve = store.TryReserve(
+                        parsed.OperationKey,
+                        parsed.Value.Length,
+                        parsed.Descriptor,
+                        out ValueReservation reservation);
+                    if (reserve != StoreStatus.Success)
+                    {
+                        return reserve;
+                    }
 
-                return reservation.Abort();
-            }
+                    return reservation.Abort();
+                }
 
             case LockFreeCheckpointId.DirectoryAfterCancelLocationClearBeforeDescriptorRejection:
-            {
-                // This checkpoint describes a cancellation racing the insert
-                // helper, rather than a state reached by a single ordinary
-                // reserve/abort call.  Turn the exact reservation Aborting at
-                // the helper's freshly revalidated dispatch boundary.  The
-                // same production helper then enters CancelInsert and leaves
-                // a genuine cross-process crash-recovery state.
-                byte[] operationKey = parsed.OperationKey;
-                setPreparation(
-                    LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch,
-                    () => BeginAbortInFlightReservation(store, operationKey));
-                StoreStatus reserve = store.TryReserve(
-                    parsed.OperationKey,
-                    parsed.Value.Length,
-                    parsed.Descriptor,
-                    out ValueReservation reservation);
-                if (reserve != StoreStatus.Success)
                 {
-                    return reserve;
-                }
+                    // This checkpoint describes a cancellation racing the insert
+                    // helper, rather than a state reached by a single ordinary
+                    // reserve/abort call.  Turn the exact reservation Aborting at
+                    // the helper's freshly revalidated dispatch boundary.  The
+                    // same production helper then enters CancelInsert and leaves
+                    // a genuine cross-process crash-recovery state.
+                    byte[] operationKey = parsed.OperationKey;
+                    setPreparation(
+                        LockFreeCheckpointId.DirectoryAfterCurrentOperationRevalidationBeforeDispatch,
+                        () => BeginAbortInFlightReservation(store, operationKey));
+                    StoreStatus reserve = store.TryReserve(
+                        parsed.OperationKey,
+                        parsed.Value.Length,
+                        parsed.Descriptor,
+                        out ValueReservation reservation);
+                    if (reserve != StoreStatus.Success)
+                    {
+                        return reserve;
+                    }
 
-                // Preserve the primary reserve outcome for the suspension
-                // oracle. Cleanup must not transform an unexpected Success
-                // into the expected InvalidReservation and hide a regression.
-                StoreStatus cleanup = reservation.Abort();
-                return cleanup is StoreStatus.Success or StoreStatus.InvalidReservation
-                    ? StoreStatus.Success
-                    : cleanup;
-            }
+                    // Preserve the primary reserve outcome for the suspension
+                    // oracle. Cleanup must not transform an unexpected Success
+                    // into the expected InvalidReservation and hide a regression.
+                    StoreStatus cleanup = reservation.Abort();
+                    return cleanup is StoreStatus.Success or StoreStatus.InvalidReservation
+                        ? StoreStatus.Success
+                        : cleanup;
+                }
 
             case LockFreeCheckpointId.DirectoryBeforeSpillSummaryPublicationCas:
             case LockFreeCheckpointId.DirectoryAfterSpillSummaryPublication:
@@ -345,21 +345,21 @@ internal static class CheckpointCrashCommands
 
             case LockFreeCheckpointId.RecoveryBeforeOwnerClassification:
             case LockFreeCheckpointId.RecoveryAfterExactRecoveryCas:
-            {
-                StoreStatus reserve = store.TryReserve(
-                    parsed.RecoveryKey,
-                    parsed.Value.Length,
-                    parsed.Descriptor,
-                    out _);
-                if (reserve != StoreStatus.Success)
                 {
-                    return reserve;
-                }
+                    StoreStatus reserve = store.TryReserve(
+                        parsed.RecoveryKey,
+                        parsed.Value.Length,
+                        parsed.Descriptor,
+                        out _);
+                    if (reserve != StoreStatus.Success)
+                    {
+                        return reserve;
+                    }
 
-                return store.TryRecoverReservations(
-                    new ReservationRecoveryOptions(RecoverCurrentProcessReservations: true),
-                    out _);
-            }
+                    return store.TryRecoverReservations(
+                        new ReservationRecoveryOptions(RecoverCurrentProcessReservations: true),
+                        out _);
+                }
 
             case LockFreeCheckpointId.ParticipantAfterRecoveryFenceBeforeReferenceScan:
                 return store.TryRecoverReservations(
