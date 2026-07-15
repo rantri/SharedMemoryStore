@@ -542,12 +542,17 @@ public sealed class ProductionGeneratedHistoryTests
     private static CapturedHistory CaptureDisposalOperation(int firstDelay, int secondDelay)
     {
         var recorder = new MonotonicHistoryRecorder(strictProductionHistory: true);
+        using var overlapGate = new DisposalOperationOverlapGate();
         SharedMemoryStoreOptions options = CreateOptions(
             "history-disposal",
             slotCount: 1,
             leaseCount: 2,
             OpenMode.CreateNew);
-        StoreOpenStatus created = TryCreateInstrumented(options, recorder, out Store? participantOne);
+        StoreOpenStatus created = TryCreateInstrumented(
+            options,
+            recorder,
+            out Store? participantOne,
+            overlapGate.Observe);
         if (created != StoreOpenStatus.Success || participantOne is null)
         {
             throw new XunitException($"Could not create disposal history store: {created}.");
@@ -557,6 +562,7 @@ public sealed class ProductionGeneratedHistoryTests
         try
         {
             CompleteSequentialPublish(recorder, 1, actorId: 3, participantOne, Left);
+            overlapGate.Arm();
 
             PendingInvocation operation = recorder.Invoke(
                 2,
@@ -589,6 +595,7 @@ public sealed class ProductionGeneratedHistoryTests
                 },
                 firstDelay,
                 secondDelay);
+            overlapGate.AssertSatisfied();
 
             PendingInvocation keeperAcquire = recorder.Invoke(4, 3, ReferenceCommand.AcquireLease(2, 21, KeyHex));
             keeperAcquire.Enter();
@@ -897,10 +904,12 @@ public sealed class ProductionGeneratedHistoryTests
     private static StoreOpenStatus TryCreateInstrumented(
         SharedMemoryStoreOptions options,
         MonotonicHistoryRecorder recorder,
-        out Store? store)
+        out Store? store,
+        Action<LockFreeCheckpointEntry>? checkpointObserver = null)
     {
+        checkpointObserver ??= static _ => { };
         InstrumentedLockFreeCheckpoint checkpoint = LockFreeCheckpointFactory.CreateInstrumented(
-            static _ => { },
+            checkpointObserver,
             recorder.ObserveSlotResource,
             recorder,
             recorder);
@@ -967,6 +976,66 @@ public sealed class ProductionGeneratedHistoryTests
         IReadOnlyList<RecordedOperation> History,
         IReadOnlyList<RecordedSlotResourceWitness> ResourceWitnesses,
         IReadOnlyList<RecordedOperation> RaceOperations);
+
+    private sealed class DisposalOperationOverlapGate : IDisposable
+    {
+        private static readonly TimeSpan CheckpointTimeout = TimeSpan.FromSeconds(5);
+        private readonly ManualResetEventSlim _publishReached = new();
+        private readonly ManualResetEventSlim _disposalReached = new();
+        private int _armed;
+
+        internal void Arm()
+        {
+            if (Interlocked.Exchange(ref _armed, 1) != 0)
+            {
+                throw new InvalidOperationException("The disposal overlap gate can be armed only once.");
+            }
+        }
+
+        internal void Observe(LockFreeCheckpointEntry entry)
+        {
+            if (Volatile.Read(ref _armed) == 0)
+            {
+                return;
+            }
+
+            switch (entry.Id)
+            {
+                case LockFreeCheckpointId.PublishBeforeSlotClaim:
+                    _publishReached.Set();
+                    WaitFor(_disposalReached, "disposal entry");
+                    break;
+                case LockFreeCheckpointId.DisposalBeforeLocalGateClose:
+                    _disposalReached.Set();
+                    WaitFor(_publishReached, "publish entry");
+                    break;
+            }
+        }
+
+        internal void AssertSatisfied()
+        {
+            if (!_publishReached.IsSet || !_disposalReached.IsSet)
+            {
+                throw new XunitException(
+                    "The disposal-operation history did not reach both deterministic overlap checkpoints.");
+            }
+        }
+
+        public void Dispose()
+        {
+            _publishReached.Dispose();
+            _disposalReached.Dispose();
+        }
+
+        private static void WaitFor(ManualResetEventSlim checkpoint, string description)
+        {
+            if (!checkpoint.Wait(CheckpointTimeout))
+            {
+                throw new XunitException(
+                    $"Timed out waiting for the deterministic disposal-operation {description} checkpoint.");
+            }
+        }
+    }
 
     private struct DeterministicRandom
     {
