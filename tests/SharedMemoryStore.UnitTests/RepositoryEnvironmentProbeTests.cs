@@ -213,22 +213,8 @@ public sealed class RepositoryEnvironmentProbeTests
             return CreateShellStartInfo("sleep 10 &");
         }
 
-        var startInfo = new ProcessStartInfo("powershell.exe")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        startInfo.ArgumentList.Add("-NoProfile");
-        startInfo.ArgumentList.Add("-NonInteractive");
-        startInfo.ArgumentList.Add("-Command");
-        startInfo.ArgumentList.Add(
-            "$start = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "
-            + "'/d /c ping 127.0.0.1 -n 12'); "
-            + "$start.UseShellExecute = $false; "
-            + "[Diagnostics.Process]::Start($start) | Out-Null");
-        return startInfo;
+        return CreateShellStartInfo(
+            "start /b ping 127.0.0.1 -n 12 & exit /b 0");
     }
 
     private static void AssertGitPrefix(string[] arguments)

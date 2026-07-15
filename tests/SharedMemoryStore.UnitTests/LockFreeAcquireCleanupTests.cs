@@ -24,13 +24,14 @@ public sealed class LockFreeAcquireCleanupTests
         Assert.Equal(StoreStatus.Success, store.TryPublish(key, [7]));
         scheduler.PauseAt(LockFreeCheckpointId.AcquireAfterLeaseActivationBeforeFinalLookup);
 
+        TimeSpan operationTimeout = TimeSpan.FromSeconds(2);
         ValueLease observed = default;
-        Task<StoreStatus> acquire = Task.Run(() => store.TryAcquire(
+        Task<StoreStatus> acquire = StartLongRunning(() => store.TryAcquire(
             key,
-            new StoreWaitOptions(TimeSpan.FromMilliseconds(50)),
+            new StoreWaitOptions(operationTimeout),
             out observed));
         Assert.True(scheduler.WaitUntilPaused(TimeSpan.FromSeconds(5)));
-        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        await Task.Delay(operationTimeout + TimeSpan.FromMilliseconds(200));
         scheduler.Continue();
 
         Assert.Equal(StoreStatus.StoreBusy, await acquire.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -56,7 +57,7 @@ public sealed class LockFreeAcquireCleanupTests
         scheduler.PauseAt(LockFreeCheckpointId.AcquireAfterLeaseActivationBeforeFinalLookup);
 
         ValueLease observed = default;
-        Task<StoreStatus> acquire = Task.Run(() => store.TryAcquire(
+        Task<StoreStatus> acquire = StartLongRunning(() => store.TryAcquire(
             key,
             new StoreWaitOptions(TimeSpan.FromSeconds(10), cancellation.Token),
             out observed));
@@ -87,7 +88,7 @@ public sealed class LockFreeAcquireCleanupTests
         scheduler.PauseAt(LockFreeCheckpointId.AcquireAfterLeaseActivationBeforeFinalLookup);
 
         ValueLease observed = default;
-        Task<StoreStatus> acquire = Task.Run(() => store.TryAcquire(
+        Task<StoreStatus> acquire = StartLongRunning(() => store.TryAcquire(
             key,
             StoreWaitOptions.Infinite,
             out observed));
@@ -107,6 +108,13 @@ public sealed class LockFreeAcquireCleanupTests
         long control = AtomicControlWord.LoadAcquire(ref leases.Record(0).Control);
         Assert.Equal(LockFreeLeaseRegistry.FreeState, (int)((ulong)control & 0x7UL));
     }
+
+    private static Task<StoreStatus> StartLongRunning(Func<StoreStatus> operation) =>
+        Task.Factory.StartNew(
+            operation,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
     private static DirectoryLocation LocateExactDirectoryCell(MemoryStore store, byte[] key)
     {
