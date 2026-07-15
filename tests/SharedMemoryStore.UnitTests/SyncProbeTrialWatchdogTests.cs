@@ -65,7 +65,11 @@ public sealed class SyncProbeTrialWatchdogTests
                 releaseCompletionLatch.Wait();
             });
 
-        Task completion = Task.Run(async () => await watchdog.CompleteAsync());
+        Task completion = Task.Factory.StartNew(
+            () => watchdog.CompleteAsync().AsTask(),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
         try
         {
             await completionLatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
