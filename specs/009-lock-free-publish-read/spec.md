@@ -791,10 +791,11 @@ existing unpublished region whose initialization ownership cannot be proven.
 ### Benchmark Workload Matrix
 
 Relative performance criteria use the same machine, operating system, runtime,
-store capacities, process placement, warm-up, and measurement window for the
-legacy and lock-free profiles. Throughput scenarios run three trials with at
-least 10 seconds of warm-up and 60 seconds of measurement per trial; reported
-results use the median trial. Participants receive one logical processor each
+store capacities, process placement, and configured profile-aware completion
+policy for the legacy and lock-free profiles. Throughput scenarios run three trials; duration-bound rows
+use at least 10 seconds of warm-up and 60 seconds of measurement, while
+count-bound rows must reach their exact target. Reported results use the median
+trial. Participants receive one logical processor each
 where the host permits it, without oversubscribing the host, and the report
 records processor allocation, OS, runtime, payload size, key distribution,
 lease duration, churn pattern, and final statuses.
@@ -809,9 +810,18 @@ lease duration, churn pattern, and final statuses.
 | Participant suspension | Same as distributed-key and mixed-churn workloads | Suspend one participant for 30 seconds at each observable steady-state transition | Healthy-process throughput, affected keys/capacity, and progress |
 | Large-payload ingest | One producer plus 1 and 12 readers | 100,000 frames of 1.3 MB each using direct reservation, exact-byte commit, broker-directed acquire, and safe removal | Producer-owned allocation, library copies, throughput, and payload checksums |
 
+Both profiles remain present in the mixed-churn and large-ingest matrix. Legacy
+rows are duration-bound comparison measurements using the same 10-second warm-up
+and 60-second measured window as ordinary throughput rows. The lock-free rows
+are count-bound durability qualifications: every mixed-churn trial executes at
+least 100,000,000 operations and every large-ingest trial executes 100,000
+frames. The report records the count-bound profile set plus each row's effective
+operation/frame target; validation rejects inherited, swapped, dual, missing,
+or unmet targets and independently proves the full duration of comparison rows.
+
 ### Measurable Outcomes
 
-- **SC-001**: A 100,000,000-operation mixed run with concurrent publication,
+- **SC-001**: A lock-free 100,000,000-operation mixed run with concurrent publication,
   reservation, commit, acquire, projection, release, remove, and reuse across at
   least 12 reader processes and additional publisher/remover processes completes
   with zero partial payloads, mixed generations, false successful removals,
@@ -848,7 +858,7 @@ lease duration, churn pattern, and final statuses.
   workloads, publication/reservation/commit and acquire/projection/release each
   report 0 bytes of runtime heap allocation per operation across at least
   1,000,000 operations.
-- **SC-009**: In the large-payload ingest workload, all 100,000 direct publications
+- **SC-009**: In each lock-free large-payload ingest trial, all 100,000 direct publications
   complete without a producer-owned full-payload allocation, without a
   library-level full-payload copy after the producer fills reserved memory, and
   without any reader payload copy required by the library.

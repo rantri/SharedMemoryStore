@@ -4,10 +4,10 @@
 
 This report is frozen before the one-shot runs and is not edited afterward.
 The short convergence conclusion is **PASS if and only if** the final PR
-[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json)
+[`summary.json`](../../../artifacts/lock-free-qualification/009-final-r6-pr/summary.json)
 has schema 4, tier `pr`, `validationOnly: false`, and `overallStatus: passed`,
 and its hashed
-[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json)
+[`sync-probe.json`](../../../artifacts/lock-free-qualification/009-final-r6-pr/sync-probe.json)
 passes every exact row, count, provenance, correctness, raw-visibility, and
 short-performance check enforced by the runner. Its start/completion provenance
 must be identical and clean, and must match the final nightly and release
@@ -15,9 +15,9 @@ summaries. Otherwise the short conclusion is **FAIL** or **NOT QUALIFIED** as
 reported by the raw JSON; this tracked report cannot promote it.
 
 The same clean commit then has to pass the immutable
-[`009-final-r5-nightly`](../../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json)
+[`009-final-r6-nightly`](../../../artifacts/lock-free-qualification/009-final-r6-nightly/summary.json)
 and
-[`009-final-r5-release`](../../../artifacts/lock-free-qualification/009-final-r5-release/summary.json)
+[`009-final-r6-release`](../../../artifacts/lock-free-qualification/009-final-r6-release/summary.json)
 gates before the short result can contribute to release qualification. Raw
 JSON remains in the ignored immutable `artifacts/` tree; no copy is maintained
 under tracked `specs/` and no tracked post-run edit is permitted.
@@ -71,8 +71,19 @@ test-only correction uses normal concurrent recovery for leases and
 reservations and avoids dereferencing borrowed spans during a disposal race.
 The subsequent clean `009-r5-pre-final-pr` diagnostic passed all 24 gates and
 1,014/1,014 tests on commit `527d451bd124dbbe8880fcb909b6e1bd70ad222a`.
-All of these R4/R5-pre-final results remain diagnostic; only the R5 final paths
-linked above can determine the frozen conclusion.
+R5 then passed Linux, PR, and nightly, but its release probe could not converge:
+the harness imposed the 100-million-operation target on every Legacy
+mixed-churn trial before reaching the LockFree qualification, and would have
+done the same with the 100,000-frame Legacy ingest rows. Read-only liveness
+sampling proved slow semaphore-serialized progress, not deadlock. R6 preserves
+that attempt, keeps Legacy rows duration-bound, and applies count targets only
+to LockFree with schema-v8/minimum-v8 per-run evidence. Its final pre-freeze
+worktree passed 1,028/1,028 Release tests with zero skips, 9/9 completion-policy
+cases, 5/5 watchdog race cases, both validation-only importers, documentation
+validation, and a real four-row Legacy/LockFree duration/count smoke with zero
+failures. Independent final review closed H0/M0 with no lower correctness
+finding. All earlier results remain
+diagnostic; only the R6 final paths linked above determine this conclusion.
 
 Two still-earlier one-second smoke artifacts are also retained:
 

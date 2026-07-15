@@ -199,8 +199,9 @@ The multi-process harness emits JSON and records:
 - store dimensions and profile;
 - exact key/payload/descriptor distribution and collision construction;
 - process roles, lease duration, churn pattern;
-- 10-second minimum warm-up and 60-second measurement;
-- three trials and median reported trial;
+- three trials: duration-bound rows use a 10-second minimum warm-up and
+  60-second measurement, while count-bound rows must reach their exact target;
+- the median reported trial;
 - aggregate/per-process throughput, fairness, p50/p95/p99, maximum sampled
   latency, producer allocation counts, whether any copy counter is actually
   instrumented, structural copy-path evidence, and every status count.
@@ -270,9 +271,11 @@ coverage only and are never reported as production race executions.
 
 ### Weekly/release qualification
 
-- complete 60-second, three-trial workload matrix;
-- 100,000,000 mixed operations;
-- 100,000 direct 1.3 MB frames (at least 130 GB written);
+- complete three-trial workload matrix: duration-bound rows measure 60 seconds
+  and count-bound rows reach their machine-recorded profile-aware targets;
+- at least 100,000,000 mixed operations in every lock-free mixed-churn trial;
+- 100,000 direct 1.3 MB frames in every lock-free large-ingest trial (at least
+  130 GB written per trial);
 - 10,000 injected reservation/lease-owner termination cases;
 - all 1,000,000-repetition race-family stress requirements after finite
   deterministic schedules;
@@ -286,6 +289,14 @@ reuse pattern test with production checkpoints/logging disabled. Missing access
 to one platform is recorded as **not qualified**, never as pass. The same raw
 test fails on any torn, partial, stale, or mixed generation and does not use
 shared diagnostic counters in its measured path.
+
+The probe controller enforces a per-trial deadline for every duration-bound row:
+warm-up plus measurement plus the configured cleanup grace. At timeout it gives
+tracked child-tree termination a bounded 100 ms best-effort budget, then
+unconditionally fail-fast terminates the isolated probe. Count-bound rows remain
+under the qualification step deadline and emit periodic progress heartbeats. Schema-v8 evidence records
+`CountBoundProfiles`, `OperationTarget`, and `FrameTarget`; both targets may
+never be positive on one row.
 
 ## Qualification evidence contract
 
@@ -306,11 +317,13 @@ wrong-duration, wrong-frame-target, or wrong-operation-target rows cannot satisf
 the gate. Correctness counters are checked before threshold calculations.
 
 The Linux-x64 `-Command all` report contains one required
-`linux-tiny-performance` row. It runs schema-7 SyncProbe mode `sync` for exactly
+`linux-tiny-performance` row. It runs schema-8 SyncProbe mode `sync` for exactly
 Legacy and LockFree, `acquire-release` and `publish-remove`, process counts 1 and
 8, 10-second warm-up, 60-second measurement, and three trials. All 24 raw rows
 must be qualification measurements with zero failures, no oversubscription,
-complete unique per-row affinity, internally consistent operation/status/worker
+zero operation/frame targets, the recorded LockFree count-bound policy (which is
+inapplicable to these time-based scenarios), complete unique per-row affinity,
+internally consistent operation/status/worker
 counters, and reproducible 8-row medians. Every raw row has at least two recorded
 store operations per completed cycle and exactly one successful operation pair
 per cycle (`Acquire`/`Release` or `Publish`/`Remove`); checksum-mismatch and

@@ -5,18 +5,34 @@ raw JSON; it is not a BenchmarkDotNet microbenchmark.
 
 ## Evidence semantics
 
-Report schema v7 is additive over schemas v3-v6. Existing JSON property names
-remain present. Readers that ignore unknown properties can continue to consume
-the report. `MinimumCompatibleSchemaVersion` and `SchemaCompatibility` state
-this contract in every report.
+Report schema v8 requires a v8-aware reader for qualification. Existing JSON
+property names remain present so older readers may parse or archive the report,
+but schemas v3-v7 interpreted completion targets globally and therefore cannot
+safely qualify the profile-aware rows. `MinimumCompatibleSchemaVersion` is 8,
+and `SchemaCompatibility` states this contract in every report.
 
 `Environment` records the repository commit and clean/dirty state plus SHA-256
 digests for the exact SharedMemoryStore and probe assemblies that produced the
 report. Assembly digests are the authoritative trace when a qualification is
-run from an intentionally dirty development tree. Schema v7 also records a
+run from an intentionally dirty development tree. Schema v7 records a
 portable processor model, logical and physical processor counts, and total host
 memory; `Configuration.ScenarioStoreDimensions` binds every selected scenario
 to its exact slot/value/descriptor/key/lease/participant dimensions.
+
+Schema v8 records `Configuration.CountBoundProfiles` and each run's
+`OperationTarget` and `FrameTarget`. Qualification uses duration-bound Legacy
+comparison rows and applies the 100-million mixed-operation and 100,000-frame
+durability targets only to the lock-free profile. Standalone probes preserve the
+previous behavior by defaulting `--count-bound-profiles` to `both`.
+`Configuration.DurationBoundGraceSeconds` records the controller watchdog grace;
+`--duration-bound-grace` configures it. A duration-bound trial gets one hard
+deadline covering store creation, warm-up, measurement, worker collection, and
+cleanup: warm-up plus measurement plus grace. An atomic monotonic-deadline latch
+rejects late completion even if timer dispatch is delayed. Missing that deadline
+gives child-tree termination a bounded 100 ms best-effort budget and then
+unconditionally fail-fast terminates the probe process because an in-flight
+infinite store wait cannot be safely unwound. Count-bound trials and the
+fixed-work sticky-overflow scenario do not use that duration watchdog.
 
 Qualification orchestrators pass `--repository-commit` and
 `--repository-working-tree-state` as one validated pair from their independently

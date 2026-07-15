@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "seed": 1592590848,
   "tiers": {
     "pr": {
@@ -12,6 +12,7 @@
       "performanceMode": "all",
       "performanceWarmupSeconds": 2,
       "performanceDurationSeconds": 3,
+      "performanceDurationBoundGraceSeconds": 60,
       "performanceTrials": 1,
       "mixedOperations": 100000,
       "largeFrames": 100,
@@ -31,6 +32,7 @@
       "performanceMode": "all",
       "performanceWarmupSeconds": 2,
       "performanceDurationSeconds": 10,
+      "performanceDurationBoundGraceSeconds": 60,
       "performanceTrials": 1,
       "mixedOperations": 10000000,
       "largeFrames": 10000,
@@ -50,6 +52,7 @@
       "performanceMode": "full",
       "performanceWarmupSeconds": 10,
       "performanceDurationSeconds": 60,
+      "performanceDurationBoundGraceSeconds": 60,
       "performanceTrials": 3,
       "mixedOperations": 100000000,
       "largeFrames": 100000,
@@ -121,6 +124,7 @@
   },
   "performanceMatrix": {
     "profiles": ["Legacy", "LockFree"],
+    "countBoundProfiles": ["LockFree"],
     "shortScenarios": {
       "acquire-release": [1, 2, 4, 8, 12],
       "publish-remove": [1, 2, 4, 8, 12],

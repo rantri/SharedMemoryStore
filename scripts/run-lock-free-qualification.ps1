@@ -1194,8 +1194,8 @@ function Assert-QualificationConfiguration {
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
         throw 'Executable qualification requires a clean working tree.'
     }
-    if ((Get-StrictInt64 $config 'schemaVersion' 'qualification config' 4 4) -ne 4) {
-        throw "Qualification config schemaVersion must be 4."
+    if ((Get-StrictInt64 $config 'schemaVersion' 'qualification config' 5 5) -ne 5) {
+        throw "Qualification config schemaVersion must be 5."
     }
     if ($Configuration -ne 'Release' -and -not $ValidateOnly) {
         throw "Qualification evidence must be built in Release; '$Configuration' is diagnostic-only."
@@ -1210,6 +1210,7 @@ function Assert-QualificationConfiguration {
         'recoveryCases',
         'performanceWarmupSeconds',
         'performanceDurationSeconds',
+        'performanceDurationBoundGraceSeconds',
         'performanceTrials',
         'mixedOperations',
         'largeFrames',
@@ -1229,6 +1230,10 @@ function Assert-QualificationConfiguration {
     $modeValue = Get-RequiredPropertyValue $selected 'performanceMode' "qualification tier '$Tier'"
     if ($modeValue -isnot [string] -or $modeValue -ne $expectedMode) {
         throw "Qualification tier '$Tier' must use performanceMode '$expectedMode'."
+    }
+    if ((Get-StrictInt64 $selected 'performanceDurationBoundGraceSeconds' `
+        "qualification tier '$Tier'" 60 60) -ne 60) {
+        throw "Qualification tier '$Tier' must use exactly 60 seconds of duration-bound watchdog grace."
     }
 
     if ((Get-StrictInt64 $config 'boundedOperationSlackMilliseconds' 'qualification config' 250 250) -ne 250) {
@@ -1267,6 +1272,7 @@ function Assert-QualificationConfiguration {
         'publish-publish', 'publish-reserve', 'reserve-reserve', 'commit-acquire',
         'acquire-remove', 'release-reclaim', 'recovery-live-lease', 'disposal-operation')
     Assert-ExactStringSet 'performance profiles' @($config.performanceMatrix.profiles) @('Legacy', 'LockFree')
+    Assert-ExactStringSet 'count-bound performance profiles' @($config.performanceMatrix.countBoundProfiles) @('LockFree')
     Assert-ExactStringSet 'lock-free-only performance scenarios' @($config.performanceMatrix.lockFreeOnlyScenarios) @('sticky-overflow-miss')
     $linuxTiny = Get-RequiredPropertyValue $config 'linuxTinyPerformance' 'qualification config'
     $expectedLinuxTinyProperties = @(
@@ -1297,8 +1303,9 @@ function Assert-QualificationConfiguration {
     }
     if ((Get-StrictInt64 $config.tiers.release 'performanceWarmupSeconds' 'qualification config release tier' 10 10) -ne 10 `
         -or (Get-StrictInt64 $config.tiers.release 'performanceDurationSeconds' 'qualification config release tier' 60 60) -ne 60 `
+        -or (Get-StrictInt64 $config.tiers.release 'performanceDurationBoundGraceSeconds' 'qualification config release tier' 60 60) -ne 60 `
         -or (Get-StrictInt64 $config.tiers.release 'performanceTrials' 'qualification config release tier' 3 3) -ne 3) {
-        throw 'The Linux tiny release gate requires exactly 10s warmup, 60s measurement, and three trials.'
+        throw 'The Linux tiny release gate requires exactly 10s warmup, 60s measurement, 60s watchdog grace, and three trials.'
     }
 
     $contractCounts = [ordered]@{
@@ -1353,6 +1360,7 @@ function Assert-QualificationConfiguration {
             recoveryCases = 10000
             performanceWarmupSeconds = 10
             performanceDurationSeconds = 60
+            performanceDurationBoundGraceSeconds = 60
             performanceTrials = 3
             mixedOperations = 100000000
             largeFrames = 100000
@@ -2229,9 +2237,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
 
     $raw = Get-Content -LiteralPath $actualRawPath -Raw | ConvertFrom-Json -Depth 30
-    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 7 7) -ne 7 `
-        -or (Get-StrictInt64 $raw 'minimumCompatibleSchemaVersion' 'Linux tiny performance raw report' 3 3) -ne 3) {
-        throw 'Linux tiny performance raw report must be exact schema 7/minimum-compatible 3.'
+    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 8 8) -ne 8 `
+        -or (Get-StrictInt64 $raw 'minimumCompatibleSchemaVersion' 'Linux tiny performance raw report' 8 8) -ne 8) {
+        throw 'Linux tiny performance raw report must be exact schema 8/minimum-compatible 8.'
     }
     [void](Get-StrictString $raw 'schemaCompatibility' 'Linux tiny performance raw report')
     $environment = Get-RequiredPropertyValue $raw 'environment' 'Linux tiny performance raw report'
@@ -2272,6 +2280,7 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     $configuration = Get-RequiredPropertyValue $raw 'configuration' 'Linux tiny performance raw report'
     if ((Get-StrictString $configuration 'mode' 'Linux tiny performance configuration') -cne 'sync' `
         -or (Get-StrictInt64 $configuration 'durationSeconds' 'Linux tiny performance configuration' 60 60) -ne 60 `
+        -or (Get-StrictInt64 $configuration 'durationBoundGraceSeconds' 'Linux tiny performance configuration' 60 60) -ne 60 `
         -or (Get-StrictInt64 $configuration 'warmupSeconds' 'Linux tiny performance configuration' 10 10) -ne 10 `
         -or (Get-StrictInt64 $configuration 'warmupCycles' 'Linux tiny performance configuration' 0 0) -ne 0 `
         -or (Get-StrictInt64 $configuration 'samplingInterval' 'Linux tiny performance configuration' 64 64) -ne 64 `
@@ -2284,6 +2293,7 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     Assert-BenchmarkScenarioStoreDimensions `
         $configuration @('acquire-release', 'publish-remove') 'Linux tiny performance configuration'
     if ((@($configuration.profiles) -join ',') -cne 'Legacy,LockFree' `
+        -or (@($configuration.countBoundProfiles) -join ',') -cne 'LockFree' `
         -or (@($configuration.scenarios) -join ',') -cne 'acquire-release,publish-remove' `
         -or (@($configuration.scenarioProcessCounts.PSObject.Properties.Name) -join ',') -cne
             'acquire-release,publish-remove') {
@@ -2331,6 +2341,8 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         }
         if ((Get-StrictString $run 'qualification' $context) -cne 'qualification-measurement' `
             -or (Get-StrictInt64 $run 'failures' $context 0 0) -ne 0 `
+            -or (Get-StrictInt64 $run 'operationTarget' $context 0 0) -ne 0 `
+            -or (Get-StrictInt64 $run 'frameTarget' $context 0 0) -ne 0 `
             -or (Get-StrictBoolean $run 'oversubscribed' $context)) {
             throw "$context is not a correctness-clean qualification measurement."
         }
@@ -2628,7 +2640,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
                         SampleCount = ($windowSamples * 2); AffinityAppliedCount = $processCount
                         AssignedProcessors = @(0..($processCount - 1)); Oversubscribed = $false
                         Qualification = 'qualification-measurement'; StatusHistogram = $histogram
-                        WorkerCycles = @($workerCycles)
+                        WorkerCycles = @($workerCycles); OperationTarget = 0; FrameTarget = 0
                     })
                 }
                 $summaryHistogram = if ($scenario -ceq 'acquire-release') {
@@ -2650,7 +2662,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         }
     }
     $raw = [pscustomobject][ordered]@{
-        SchemaVersion = 7
+        SchemaVersion = 8
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
@@ -2660,7 +2672,9 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             ProcessorIdentifier = 'Synthetic CPU'; ServerGarbageCollection = $false; StopwatchFrequency = 10000000
         }
         Configuration = [pscustomobject][ordered]@{
-            Mode = 'sync'; DurationSeconds = 60; Trials = 3; Profiles = @('Legacy', 'LockFree')
+            Mode = 'sync'; DurationSeconds = 60; DurationBoundGraceSeconds = 60
+            Trials = 3; Profiles = @('Legacy', 'LockFree')
+            CountBoundProfiles = @('LockFree')
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
@@ -2683,8 +2697,8 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             SyncKeyCatalogSha256 = [string]$config.linuxTinyPerformance.syncKeyCatalogSha256
             SyncKeyCanonicalBucketAssignments = @($config.linuxTinyPerformance.syncKeyCanonicalBucketAssignments)
         }
-        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 3
-        SchemaCompatibility = 'synthetic Schema v7 release-runner verifier self-test'
+        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 8
+        SchemaCompatibility = 'synthetic Schema v8 release-runner verifier self-test'
     }
     $raw | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $rawRelativePath = [IO.Path]::GetRelativePath($root, $rawPath)
@@ -2841,6 +2855,27 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $storeDimensionOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
     & $assertRawTamperRejected $storeDimensionTampered $storeDimensionOsReport `
         'Linux OS performance verifier self-test accepted incorrect store dimensions.'
+    $assertions++
+
+    $countPolicyTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $countPolicyTampered.Configuration.CountBoundProfiles = @('Legacy')
+    $countPolicyOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $countPolicyTampered $countPolicyOsReport `
+        'Linux OS performance verifier self-test accepted a swapped count-bound profile policy.'
+    $assertions++
+
+    $targetTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $targetTampered.Runs[0].OperationTarget = 1
+    $targetOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $targetTampered $targetOsReport `
+        'Linux OS performance verifier self-test accepted a count target on a duration-only tiny row.'
+    $assertions++
+
+    $durationTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $durationTampered.Runs[0].MeasuredSeconds = 59.999
+    $durationOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $durationTampered $durationOsReport `
+        'Linux OS performance verifier self-test accepted a short duration-bound row.'
     $assertions++
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
@@ -4102,7 +4137,7 @@ function Get-ProbeSummaryRow {
     param($Report, [string]$Profile, [string]$Scenario, [int]$ProcessCount)
 
     $rows = @($Report.summary | Where-Object {
-        $_.profile -eq $Profile -and $_.scenario -eq $Scenario -and [int]$_.processCount -eq $ProcessCount
+        $_.profile -ceq $Profile -and $_.scenario -ceq $Scenario -and [int]$_.processCount -eq $ProcessCount
     })
     if ($rows.Count -ne 1) {
         Fail-StepValidation 'sync-probe' "Missing unique probe summary row $Profile/$Scenario/$ProcessCount."
@@ -4156,8 +4191,8 @@ function Assert-ExactProbeMatrix {
 
     foreach ($tuple in $expectedTuples) {
         $summaryRows = @($Report.summary | Where-Object {
-            $_.profile -eq $tuple.profile `
-                -and $_.scenario -eq $tuple.scenario `
+            $_.profile -ceq $tuple.profile `
+                -and $_.scenario -ceq $tuple.scenario `
                 -and [int]$_.processCount -eq $tuple.processCount
         })
         if ($summaryRows.Count -ne 1) {
@@ -4165,8 +4200,8 @@ function Assert-ExactProbeMatrix {
         }
         foreach ($trial in (1..([int]$selected.performanceTrials))) {
             $runRows = @($Report.runs | Where-Object {
-                $_.profile -eq $tuple.profile `
-                    -and $_.scenario -eq $tuple.scenario `
+                $_.profile -ceq $tuple.profile `
+                    -and $_.scenario -ceq $tuple.scenario `
                     -and [int]$_.processCount -eq $tuple.processCount `
                     -and [int]$_.trial -eq $trial
             })
@@ -4178,8 +4213,8 @@ function Assert-ExactProbeMatrix {
 
     foreach ($run in @($Report.runs)) {
         if (@($expectedTuples | Where-Object {
-            $_.profile -eq $run.profile `
-                -and $_.scenario -eq $run.scenario `
+            $_.profile -ceq $run.profile `
+                -and $_.scenario -ceq $run.scenario `
                 -and [int]$_.processCount -eq [int]$run.processCount
         }).Count -ne 1) {
             Fail-StepValidation 'sync-probe' "Unexpected performance row $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)."
@@ -4350,6 +4385,8 @@ function Assert-ProbeConfigurationEvidence {
     if ((Get-StrictString $configuration 'mode' 'sync probe configuration') -ne [string]$selected.performanceMode `
         -or (Get-StrictInt64 $configuration 'durationSeconds' 'sync probe configuration' 1 [int32]::MaxValue) -ne
             (Get-StrictInt64 $selected 'performanceDurationSeconds' "tier '$Tier'" 1 [int32]::MaxValue) `
+        -or (Get-StrictInt64 $configuration 'durationBoundGraceSeconds' 'sync probe configuration' 1 [int32]::MaxValue) -ne
+            (Get-StrictInt64 $selected 'performanceDurationBoundGraceSeconds' "tier '$Tier'" 1 [int32]::MaxValue) `
         -or (Get-StrictInt64 $configuration 'warmupSeconds' 'sync probe configuration' 0 [int32]::MaxValue) -ne
             (Get-StrictInt64 $selected 'performanceWarmupSeconds' "tier '$Tier'" 1 [int32]::MaxValue) `
         -or (Get-StrictInt64 $configuration 'trials' 'sync probe configuration' 1 [int32]::MaxValue) -ne
@@ -4382,6 +4419,8 @@ function Assert-ProbeConfigurationEvidence {
     }
 
     Assert-ExactStringSet 'performance report profiles' @($configuration.profiles) @($config.performanceMatrix.profiles)
+    Assert-ExactStringSet 'performance report count-bound profiles' `
+        @($configuration.countBoundProfiles) @($config.performanceMatrix.countBoundProfiles)
     $expectedScenarioCounts = [ordered]@{}
     foreach ($property in $config.performanceMatrix.shortScenarios.PSObject.Properties) {
         $expectedScenarioCounts[$property.Name] = @($property.Value | ForEach-Object { [int]$_ })
@@ -4436,6 +4475,149 @@ function Assert-ProbeDerivedValue {
     }
 }
 
+function Assert-ProbeRunCompletionEvidence {
+    param(
+        [Parameter(Mandatory)]$Run,
+        [Parameter(Mandatory)][string]$Context,
+        [Parameter(Mandatory)][int64]$DurationSeconds,
+        [Parameter(Mandatory)][int64]$MixedOperationTarget,
+        [Parameter(Mandatory)][int64]$LargeFrameTarget,
+        [Parameter(Mandatory)][string[]]$CountBoundProfiles)
+
+    $profile = Get-StrictString $Run 'profile' $Context
+    $scenario = Get-StrictString $Run 'scenario' $Context
+    if ($profile -cnotin @('Legacy', 'LockFree')) {
+        throw "$Context has noncanonical profile identity '$profile'."
+    }
+    if ($scenario -cnotin @(
+        'acquire-release', 'publish-remove', 'same-key-read', 'distributed-key-read',
+        'broker-directed', 'mixed-churn', 'large-ingest', 'sticky-overflow-miss')) {
+        throw "$Context has noncanonical scenario identity '$scenario'."
+    }
+    $operationTarget = Get-StrictInt64 $Run 'operationTarget' $Context 0 [int64]::MaxValue
+    $frameTarget = Get-StrictInt64 $Run 'frameTarget' $Context 0 [int64]::MaxValue
+    if ($operationTarget -gt 0 -and $frameTarget -gt 0) {
+        throw "$Context cannot be both operation-bound and frame-bound."
+    }
+
+    $isCountBoundProfile = $profile -cin $CountBoundProfiles
+    [int64]$expectedOperationTarget = if ($scenario -ceq 'mixed-churn' -and $isCountBoundProfile) {
+        $MixedOperationTarget
+    }
+    else { 0 }
+    [int64]$expectedFrameTarget = if ($scenario -ceq 'large-ingest' -and $isCountBoundProfile) {
+        $LargeFrameTarget
+    }
+    else { 0 }
+    if ($operationTarget -ne $expectedOperationTarget -or $frameTarget -ne $expectedFrameTarget) {
+        throw "$Context does not match the configured profile-aware count-bound policy."
+    }
+
+    if ($scenario -ceq 'sticky-overflow-miss') {
+        return
+    }
+
+    $operations = Get-StrictInt64 $Run 'operations' $Context 1 [int64]::MaxValue
+    $frames = Get-StrictInt64 $Run 'frames' $Context 0 [int64]::MaxValue
+    $measuredSeconds = Get-StrictDouble $Run 'measuredSeconds' $Context 0 [double]::MaxValue -Positive
+    $earlySamples = Get-StrictInt64 $Run 'earlySampleCount' $Context 1 [int64]::MaxValue
+    $lateSamples = Get-StrictInt64 $Run 'lateSampleCount' $Context 1 [int64]::MaxValue
+    [void]$earlySamples
+    [void]$lateSamples
+    if ($operationTarget -gt 0) {
+        if ($operations -lt $operationTarget) {
+            throw "$Context completed $operations operations below its target $operationTarget."
+        }
+        return
+    }
+    if ($frameTarget -gt 0) {
+        if ($frames -lt $frameTarget) {
+            throw "$Context completed $frames frames below its target $frameTarget."
+        }
+        return
+    }
+    if ($measuredSeconds -lt $DurationSeconds) {
+        throw "$Context duration-bound row measured $measuredSeconds seconds below $DurationSeconds."
+    }
+}
+
+function Invoke-ProbeCompletionVerifierSelfTest {
+    [int64]$duration = Get-StrictInt64 $selected 'performanceDurationSeconds' "tier '$Tier'" 1 [int32]::MaxValue
+    [int64]$mixedTarget = Get-StrictInt64 $selected 'mixedOperations' "tier '$Tier'" 1 [int64]::MaxValue
+    [int64]$frameTarget = Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue
+    [string[]]$countBoundProfiles = @($config.performanceMatrix.countBoundProfiles | ForEach-Object { [string]$_ })
+    $legacy = [pscustomobject][ordered]@{
+        profile = 'Legacy'; scenario = 'mixed-churn'; operationTarget = 0; frameTarget = 0
+        operations = 1; frames = 0; measuredSeconds = [double]$duration
+        earlySampleCount = 1; lateSampleCount = 1
+    }
+    $lockFreeMixed = [pscustomobject][ordered]@{
+        profile = 'LockFree'; scenario = 'mixed-churn'; operationTarget = $mixedTarget; frameTarget = 0
+        operations = $mixedTarget; frames = 0; measuredSeconds = 1.0
+        earlySampleCount = 1; lateSampleCount = 1
+    }
+    $lockFreeLarge = [pscustomobject][ordered]@{
+        profile = 'LockFree'; scenario = 'large-ingest'; operationTarget = 0; frameTarget = $frameTarget
+        operations = 1; frames = $frameTarget; measuredSeconds = 1.0
+        earlySampleCount = 1; lateSampleCount = 1
+    }
+    foreach ($row in @($legacy, $lockFreeMixed, $lockFreeLarge)) {
+        Assert-ProbeRunCompletionEvidence $row 'completion verifier self-test' `
+            $duration $mixedTarget $frameTarget $countBoundProfiles
+    }
+    [int]$assertions = 3
+
+    $mutations = @(
+        @{ message = 'one-below configured mixed target'; apply = {
+            param($row) $row.operationTarget = $mixedTarget - 1
+        }; source = $lockFreeMixed },
+        @{ message = 'one-below completed mixed operations'; apply = {
+            param($row) $row.operations = $mixedTarget - 1
+        }; source = $lockFreeMixed },
+        @{ message = 'Legacy count target inheritance'; apply = {
+            param($row) $row.operationTarget = $mixedTarget
+        }; source = $legacy },
+        @{ message = 'profile target swap'; apply = {
+            param($row) $row.operationTarget = 0; $row.frameTarget = $frameTarget
+        }; source = $lockFreeMixed },
+        @{ message = 'simultaneous operation and frame targets'; apply = {
+            param($row) $row.frameTarget = $frameTarget
+        }; source = $lockFreeMixed },
+        @{ message = 'short duration row'; apply = {
+            param($row) $row.measuredSeconds = [double]$duration - 0.001
+        }; source = $legacy },
+        @{ message = 'missing operation target metadata'; apply = {
+            param($row) $row.PSObject.Properties.Remove('operationTarget')
+        }; source = $lockFreeMixed },
+        @{ message = 'one-below completed frame target'; apply = {
+            param($row) $row.frames = $frameTarget - 1
+        }; source = $lockFreeLarge },
+        @{ message = 'noncanonical profile casing'; apply = {
+            param($row) $row.profile = 'lockfree'
+        }; source = $lockFreeMixed },
+        @{ message = 'noncanonical scenario casing'; apply = {
+            param($row) $row.scenario = 'Mixed-Churn'
+        }; source = $lockFreeMixed }
+    )
+    foreach ($mutation in $mutations) {
+        $row = $mutation.source | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+        & $mutation.apply $row
+        $rejected = $false
+        try {
+            Assert-ProbeRunCompletionEvidence $row 'completion verifier negative self-test' `
+                $duration $mixedTarget $frameTarget $countBoundProfiles
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "Probe completion verifier accepted $($mutation.message)."
+        }
+        $assertions++
+    }
+    return $assertions
+}
+
 function Assert-ProbeRowNumericEvidence {
     param([Parameter(Mandatory)]$Report)
 
@@ -4467,8 +4649,19 @@ function Assert-ProbeRowNumericEvidence {
             'readerProcessCount', 'publisherProcessCount', 'observerProcessCount', 'cycles',
             'operations', 'frames', 'bytesWritten', 'bytesRead', 'fullPayloadCopies',
             'measuredThreadAllocatedBytes', 'producerStoreOperationAllocatedBytes', 'failures',
-            'sampleCount', 'earlySampleCount', 'lateSampleCount', 'affinityAppliedCount')) {
+            'sampleCount', 'earlySampleCount', 'lateSampleCount', 'affinityAppliedCount',
+            'operationTarget', 'frameTarget')) {
             [void](Get-StrictInt64 $run $property $context 0 [int64]::MaxValue)
+        }
+        try {
+            Assert-ProbeRunCompletionEvidence $run $context `
+                (Get-StrictInt64 $selected 'performanceDurationSeconds' "tier '$Tier'" 1 [int32]::MaxValue) `
+                (Get-StrictInt64 $selected 'mixedOperations' "tier '$Tier'" 1 [int64]::MaxValue) `
+                (Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue) `
+                ([string[]]@($config.performanceMatrix.countBoundProfiles | ForEach-Object { [string]$_ }))
+        }
+        catch {
+            Fail-StepValidation 'sync-probe' $_.Exception.Message
         }
         foreach ($property in @(
             'apiCallsPerSecond', 'p50Microseconds', 'p95Microseconds', 'p99Microseconds',
@@ -4628,7 +4821,7 @@ function Assert-ProbeRowNumericEvidence {
 
         $stickyProperty = $run.PSObject.Properties['stickyOverflow']
         $hasSticky = $null -ne $stickyProperty -and $null -ne $stickyProperty.Value
-        if (($run.scenario -eq 'sticky-overflow-miss') -ne $hasSticky) {
+        if (($run.scenario -ceq 'sticky-overflow-miss') -ne $hasSticky) {
             Fail-StepValidation 'sync-probe' "$context has inconsistent SC018 raw evidence presence."
         }
         if ($hasSticky) {
@@ -4770,11 +4963,11 @@ function Assert-SyncProbeEvidence {
     param([Parameter(Mandatory)][string]$Path)
 
     $report = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 7 7) -ne 7 `
-        -or (Get-StrictInt64 $report 'minimumCompatibleSchemaVersion' 'sync probe report' 3 3) -ne 3 `
-        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v7' `
+    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 8 8) -ne 8 `
+        -or (Get-StrictInt64 $report 'minimumCompatibleSchemaVersion' 'sync probe report' 8 8) -ne 8 `
+        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v8' `
         -or @($report.runs).Count -eq 0) {
-        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable schema v7 with nonempty runs.'
+        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable schema v8 with nonempty runs.'
     }
     Assert-ProbeEnvironmentEvidence $report
     Assert-ProbeConfigurationEvidence $report
@@ -4812,7 +5005,7 @@ function Assert-SyncProbeEvidence {
         return
     }
 
-    $ordinary = @($report.runs | Where-Object { $_.scenario -ne 'sticky-overflow-miss' })
+    $ordinary = @($report.runs | Where-Object { $_.scenario -cne 'sticky-overflow-miss' })
     if (@($ordinary | Where-Object { $_.qualification -ne 'qualification-measurement' }).Count -ne 0) {
         Fail-StepValidation 'sync-probe' 'Release rows were smoke-only or lacked the release warmup/duration/frame target.'
     }
@@ -4890,7 +5083,7 @@ function Assert-SyncProbeEvidence {
     }
 
     $zeroCopyRuns = @($report.runs | Where-Object {
-        $_.profile -eq 'LockFree' -and $_.scenario -in @('broker-directed', 'large-ingest')
+        $_.profile -ceq 'LockFree' -and $_.scenario -cin @('broker-directed', 'large-ingest')
     })
     foreach ($run in $zeroCopyRuns) {
         $context = "$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
@@ -4903,13 +5096,13 @@ function Assert-SyncProbeEvidence {
             Fail-StepValidation 'sync-probe' "Producer allocation/structural-copy gate failed for $context."
         }
     }
-    foreach ($run in @($zeroCopyRuns | Where-Object { $_.scenario -eq 'large-ingest' })) {
+    foreach ($run in @($zeroCopyRuns | Where-Object { $_.scenario -ceq 'large-ingest' })) {
         $frames = Get-StrictInt64 $run 'frames' "large-ingest trial $($run.trial)" 1 [int64]::MaxValue
         Assert-AtLeast 'sync-probe' "large-ingest-frames-$($run.processCount)-trial-$($run.trial)" $frames `
             (Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue)
     }
 
-    foreach ($run in @($report.runs | Where-Object { $_.profile -eq 'LockFree' -and $_.scenario -eq 'mixed-churn' })) {
+    foreach ($run in @($report.runs | Where-Object { $_.profile -ceq 'LockFree' -and $_.scenario -ceq 'mixed-churn' })) {
         $context = "mixed-churn trial $($run.trial)"
         $operations = Get-StrictInt64 $run 'operations' $context 1 [int64]::MaxValue
         $earlyP99 = Get-StrictDouble $run 'earlyP99Microseconds' $context 0 [double]::MaxValue -Positive
@@ -4973,6 +5166,12 @@ try {
                 'valid-eight-family-marker-set=accepted',
                 'duplicate/wrong-count/wrong-seed markers=rejected',
                 'invalid-recovery/disposal witnesses=rejected')
+        $probeCompletionAssertions = Invoke-ProbeCompletionVerifierSelfTest
+        Add-EvidenceResult 'sync-probe-completion-verifier-self-test' 'passed' `
+            'profile-aware-duration-operation-frame-positive-and-negative-cases-passed' @(
+                "assertions=$probeCompletionAssertions",
+                'duration-bound Legacy plus count-bound LockFree mixed/large rows accepted',
+                'below-target/config-swap/dual-target/short-duration/missing-target cases rejected')
         $osManifestAssertions = Invoke-OsEvidenceManifestVerifierSelfTest
         Add-EvidenceResult 'os-evidence-manifest-verifier-self-test' 'passed' `
             'exact-tree-positive-and-tamper-negative-cases-passed' @(
@@ -5199,8 +5398,10 @@ try {
                 '--project', 'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj', '--',
                 '--mode', [string]$selected.performanceMode,
                 '--profile', 'both',
+                '--count-bound-profiles', 'v2',
                 '--warmup', [string]$selected.performanceWarmupSeconds,
                 '--duration', [string]$selected.performanceDurationSeconds,
+                '--duration-bound-grace', [string]$selected.performanceDurationBoundGraceSeconds,
                 '--trials', [string]$selected.performanceTrials,
                 '--mixed-operations', [string]$selected.mixedOperations,
                 '--large-frames', [string]$selected.largeFrames,

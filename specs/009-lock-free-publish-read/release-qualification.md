@@ -11,10 +11,10 @@ the authoritative final record, even when it reports `failed`,
 
 | Tier or platform | Authoritative raw evidence |
 |---|---|
-| PR | [`009-final-r5-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json) and [`009-final-r5-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json) |
-| Nightly | [`009-final-r5-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json) and [`009-final-r5-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json) |
-| Release | [`009-final-r5-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r5-release/summary.json), [`009-final-r5-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json), and the runner-created Windows [`009-final-r5-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r5-release/os-validation.json) |
-| Linux x64 | [`009-final-r5-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json) |
+| PR | [`009-final-r6-pr/summary.json`](../../artifacts/lock-free-qualification/009-final-r6-pr/summary.json) and [`009-final-r6-pr/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r6-pr/sync-probe.json) |
+| Nightly | [`009-final-r6-nightly/summary.json`](../../artifacts/lock-free-qualification/009-final-r6-nightly/summary.json) and [`009-final-r6-nightly/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r6-nightly/sync-probe.json) |
+| Release | [`009-final-r6-release/summary.json`](../../artifacts/lock-free-qualification/009-final-r6-release/summary.json), [`009-final-r6-release/sync-probe.json`](../../artifacts/lock-free-qualification/009-final-r6-release/sync-probe.json), and the runner-created Windows [`009-final-r6-release/os-validation.json`](../../artifacts/lock-free-qualification/009-final-r6-release/os-validation.json) |
+| Linux x64 | [`009-final-r6-linux-x64.json`](../../artifacts/lock-free-os-validation/009-final-r6-linux-x64.json) and its required raw [`linux-tiny-performance.json`](../../artifacts/lock-free-os-validation/009-final-r6-linux-x64.evidence/linux-tiny-performance.json) |
 
 The predicate is:
 
@@ -38,13 +38,13 @@ The predicate is:
    length/hash and executable-row stdout/stderr binding matches the file on
    disk. The release summary records each accepted OS report hash/tree digest
    and revalidates both at completion.
-5. The release `sync-probe.json` has executable schema 7, exact configured
+5. The release `sync-probe.json` has executable schema 8, exact configured
    rows/trials/counts, matching source and tested-assembly provenance, zero
    correctness failures, and every threshold accepted by the runner. The
    independent review in `code-review.md` has no unresolved High or Medium
    finding for the same committed source. The Linux OS report additionally has
    one required `linux-tiny-performance` row and the Windows OS report has the
-   same row as optional/not-qualified. The Linux row binds schema-7 raw JSON for
+   same row as optional/not-qualified. The Linux row binds schema-8 raw JSON for
    exactly Legacy/LockFree x acquire-release/publish-remove x process-counts 1
    and 8 x three 60-second trials after 10 seconds of warm-up, with complete affinity,
    unique native CPU IDs in `[0,63]`, zero failures, at least two operations and
@@ -73,22 +73,27 @@ wsl -d Ubuntu -- bash -lc 'set -e; dotnet --info >/dev/null; dotnet workload lis
 if ($LASTEXITCODE -ne 0) { throw 'Linux prerequisite probe failed.' }
 
 # Linux x64, explicitly inside Ubuntu on the same clean commit
-wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r5-linux-x64.json'
+wsl -d Ubuntu -- bash -lc 'cd /mnt/c/Users/rantr/source/repos/SharedMemoryStore && pwsh -NoProfile -File ./scripts/validate-lock-free-os.ps1 -Command all -Configuration Release -OutputPath artifacts/lock-free-os-validation/009-final-r6-linux-x64.json'
 
 # Windows x64, on that same clean commit
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier pr `
-  -EvidenceRunId 009-final-r5-pr
+  -EvidenceRunId 009-final-r6-pr
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier nightly `
-  -EvidenceRunId 009-final-r5-nightly
+  -EvidenceRunId 009-final-r6-nightly
 pwsh ./scripts/run-lock-free-qualification.ps1 -Tier release `
-  -EvidenceRunId 009-final-r5-release `
-  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r5-linux-x64.json
+  -EvidenceRunId 009-final-r6-release `
+  -AdditionalOsEvidence artifacts/lock-free-os-validation/009-final-r6-linux-x64.json
 ```
 
-The configured release run is the exact 100,000,000-operation mixed workload,
+The configured release run keeps every Legacy and LockFree matrix row. Legacy
+mixed-churn and large-ingest are bounded 10-second-warm-up/60-second comparison
+trials; every lock-free mixed-churn trial is count-bound at 100,000,000
+operations and every lock-free large-ingest trial at 100,000 direct 1.3 MB
+frames. Schema 8 records and validates each effective target. The remaining
+release contract is
 1,000,000 production repetitions per SC-011 family, 1,000,000 directory-
-generation repetitions, 10,000 recovery cases, three 60-second trials after a
-10-second warm-up, 100,000 direct 1.3 MB frames, and 30-second suspension gate.
+generation repetitions, 10,000 recovery cases, three trials, and a 30-second
+suspension gate.
 The Linux `-Command all` run also executes the independently validated one/eight-
 process tiny-operation matrix described above and preserves its raw JSON inside the
 Linux OS evidence tree.
@@ -105,7 +110,7 @@ override a failing or missing field.
 
 | Criterion | Final machine-derived gate |
 |---|---|
-| SC-001 | Release `sync-probe` mixed-churn row has at least 100,000,000 operations and zero correctness failures; `raw-visibility`, `churn`, and `owner-leak-assertions` are passed. |
+| SC-001 | Every release LockFree `sync-probe` mixed-churn row records `OperationTarget: 100000000`, reaches that target with zero correctness failures, and `raw-visibility`, `churn`, and `owner-leak-assertions` are passed; Legacy rows record zero targets and at least 60 measured seconds. |
 | SC-002 | Release `sync-probe` same-key-read 6/1 and 12/1 median throughput assertions are at least 4x and 7x. |
 | SC-003 | Release `sync-probe` distributed-key-read 6/1 and 12/1 median throughput assertions are at least 4.5x and 8x. |
 | SC-004 | Release `sync-probe` broker-directed 12-reader publication rate is at least 80% of its one-reader rate. |
@@ -113,7 +118,7 @@ override a failing or missing field.
 | SC-006 | Release `sync-probe` 8-process Windows tiny-operation throughput/p99 assertions pass; Linux `linux-tiny-performance` binds the exact one/eight-process three-trial raw matrix and passes uncontended p99, eight-process throughput, <=3x self-amplification, <=10 us absolute p99, and every-raw-trial 10 ms maximum-stall gates for both scenarios; `dual-platform-os-evidence` and completion OS-tree revalidation pass. |
 | SC-007 | Release `wait-policy` includes the no-operation-lock proof; Windows `no-lock-held` and Linux `no-lock-held` plus required `no-lock-linux-strace` OS rows pass. |
 | SC-008 | Release `sync-probe` exact allocation scope reports `ProducerStoreOperationAllocatedBytes == 0` and the full-suite allocation tests pass for warmed publish/reserve/commit and acquire/project/release paths. |
-| SC-009 | Every release large-ingest row reaches 100,000 frames, reports zero producer store-operation allocation, and carries `structural-direct-reservation-write-and-borrowed-lease-read` copy evidence with zero correctness failures. |
+| SC-009 | Every release LockFree large-ingest row records `FrameTarget: 100000`, reaches it, reports zero producer store-operation allocation, and carries `structural-direct-reservation-write-and-borrowed-lease-read` copy evidence with zero correctness failures; Legacy comparison rows record zero targets and at least 60 measured seconds. |
 | SC-010 | Release `recovery` proves exactly 10,000 cases and full capacity, `owner-leak-assertions` passes, and both OS reports' required crash/checkpoint rows pass. |
 | SC-011 | Release `production-race-stress` has exactly one valid marker for each of eight families with 1,000,000 production races; `production-generated-histories` and `reference-model-histories` exact family/count gates also pass. |
 | SC-012 | Release `wait-policy` TRX passes the full wait/cancellation matrix with `completionAllowanceMilliseconds=250`; all three `owner-leak-assertions` mappings pass. |
@@ -290,6 +295,23 @@ independent H0/M0/L0 review passed. The clean provenance-bound
 `009-r5-pre-final-pr` diagnostic then passed all 24 gates and 1,014/1,014 tests
 on commit `527d451bd124dbbe8880fcb909b6e1bd70ad222a`.
 
-R4 is rejected in full despite its Linux pass. Only the complete R5 sequence
-above can qualify, and the R4 Linux result cannot be reused because R5 must bind
-both platforms to one identical source manifest.
+R4 is rejected in full despite its Linux pass. R5 subsequently passed its
+Linux, PR, and nightly gates on one clean source, but its release synchronization
+probe exposed a harness convergence defect. The global count target was applied
+to each Legacy mixed-churn trial before the qualifying LockFree trials and would
+also have applied the 100,000-frame target to Legacy large ingest. During the
+first Legacy mixed trial, all workers remained responsive and a read-only mapped
+sequence sample advanced by 27,120 in 30 seconds, proving slow serialized
+progress rather than deadlock; after more than 141 minutes, two identical Legacy
+trials plus the remaining matrix could not fit the six-hour whole-step deadline.
+The incomplete `009-final-r5-release` directory is preserved and R5 is rejected
+as a final sequence.
+
+R6 makes the already feature-specific acceptance policy explicit: Legacy rows
+remain same-machine duration comparisons; count targets apply only to LockFree.
+Schema 8 records the selected count-bound profiles and per-run targets, config
+schema 5 records the duration cleanup grace, duration rows have a controller-
+enforced deadline, and both importers reject target/timing tampering. Only the
+complete R6 sequence above can qualify; no R4 or R5 artifact can be reused to
+satisfy a final predicate because R6 must bind both platforms and every tier to
+one identical source manifest.

@@ -349,7 +349,15 @@ outside the package.
    gates, performance matrix, and release qualification. Linux `-Command all`
    owns an explicit raw tiny-operation matrix; the release runner independently
    validates it and the exact non-reparse OS evidence trees, then revalidates
-   accepted report/tree digests at completion.
+   accepted report/tree digests at completion. Keep Legacy mixed-churn and
+   large-ingest rows as fixed-duration comparisons, apply the 100,000,000-
+   operation and 100,000-frame durability targets to lock-free rows only, and
+   bind that completion policy in schema-v8 per-run evidence with controller-
+   enforced duration deadlines. Arm each atomic monotonic-deadline watchdog
+   before store setup; reject overdue completion even if timer dispatch is
+   delayed. On timeout, give tracked child-tree termination a bounded 100 ms
+   budget and then unconditionally fail-fast the isolated probe process rather
+   than unwinding an in-flight infinite store operation.
 
 Each stage must keep the minimal lifecycle linearizable. Repeated failure of the
 atomic, directory, reclamation, platform, or performance convergence gates in

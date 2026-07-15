@@ -801,9 +801,9 @@ function Assert-LinuxTinyPerformanceReport {
         [Parameter(Mandatory)]$ReleaseConfig,
         [switch]$SkipEnvironmentBinding)
 
-    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 7 7) -ne 7 `
-        -or (Get-StrictInt64 $Report 'minimumCompatibleSchemaVersion' 'Linux tiny performance report' 3 3) -ne 3) {
-        throw 'Linux tiny performance report must be schema 7 with minimum-compatible schema 3.'
+    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 8 8) -ne 8 `
+        -or (Get-StrictInt64 $Report 'minimumCompatibleSchemaVersion' 'Linux tiny performance report' 8 8) -ne 8) {
+        throw 'Linux tiny performance report must be schema 8 with minimum-compatible schema 8.'
     }
     [void](Get-StrictString $Report 'schemaCompatibility' 'Linux tiny performance report')
     $environment = Get-RequiredPropertyValue $Report 'environment' 'Linux tiny performance report'
@@ -841,6 +841,8 @@ function Assert-LinuxTinyPerformanceReport {
             (Get-StrictInt64 $ReleaseConfig 'performanceWarmupSeconds' 'qualification config release' 10 10) `
         -or (Get-StrictInt64 $configuration 'durationSeconds' 'Linux tiny performance configuration' 60 60) -ne
             (Get-StrictInt64 $ReleaseConfig 'performanceDurationSeconds' 'qualification config release' 60 60) `
+        -or (Get-StrictInt64 $configuration 'durationBoundGraceSeconds' 'Linux tiny performance configuration' 60 60) -ne
+            (Get-StrictInt64 $ReleaseConfig 'performanceDurationBoundGraceSeconds' 'qualification config release' 60 60) `
         -or (Get-StrictInt64 $configuration 'trials' 'Linux tiny performance configuration' 3 3) -ne
             (Get-StrictInt64 $ReleaseConfig 'performanceTrials' 'qualification config release' 3 3) `
         -or (Get-StrictInt64 $configuration 'warmupCycles' 'Linux tiny performance configuration' 0 0) -ne 0 `
@@ -852,6 +854,7 @@ function Assert-LinuxTinyPerformanceReport {
     [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
     Assert-LinuxTinyStoreDimensions $configuration 'Linux tiny performance configuration'
     Assert-ExactStringArray $configuration.profiles @('Legacy', 'LockFree') 'Linux tiny performance report profiles'
+    Assert-ExactStringArray $configuration.countBoundProfiles @('LockFree') 'Linux tiny performance report count-bound profiles'
     Assert-ExactStringArray $configuration.scenarios @('acquire-release', 'publish-remove') 'Linux tiny performance report scenarios'
     $scenarioCounts = Get-RequiredPropertyValue $configuration 'scenarioProcessCounts' 'Linux tiny performance configuration'
     if ((@($scenarioCounts.PSObject.Properties.Name) -join ',') -cne 'acquire-release,publish-remove') {
@@ -899,6 +902,8 @@ function Assert-LinuxTinyPerformanceReport {
         }
         if ((Get-StrictString $run 'qualification' $context) -cne 'qualification-measurement' `
             -or (Get-StrictInt64 $run 'failures' $context 0 0) -ne 0 `
+            -or (Get-StrictInt64 $run 'operationTarget' $context 0 0) -ne 0 `
+            -or (Get-StrictInt64 $run 'frameTarget' $context 0 0) -ne 0 `
             -or (Get-StrictBoolean $run 'oversubscribed' $context)) {
             throw "$context is not a correctness-clean, non-oversubscribed qualification measurement."
         }
@@ -1166,7 +1171,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
                         SampleCount = ($windowSamples * 2); AffinityAppliedCount = $processCount
                         AssignedProcessors = @(0..($processCount - 1)); Oversubscribed = $false
                         Qualification = 'qualification-measurement'; StatusHistogram = $histogram
-                        WorkerCycles = @($workerCycles)
+                        WorkerCycles = @($workerCycles); OperationTarget = 0; FrameTarget = 0
                     })
                 }
                 $summaryHistogram = if ($scenario -ceq 'acquire-release') {
@@ -1188,7 +1193,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
         }
     }
     $report = [pscustomobject][ordered]@{
-        SchemaVersion = 7
+        SchemaVersion = 8
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
@@ -1199,7 +1204,8 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             ServerGarbageCollection = $false; StopwatchFrequency = 10000000
         }
         Configuration = [pscustomobject][ordered]@{
-            Mode = 'sync'; DurationSeconds = 60; Trials = 3; Profiles = @('Legacy', 'LockFree')
+            Mode = 'sync'; DurationSeconds = 60; DurationBoundGraceSeconds = 60
+            Trials = 3; Profiles = @('Legacy', 'LockFree'); CountBoundProfiles = @('LockFree')
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
@@ -1222,8 +1228,8 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             SyncKeyCatalogSha256 = [string]$TinyConfig.syncKeyCatalogSha256
             SyncKeyCanonicalBucketAssignments = @($TinyConfig.syncKeyCanonicalBucketAssignments)
         }
-        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 3
-        SchemaCompatibility = 'synthetic schema-v7 parser self-test'
+        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 8
+        SchemaCompatibility = 'synthetic schema-v8 parser self-test'
     }
     [void](Assert-LinuxTinyPerformanceReport $report $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
     if (-not (Test-LinuxTinyHostTuple `
@@ -1279,6 +1285,33 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
     try { [void](Assert-LinuxTinyPerformanceReport $wrongDimensions $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
     if (-not $rejected) {
         throw 'Linux tiny performance parser self-test accepted the wrong store dimensions.'
+    }
+    $assertions++
+
+    $wrongCountPolicy = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $wrongCountPolicy.Configuration.CountBoundProfiles = @('Legacy')
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $wrongCountPolicy $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted a swapped count-bound policy.'
+    }
+    $assertions++
+
+    $wrongTarget = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $wrongTarget.Runs[0].OperationTarget = 1
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $wrongTarget $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted a count target on a duration row.'
+    }
+    $assertions++
+
+    $shortDuration = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $shortDuration.Runs[0].MeasuredSeconds = 59.999
+    $rejected = $false
+    try { [void](Assert-LinuxTinyPerformanceReport $shortDuration $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    if (-not $rejected) {
+        throw 'Linux tiny performance parser self-test accepted a short duration row.'
     }
     $assertions++
 
@@ -2114,8 +2147,8 @@ try {
     }
     $parsedConfig = Get-Content -LiteralPath $qualificationConfig -Raw | ConvertFrom-Json
     if (-not (Test-IsIntegerNumber $parsedConfig.schemaVersion) `
-        -or [int64]$parsedConfig.schemaVersion -ne 4) {
-        throw 'OS validation requires qualification config schema 4.'
+        -or [int64]$parsedConfig.schemaVersion -ne 5) {
+        throw 'OS validation requires qualification config schema 5.'
     }
     $linuxTinyConfig = Assert-LinuxTinyPerformanceConfiguration $parsedConfig
     $releaseConfig = Get-RequiredPropertyValue `
@@ -2166,10 +2199,12 @@ try {
                 '--project', 'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj', '--',
                 '--mode', [string]$linuxTinyConfig.mode,
                 '--profile', 'both',
+                '--count-bound-profiles', 'v2',
                 '--scenario', 'acquire-release,publish-remove',
                 '--process-counts', '1,8',
                 '--warmup', [string]$releaseConfig.performanceWarmupSeconds,
                 '--duration', [string]$releaseConfig.performanceDurationSeconds,
+                '--duration-bound-grace', [string]$releaseConfig.performanceDurationBoundGraceSeconds,
                 '--trials', [string]$releaseConfig.performanceTrials,
                 '--repository-commit', [string]$repositoryProvenance.repositoryCommit,
                 '--repository-working-tree-state', [string]$repositoryProvenance.workingTreeState,
@@ -2187,7 +2222,7 @@ try {
                     $performanceReport $linuxTinyConfig $releaseConfig
                 $relativePerformancePath = [IO.Path]::GetRelativePath($root, $performancePath)
                 $performanceRow[0].detail =
-                    'schema7 exact 2-profile x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
+                    'schema8 exact 2-profile x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
                     'LF1 p99<=Legacy1, LF8 throughput>=Legacy8, LF8/LF1 p99<=3, LF8 p99<=10us, ' +
                     'and every lock-free raw MaxMicroseconds<=10000'
                 $performanceRow[0] | Add-Member -NotePropertyName performanceEvidence -NotePropertyValue `

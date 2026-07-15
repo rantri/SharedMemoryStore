@@ -41,7 +41,10 @@ const int SamplingInterval = 64;
 const int MaxLatencySamplesPerWorker = 65_536;
 const int LatencyReservoirCapacityPerWindow = MaxLatencySamplesPerWorker / 2;
 const int DefaultDurationSeconds = 3;
+const int DefaultDurationBoundGraceSeconds = 60;
 const int DefaultTrials = 3;
+const int TrialHeartbeatSeconds = 30;
+const int WatchdogChildKillBudgetMilliseconds = 100;
 
 if (args.Length > 0 && string.Equals(args[0], "worker", StringComparison.Ordinal))
 {
@@ -64,6 +67,10 @@ static async Task<int> RunController(string[] args)
 {
     AssertLatencyReservoirMaximumSemantics();
     int durationSeconds = ReadPositiveIntOption(args, "--duration", DefaultDurationSeconds);
+    int durationBoundGraceSeconds = ReadPositiveIntOption(
+        args,
+        "--duration-bound-grace",
+        DefaultDurationBoundGraceSeconds);
     int trials = ReadPositiveIntOption(args, "--trials", DefaultTrials);
     string? outputPath = ReadStringOption(args, "--output");
     string mode = (ReadStringOption(args, "--mode") ?? "sync").ToLowerInvariant();
@@ -76,7 +83,11 @@ static async Task<int> RunController(string[] args)
         "--warmup",
         mode == "full" ? ReleaseWarmupSeconds : DefaultShortWarmupSeconds);
     StoreProfile[] profiles = ParseProfiles(
-        ReadStringOption(args, "--profile") ?? (mode == "overflow" ? "v2" : "legacy"));
+        ReadStringOption(args, "--profile") ?? (mode == "overflow" ? "v2" : "legacy"),
+        "--profile");
+    StoreProfile[] countBoundProfiles = ParseProfiles(
+        ReadStringOption(args, "--count-bound-profiles") ?? "both",
+        "--count-bound-profiles");
     bool affinityRequested = !args.Contains("--no-affinity", StringComparer.Ordinal);
     ScenarioPlan[] plans = ProbeScenarioCatalog.Select(mode);
     string? scenarioFilter = ReadStringOption(args, "--scenario");
@@ -171,57 +182,98 @@ static async Task<int> RunController(string[] args)
             {
                 for (var trial = 1; trial <= trials; trial++)
                 {
-                    RunResult result = plan.Kind switch
+                    ProbeRunTargets targets = ProbeCompletionTargetPolicy.Resolve(
+                        profile,
+                        plan.Kind,
+                        countBoundProfiles,
+                        mixedOperationTarget,
+                        largeFrames);
+                    long runOperationTarget = targets.OperationTarget;
+                    long runFrameTarget = targets.FrameTarget;
+                    Console.Error.WriteLine(
+                        $"trial-start profile={profile} scenario={plan.Name} processes={processCount} "
+                        + $"trial={trial}/{trials} limit="
+                        + (plan.Kind == ProbeScenarioKind.StickyOverflow
+                            ? $"fixed-work:churn-cycles:{stickyOverflowChurnCycles}"
+                            : runOperationTarget > 0
+                            ? $"operations:{runOperationTarget}"
+                            : runFrameTarget > 0
+                                ? $"frames:{runFrameTarget}"
+                                : $"duration-seconds:{durationSeconds}"));
+                    using var heartbeatCancellation = new CancellationTokenSource();
+                    Task heartbeat = ReportTrialHeartbeats(
+                        profile,
+                        plan.Name,
+                        processCount,
+                        trial,
+                        trials,
+                        plan.Kind,
+                        targets,
+                        heartbeatCancellation.Token);
+                    RunResult result;
+                    try
                     {
-                        ProbeScenarioKind.Autonomous => await RunAutonomousTrial(
-                            profile,
-                            plan,
-                            processCount,
-                            trial,
-                            durationSeconds,
-                            warmupSeconds,
-                            affinityRequested,
-                            operationTarget: 0),
-                        ProbeScenarioKind.MixedChurn => await RunMixedTrial(
-                            profile,
-                            plan,
-                            processCount,
-                            trial,
-                            durationSeconds,
-                            warmupSeconds,
-                            affinityRequested,
-                            mixedOperationTarget),
-                        ProbeScenarioKind.BrokerDirected => await RunBrokerTrial(
-                            profile,
-                            plan,
-                            processCount,
-                            trial,
-                            durationSeconds,
-                            warmupSeconds,
-                            affinityRequested,
-                            largeFrameBytes,
-                            frameTarget: 0),
-                        ProbeScenarioKind.LargeIngest => await RunBrokerTrial(
-                            profile,
-                            plan,
-                            processCount,
-                            trial,
-                            durationSeconds,
-                            warmupSeconds,
-                            affinityRequested,
-                            largeFrameBytes,
-                            largeFrames),
-                        ProbeScenarioKind.StickyOverflow => RunStickyOverflowTrial(
-                            profile,
-                            plan,
-                            trial,
-                            affinityRequested,
-                            stickyOverflowSlotCount,
-                            stickyOverflowChurnCycles,
-                            stickyOverflowMissingSamples,
-                            stickyOverflowKeys),
-                        _ => throw new ArgumentOutOfRangeException(nameof(plan.Kind))
-                    };
+                        result = plan.Kind switch
+                        {
+                            ProbeScenarioKind.Autonomous => await RunAutonomousTrial(
+                                profile,
+                                plan,
+                                processCount,
+                                trial,
+                                durationSeconds,
+                                warmupSeconds,
+                                durationBoundGraceSeconds,
+                                affinityRequested,
+                                operationTarget: 0),
+                            ProbeScenarioKind.MixedChurn => await RunMixedTrial(
+                                profile,
+                                plan,
+                                processCount,
+                                trial,
+                                durationSeconds,
+                                warmupSeconds,
+                                durationBoundGraceSeconds,
+                                affinityRequested,
+                                runOperationTarget),
+                            ProbeScenarioKind.BrokerDirected => await RunBrokerTrial(
+                                profile,
+                                plan,
+                                processCount,
+                                trial,
+                                durationSeconds,
+                                warmupSeconds,
+                                durationBoundGraceSeconds,
+                                affinityRequested,
+                                largeFrameBytes,
+                                frameTarget: 0),
+                            ProbeScenarioKind.LargeIngest => await RunBrokerTrial(
+                                profile,
+                                plan,
+                                processCount,
+                                trial,
+                                durationSeconds,
+                                warmupSeconds,
+                                durationBoundGraceSeconds,
+                                affinityRequested,
+                                largeFrameBytes,
+                                runFrameTarget),
+                            ProbeScenarioKind.StickyOverflow => RunStickyOverflowTrial(
+                                profile,
+                                plan,
+                                trial,
+                                affinityRequested,
+                                stickyOverflowSlotCount,
+                                stickyOverflowChurnCycles,
+                                stickyOverflowMissingSamples,
+                                stickyOverflowKeys),
+                            _ => throw new ArgumentOutOfRangeException(nameof(plan.Kind))
+                        };
+                    }
+                    finally
+                    {
+                        await heartbeatCancellation.CancelAsync();
+                        await heartbeat;
+                    }
 
                     runs.Add(result);
                     Console.Error.WriteLine(
@@ -261,8 +313,10 @@ static async Task<int> RunController(string[] args)
         Configuration: new ProbeConfiguration(
             mode,
             durationSeconds,
+            durationBoundGraceSeconds,
             trials,
             profiles.Select(static profile => profile.ToString()).ToArray(),
+            countBoundProfiles.Select(static profile => profile.ToString()).ToArray(),
             plans.Select(static plan => plan.Name).ToArray(),
             scenarioCounts,
             CreateScenarioStoreDimensions(plans, largeFrameBytes, stickyOverflowSlotCount),
@@ -333,55 +387,77 @@ static async Task<RunResult> RunAutonomousTrial(
     int trial,
     int durationSeconds,
     int warmupSeconds,
+    int durationBoundGraceSeconds,
     bool affinityRequested,
     long operationTarget)
 {
     string name = $"sms-sync-{Guid.NewGuid():N}";
-    StoreOpenStatus openStatus = Store.TryCreateOrOpen(
-        Options(name, OpenMode.CreateNew, profile, plan.Name, payloadBytes: 0),
-        out Store? owner);
-    if (openStatus != StoreOpenStatus.Success || owner is null)
+    var workers = new List<Process>(processCount);
+    var processRegistry = new ProbeProcessRegistry();
+    ProbeTrialWatchdog? trialWatchdog = CreateTrialWatchdog(
+        plan.Name,
+        profile,
+        durationSeconds,
+        warmupSeconds,
+        durationBoundGraceSeconds,
+        operationTarget,
+        frameTarget: 0,
+        processRegistry);
+    try
     {
-        throw new InvalidOperationException($"Owner open failed for {profile}: {openStatus}");
-    }
-
-    using (owner)
-    {
-        Seed(owner, plan.Name, processCount);
-        var workers = new List<Process>(processCount);
-        try
+        StoreOpenStatus openStatus = Store.TryCreateOrOpen(
+            Options(name, OpenMode.CreateNew, profile, plan.Name, payloadBytes: 0),
+            out Store? owner);
+        if (openStatus != StoreOpenStatus.Success || owner is null)
         {
-            for (var workerId = 0; workerId < processCount; workerId++)
-            {
-                workers.Add(StartAutonomousWorker(
-                    plan.Name,
-                    profile,
-                    name,
-                    workerId,
-                    durationSeconds,
-                    warmupSeconds,
-                    affinityRequested ? workerId : -1,
-                    operationTarget,
-                    payloadBytes: 0));
-            }
-
-            await AwaitReady(workers);
-            var wall = Stopwatch.StartNew();
-            await SignalGo(workers);
-            List<WorkerResult> results = await CollectWorkerResults(workers);
-            wall.Stop();
-            return AggregateAutonomousRun(
-                profile,
-                plan,
-                processCount,
-                trial,
-                warmupSeconds,
-                wall.Elapsed,
-                results);
+            throw new InvalidOperationException($"Owner open failed for {profile}: {openStatus}");
         }
-        finally
+
+        using (owner)
         {
-            DisposeProcesses(workers);
+            Seed(owner, plan.Name, processCount);
+            try
+            {
+                for (var workerId = 0; workerId < processCount; workerId++)
+                {
+                    workers.Add(processRegistry.Start(() => StartAutonomousWorker(
+                            plan.Name,
+                            profile,
+                            name,
+                            workerId,
+                            durationSeconds,
+                            warmupSeconds,
+                            affinityRequested ? workerId : -1,
+                            operationTarget,
+                            payloadBytes: 0)));
+                }
+
+                await AwaitReady(workers, CancellationToken.None);
+                var wall = Stopwatch.StartNew();
+                await SignalGo(workers, CancellationToken.None);
+                List<WorkerResult> results = await CollectWorkerResults(workers, CancellationToken.None);
+                wall.Stop();
+                return AggregateAutonomousRun(
+                    profile,
+                    plan,
+                    processCount,
+                    trial,
+                    warmupSeconds,
+                    wall.Elapsed,
+                    results,
+                    operationTarget);
+            }
+            finally
+            {
+                DisposeProcesses(workers);
+            }
+        }
+    }
+    finally
+    {
+        if (trialWatchdog is not null)
+        {
+            await trialWatchdog.CompleteAsync();
         }
     }
 }
@@ -393,80 +469,102 @@ static async Task<RunResult> RunMixedTrial(
     int trial,
     int durationSeconds,
     int warmupSeconds,
+    int durationBoundGraceSeconds,
     bool affinityRequested,
     long totalOperationTarget)
 {
     string name = $"sms-churn-{Guid.NewGuid():N}";
-    StoreOpenStatus openStatus = Store.TryCreateOrOpen(
-        Options(name, OpenMode.CreateNew, profile, plan.Name, MixedPayloadBytes),
-        out Store? owner);
-    if (openStatus != StoreOpenStatus.Success || owner is null)
+    int participantCount = readerCount + plan.PublisherCount;
+    var workers = new List<Process>(participantCount);
+    var processRegistry = new ProbeProcessRegistry();
+    ProbeTrialWatchdog? trialWatchdog = CreateTrialWatchdog(
+        plan.Name,
+        profile,
+        durationSeconds,
+        warmupSeconds,
+        durationBoundGraceSeconds,
+        totalOperationTarget,
+        frameTarget: 0,
+        processRegistry);
+    try
     {
-        throw new InvalidOperationException($"Mixed-churn owner open failed for {profile}: {openStatus}");
-    }
-
-    using (owner)
-    {
-        SeedMixed(owner);
-        int participantCount = readerCount + plan.PublisherCount;
-        long perWorkerOperationTarget = totalOperationTarget <= 0
-            ? 0
-            : checked((totalOperationTarget + participantCount - 1) / participantCount);
-        var workers = new List<Process>(participantCount);
-        try
+        StoreOpenStatus openStatus = Store.TryCreateOrOpen(
+            Options(name, OpenMode.CreateNew, profile, plan.Name, MixedPayloadBytes),
+            out Store? owner);
+        if (openStatus != StoreOpenStatus.Success || owner is null)
         {
-            for (var readerId = 0; readerId < readerCount; readerId++)
-            {
-                workers.Add(StartAutonomousWorker(
-                    "mixed-churn-reader",
-                    profile,
-                    name,
-                    readerId,
-                    durationSeconds,
-                    warmupSeconds,
-                    affinityRequested ? readerId : -1,
-                    perWorkerOperationTarget,
-                    MixedPayloadBytes));
-            }
-
-            for (var publisherId = 0; publisherId < plan.PublisherCount; publisherId++)
-            {
-                workers.Add(StartAutonomousWorker(
-                    "mixed-churn-writer",
-                    profile,
-                    name,
-                    publisherId,
-                    durationSeconds,
-                    warmupSeconds,
-                    affinityRequested ? readerCount + publisherId : -1,
-                    perWorkerOperationTarget,
-                    MixedPayloadBytes));
-            }
-
-            await AwaitReady(workers);
-            var wall = Stopwatch.StartNew();
-            await SignalGo(workers);
-            List<WorkerResult> results = await CollectWorkerResults(workers);
-            wall.Stop();
-            RunResult aggregate = AggregateAutonomousRun(
-                profile,
-                plan,
-                readerCount,
-                trial,
-                warmupSeconds,
-                wall.Elapsed,
-                results);
-            if (totalOperationTarget > 0 && aggregate.Operations < totalOperationTarget)
-            {
-                throw new InvalidOperationException(
-                    $"Mixed-churn operation target was not met: {aggregate.Operations:N0} < {totalOperationTarget:N0}.");
-            }
-
-            return aggregate;
+            throw new InvalidOperationException($"Mixed-churn owner open failed for {profile}: {openStatus}");
         }
-        finally
+
+        using (owner)
         {
-            DisposeProcesses(workers);
+            SeedMixed(owner);
+            long perWorkerOperationTarget = totalOperationTarget <= 0
+                ? 0
+                : checked((totalOperationTarget + participantCount - 1) / participantCount);
+            try
+            {
+                for (var readerId = 0; readerId < readerCount; readerId++)
+                {
+                    workers.Add(processRegistry.Start(() => StartAutonomousWorker(
+                            "mixed-churn-reader",
+                            profile,
+                            name,
+                            readerId,
+                            durationSeconds,
+                            warmupSeconds,
+                            affinityRequested ? readerId : -1,
+                            perWorkerOperationTarget,
+                            MixedPayloadBytes)));
+                }
+
+                for (var publisherId = 0; publisherId < plan.PublisherCount; publisherId++)
+                {
+                    workers.Add(processRegistry.Start(() => StartAutonomousWorker(
+                            "mixed-churn-writer",
+                            profile,
+                            name,
+                            publisherId,
+                            durationSeconds,
+                            warmupSeconds,
+                            affinityRequested ? readerCount + publisherId : -1,
+                            perWorkerOperationTarget,
+                            MixedPayloadBytes)));
+                }
+
+                await AwaitReady(workers, CancellationToken.None);
+                var wall = Stopwatch.StartNew();
+                await SignalGo(workers, CancellationToken.None);
+                List<WorkerResult> results = await CollectWorkerResults(workers, CancellationToken.None);
+                wall.Stop();
+                RunResult aggregate = AggregateAutonomousRun(
+                    profile,
+                    plan,
+                    readerCount,
+                    trial,
+                    warmupSeconds,
+                    wall.Elapsed,
+                    results,
+                    totalOperationTarget);
+                if (totalOperationTarget > 0 && aggregate.Operations < totalOperationTarget)
+                {
+                    throw new InvalidOperationException(
+                        $"Mixed-churn operation target was not met: {aggregate.Operations:N0} < {totalOperationTarget:N0}.");
+                }
+
+                return aggregate;
+            }
+            finally
+            {
+                DisposeProcesses(workers);
+            }
+        }
+    }
+    finally
+    {
+        if (trialWatchdog is not null)
+        {
+            await trialWatchdog.CompleteAsync();
         }
     }
 }
@@ -768,76 +866,90 @@ static async Task<RunResult> RunBrokerTrial(
     int trial,
     int durationSeconds,
     int warmupSeconds,
+    int durationBoundGraceSeconds,
     bool affinityRequested,
     int frameBytes,
     long frameTarget)
 {
     string name = $"sms-broker-{Guid.NewGuid():N}";
-    StoreOpenStatus openStatus = Store.TryCreateOrOpen(
-        Options(name, OpenMode.CreateNew, profile, plan.Name, frameBytes),
-        out Store? producer);
-    if (openStatus != StoreOpenStatus.Success || producer is null)
+    var readers = new List<Process>(readerCount);
+    var observers = new List<Process>(plan.ObserverCount);
+    var allProcesses = new List<Process>(readerCount + plan.ObserverCount);
+    var processRegistry = new ProbeProcessRegistry();
+    ProbeTrialWatchdog? trialWatchdog = CreateTrialWatchdog(
+        plan.Name,
+        profile,
+        durationSeconds,
+        warmupSeconds,
+        durationBoundGraceSeconds,
+        operationTarget: 0,
+        frameTarget,
+        processRegistry);
+    try
     {
-        throw new InvalidOperationException($"Broker producer open failed for {profile}: {openStatus}");
-    }
-
-    using TemporaryProcessAffinity producerAffinity = TemporaryProcessAffinity.Apply(
-        affinityRequested ? 0 : -1);
-    using (producer)
-    {
-        var readers = new List<Process>(readerCount);
-        var observers = new List<Process>(plan.ObserverCount);
-        var allProcesses = new List<Process>(readerCount + plan.ObserverCount);
-        try
+        StoreOpenStatus openStatus = Store.TryCreateOrOpen(
+            Options(name, OpenMode.CreateNew, profile, plan.Name, frameBytes),
+            out Store? producer);
+        if (openStatus != StoreOpenStatus.Success || producer is null)
         {
-            for (var readerId = 0; readerId < readerCount; readerId++)
-            {
-                Process process = StartBrokerWorker(
-                    plan.Name,
-                    profile,
-                    name,
-                    readerId,
-                    "reader",
-                    affinityRequested ? readerId + 1 : -1,
-                    frameBytes);
-                readers.Add(process);
-                allProcesses.Add(process);
-            }
+            throw new InvalidOperationException($"Broker producer open failed for {profile}: {openStatus}");
+        }
 
-            for (var observerId = 0; observerId < plan.ObserverCount; observerId++)
+        using TemporaryProcessAffinity producerAffinity = TemporaryProcessAffinity.Apply(
+            affinityRequested ? 0 : -1);
+        using (producer)
+        {
+            try
             {
-                Process process = StartBrokerWorker(
-                    plan.Name,
-                    profile,
-                    name,
-                    observerId,
-                    "observer",
-                    affinityRequested ? readerCount + observerId + 1 : -1,
-                    frameBytes);
-                observers.Add(process);
-                allProcesses.Add(process);
-            }
+                for (var readerId = 0; readerId < readerCount; readerId++)
+                {
+                    Process process = processRegistry.Start(() => StartBrokerWorker(
+                            plan.Name,
+                            profile,
+                            name,
+                            readerId,
+                            "reader",
+                            affinityRequested ? readerId + 1 : -1,
+                            frameBytes));
+                    readers.Add(process);
+                    allProcesses.Add(process);
+                }
 
-            await AwaitReady(allProcesses);
+                for (var observerId = 0; observerId < plan.ObserverCount; observerId++)
+                {
+                    Process process = processRegistry.Start(() => StartBrokerWorker(
+                            plan.Name,
+                            profile,
+                            name,
+                            observerId,
+                            "observer",
+                            affinityRequested ? readerCount + observerId + 1 : -1,
+                            frameBytes));
+                    observers.Add(process);
+                    allProcesses.Add(process);
+                }
+
+            await AwaitReady(allProcesses, CancellationToken.None);
             BenchmarkKeyCatalog keys = BenchmarkProtocol.CreateKeyCatalog(BrokerRotatingKeyCount);
-            await WarmBrokerWorkers(
-                producer,
-                readers,
-                observers,
-                keys,
-                frameBytes,
-                warmupSeconds);
-            await ResetBrokerWorkers(allProcesses);
+            await Task.Run(
+                () => WarmBrokerWorkers(
+                    producer,
+                    readers,
+                    observers,
+                    keys,
+                    frameBytes,
+                    warmupSeconds));
+            await Task.Run(() => ResetBrokerWorkers(allProcesses));
             var readerFrames = new long[readerCount];
             BrokerMeasuredResult measuredResult = await RunBrokerMeasuredOnDedicatedThread(
-                producer,
-                readers,
-                observers,
-                keys,
-                readerFrames,
-                frameBytes,
-                durationSeconds,
-                frameTarget);
+                    producer,
+                    readers,
+                    observers,
+                    keys,
+                    readerFrames,
+                    frameBytes,
+                    durationSeconds,
+                    frameTarget);
             StatusCounters counters = measuredResult.Counters;
             long failures = measuredResult.Failures;
             long frames = measuredResult.Frames;
@@ -845,16 +957,16 @@ static async Task<RunResult> RunBrokerTrial(
             string stopLine = JsonSerializer.Serialize(stop, BenchmarkProtocol.JsonOptions);
             foreach (Process process in allProcesses)
             {
-                await process.StandardInput.WriteLineAsync(stopLine);
-                await process.StandardInput.FlushAsync();
+                await process.StandardInput.WriteLineAsync(stopLine.AsMemory(), CancellationToken.None);
+                await process.StandardInput.FlushAsync(CancellationToken.None);
             }
 
             var summaries = new List<BrokerWorkerSummary>(allProcesses.Count);
             foreach (Process process in allProcesses)
             {
-                string? line = await process.StandardOutput.ReadLineAsync();
-                string error = await process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
+                string? line = await process.StandardOutput.ReadLineAsync(CancellationToken.None);
+                string error = await process.StandardError.ReadToEndAsync(CancellationToken.None);
+                await process.WaitForExitAsync(CancellationToken.None);
                 if (process.ExitCode != 0 || line is null)
                 {
                     throw new InvalidOperationException($"Broker worker exited {process.ExitCode}: {error}");
@@ -880,7 +992,7 @@ static async Task<RunResult> RunBrokerTrial(
             bool oversubscribed = participantProcesses > Environment.ProcessorCount;
             var histograms = summaries.Select(static summary => summary.StatusHistogram).Append(counters.ToHistogram());
 
-            return new RunResult(
+                return new RunResult(
                 profile.ToString(),
                 plan.Name,
                 readerCount,
@@ -929,7 +1041,12 @@ static async Task<RunResult> RunBrokerTrial(
                     .Where(strategy => !string.Equals(strategy, producerAffinity.Strategy, StringComparison.Ordinal))
                     .Distinct(StringComparer.Ordinal)],
                 oversubscribed,
-                Qualification(oversubscribed, durationSeconds, warmupSeconds, frameTarget),
+                Qualification(
+                    oversubscribed,
+                    durationSeconds,
+                    warmupSeconds,
+                    operationTarget: 0,
+                    frameTarget),
                 MergeHistograms(histograms),
                 readerFrames,
                 FullPayloadCopyCountIsInstrumented: false,
@@ -938,11 +1055,21 @@ static async Task<RunResult> RunBrokerTrial(
                 AllocationMeasurementScope:
                     "dedicated-producer-and-broker-coordinator-thread-entire-measured-interval",
                 EarlySampleCount: sortedEarly.Length,
-                LateSampleCount: sortedLate.Length);
+                LateSampleCount: sortedLate.Length,
+                OperationTarget: 0,
+                    FrameTarget: frameTarget);
+            }
+            finally
+            {
+                DisposeProcesses(allProcesses);
+            }
         }
-        finally
+    }
+    finally
+    {
+        if (trialWatchdog is not null)
         {
-            DisposeProcesses(allProcesses);
+            await trialWatchdog.CompleteAsync();
         }
     }
 }
@@ -954,7 +1081,8 @@ static RunResult AggregateAutonomousRun(
     int trial,
     int warmupSeconds,
     TimeSpan wall,
-    IReadOnlyList<WorkerResult> workerResults)
+    IReadOnlyList<WorkerResult> workerResults,
+    long operationTarget)
 {
     double[] samples = workerResults.SelectMany(static result => result.SamplesMicroseconds).Order().ToArray();
     double[] early = workerResults.SelectMany(static result => result.EarlySamplesMicroseconds).Order().ToArray();
@@ -1042,7 +1170,12 @@ static RunResult AggregateAutonomousRun(
         workerResults.Select(static result => result.AssignedProcessor).ToArray(),
         workerResults.Select(static result => result.AffinityStrategy).Distinct(StringComparer.Ordinal).ToArray(),
         oversubscribed,
-        Qualification(oversubscribed, (int)Math.Floor(measuredSeconds), warmupSeconds, frameTarget: 0),
+        Qualification(
+            oversubscribed,
+            (int)Math.Floor(measuredSeconds),
+            warmupSeconds,
+            operationTarget,
+            frameTarget: 0),
         MergeHistograms(workerResults.Select(static result => result.StatusHistogram)),
         workerResults.Select(static result => result.Cycles).ToArray(),
         FullPayloadCopyCountIsInstrumented: false,
@@ -1050,39 +1183,43 @@ static RunResult AggregateAutonomousRun(
         ProducerStoreOperationAllocatedBytes: 0,
         AllocationMeasurementScope: "sum-of-dedicated-worker-thread-measured-regions",
         EarlySampleCount: early.Length,
-        LateSampleCount: late.Length);
+        LateSampleCount: late.Length,
+        OperationTarget: operationTarget,
+        FrameTarget: 0);
 }
 
-static async Task AwaitReady(IReadOnlyList<Process> workers)
+static async Task AwaitReady(IReadOnlyList<Process> workers, CancellationToken cancellationToken)
 {
     foreach (Process worker in workers)
     {
-        string? ready = await worker.StandardOutput.ReadLineAsync();
+        string? ready = await worker.StandardOutput.ReadLineAsync(cancellationToken);
         if (ready != "READY")
         {
-            string error = await worker.StandardError.ReadToEndAsync();
+            string error = await worker.StandardError.ReadToEndAsync(cancellationToken);
             throw new InvalidOperationException($"Worker failed to become ready: {ready}; {error}");
         }
     }
 }
 
-static async Task SignalGo(IEnumerable<Process> workers)
+static async Task SignalGo(IEnumerable<Process> workers, CancellationToken cancellationToken)
 {
     foreach (Process worker in workers)
     {
-        await worker.StandardInput.WriteLineAsync("GO");
-        await worker.StandardInput.FlushAsync();
+        await worker.StandardInput.WriteLineAsync("GO".AsMemory(), cancellationToken);
+        await worker.StandardInput.FlushAsync(cancellationToken);
     }
 }
 
-static async Task<List<WorkerResult>> CollectWorkerResults(IReadOnlyList<Process> workers)
+static async Task<List<WorkerResult>> CollectWorkerResults(
+    IReadOnlyList<Process> workers,
+    CancellationToken cancellationToken)
 {
     var results = new List<WorkerResult>(workers.Count);
     foreach (Process worker in workers)
     {
-        string? line = await worker.StandardOutput.ReadLineAsync();
-        string error = await worker.StandardError.ReadToEndAsync();
-        await worker.WaitForExitAsync();
+        string? line = await worker.StandardOutput.ReadLineAsync(cancellationToken);
+        string error = await worker.StandardError.ReadToEndAsync(cancellationToken);
+        await worker.WaitForExitAsync(cancellationToken);
         if (worker.ExitCode != 0 || line is null)
         {
             throw new InvalidOperationException($"Worker exited {worker.ExitCode}: {error}");
@@ -1093,6 +1230,116 @@ static async Task<List<WorkerResult>> CollectWorkerResults(IReadOnlyList<Process
     }
 
     return results;
+}
+
+static ProbeTrialWatchdog? CreateTrialWatchdog(
+    string scenario,
+    StoreProfile profile,
+    int durationSeconds,
+    int warmupSeconds,
+    int durationBoundGraceSeconds,
+    long operationTarget,
+    long frameTarget,
+    ProbeProcessRegistry processRegistry)
+{
+    if (operationTarget > 0 || frameTarget > 0)
+    {
+        return null;
+    }
+
+    long timeoutSeconds = checked(
+        (long)durationSeconds + warmupSeconds + durationBoundGraceSeconds);
+    return new ProbeTrialWatchdog(
+        TimeSpan.FromSeconds(timeoutSeconds),
+        () => FailFastDurationBoundTrial(
+            scenario,
+            profile,
+            durationSeconds,
+            warmupSeconds,
+            durationBoundGraceSeconds,
+            processRegistry));
+}
+
+static TimeoutException DurationBoundTrialTimeout(
+    string scenario,
+    StoreProfile profile,
+    int durationSeconds,
+    int warmupSeconds,
+    int durationBoundGraceSeconds) =>
+    new(
+        $"Duration-bound trial timed out: profile={profile}; scenario={scenario}; "
+        + $"warmupSeconds={warmupSeconds}; durationSeconds={durationSeconds}; "
+        + $"graceSeconds={durationBoundGraceSeconds}.");
+
+static void FailFastDurationBoundTrial(
+    string scenario,
+    StoreProfile profile,
+    int durationSeconds,
+    int warmupSeconds,
+    int durationBoundGraceSeconds,
+    ProbeProcessRegistry processRegistry)
+{
+    TimeoutException timeout = DurationBoundTrialTimeout(
+        scenario,
+        profile,
+        durationSeconds,
+        warmupSeconds,
+        durationBoundGraceSeconds);
+    try
+    {
+        var killer = new Thread(
+            () => KillProcesses(processRegistry.StopAcceptingAndSnapshot()))
+        {
+            IsBackground = true,
+            Name = "SyncProbe timeout child cleanup"
+        };
+        killer.Start();
+        _ = killer.Join(WatchdogChildKillBudgetMilliseconds);
+    }
+    catch
+    {
+        // Process termination below is unconditional; child cleanup is best effort.
+    }
+    finally
+    {
+        // Store calls can be blocked in native/shared-memory coordination and cannot be
+        // safely abandoned or unwound. This executable is the runner's child-process
+        // isolation boundary, so a missed duration deadline must terminate it directly.
+        Environment.FailFast(timeout.Message, timeout);
+    }
+}
+
+static async Task ReportTrialHeartbeats(
+    StoreProfile profile,
+    string scenario,
+    int processCount,
+    int trial,
+    int trials,
+    ProbeScenarioKind scenarioKind,
+    ProbeRunTargets targets,
+    CancellationToken cancellationToken)
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(TrialHeartbeatSeconds));
+    var elapsed = Stopwatch.StartNew();
+    try
+    {
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            Console.Error.WriteLine(
+                $"trial-progress profile={profile} scenario={scenario} processes={processCount} "
+                + $"trial={trial}/{trials} elapsed-seconds={elapsed.Elapsed.TotalSeconds:F0} "
+                + (scenarioKind == ProbeScenarioKind.StickyOverflow
+                    ? "fixed-work=true"
+                    : targets.OperationTarget > 0
+                    ? $"operation-target={targets.OperationTarget}"
+                    : targets.FrameTarget > 0
+                        ? $"frame-target={targets.FrameTarget}"
+                        : "duration-bound=true"));
+        }
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+    }
 }
 
 static void Seed(Store owner, string scenario, int processCount)
@@ -2527,6 +2774,7 @@ static string Qualification(
     bool oversubscribed,
     int durationSeconds,
     int warmupSeconds,
+    long operationTarget,
     long frameTarget)
 {
     if (oversubscribed)
@@ -2539,12 +2787,31 @@ static string Qualification(
         return "smoke-only-insufficient-warmup";
     }
 
-    return durationSeconds >= 60 || frameTarget >= 100_000
+    return durationSeconds >= 60 || operationTarget >= 100_000_000 || frameTarget >= 100_000
         ? "qualification-measurement"
         : "smoke-only";
 }
 
-static void DisposeProcesses(IEnumerable<Process> processes)
+static void KillProcesses(IReadOnlyList<Process> processes)
+{
+    for (var index = 0; index < processes.Count; index++)
+    {
+        try
+        {
+            Process process = processes[index];
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Best effort only. Fail-fast remains the hard isolation boundary.
+        }
+    }
+}
+
+static void DisposeProcesses(IReadOnlyList<Process> processes)
 {
     foreach (Process process in processes)
     {
@@ -2553,21 +2820,33 @@ static void DisposeProcesses(IEnumerable<Process> processes)
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
+                _ = process.WaitForExit(milliseconds: 5_000);
             }
+        }
+        catch
+        {
+            // Preserve cleanup of every remaining child and the original trial result.
         }
         finally
         {
-            process.Dispose();
+            try
+            {
+                process.Dispose();
+            }
+            catch
+            {
+                // Process disposal is idempotent from the controller's perspective.
+            }
         }
     }
 }
 
-static StoreProfile[] ParseProfiles(string value) => value.ToLowerInvariant() switch
+static StoreProfile[] ParseProfiles(string value, string optionName) => value.ToLowerInvariant() switch
 {
     "legacy" => [StoreProfile.Legacy],
     "v2" or "lockfree" or "lock-free" => [StoreProfile.LockFree],
     "both" => [StoreProfile.Legacy, StoreProfile.LockFree],
-    _ => throw new ArgumentException("--profile must be legacy, v2, or both.")
+    _ => throw new ArgumentException($"{optionName} must be legacy, v2, or both.")
 };
 
 static int ReadPositiveIntOption(string[] args, string name, int fallback)

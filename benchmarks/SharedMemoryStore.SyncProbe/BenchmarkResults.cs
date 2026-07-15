@@ -132,7 +132,9 @@ internal sealed record RunResult(
     string AllocationMeasurementScope = "not-applicable",
     StickyOverflowEvidence? StickyOverflow = null,
     int EarlySampleCount = 0,
-    int LateSampleCount = 0);
+    int LateSampleCount = 0,
+    long OperationTarget = 0,
+    long FrameTarget = 0);
 
 internal sealed record SummaryResult(
     string Profile,
@@ -190,8 +192,10 @@ internal sealed record ProbeStoreDimensions(
 internal sealed record ProbeConfiguration(
     string Mode,
     int DurationSeconds,
+    int DurationBoundGraceSeconds,
     int Trials,
     string[] Profiles,
+    string[] CountBoundProfiles,
     string[] Scenarios,
     SortedDictionary<string, int[]> ScenarioProcessCounts,
     SortedDictionary<string, ProbeStoreDimensions> ScenarioStoreDimensions,
@@ -232,11 +236,14 @@ internal sealed record ProbeReport(
 
 internal static class ProbeReportSchema
 {
-    internal const int CurrentVersion = 7;
-    internal const int MinimumCompatibleVersion = 3;
+    internal const int CurrentVersion = 8;
+    internal const int MinimumCompatibleVersion = 8;
     internal const string Compatibility =
-        "Schema v7 is additive over v3-v6: all existing property names and meanings are retained; "
-        + "new evidence tags disambiguate structural assertions from measured counters, and "
+        "Schema v8 requires a v8-aware qualification reader because count-bound profiles and "
+        + "per-run operation/frame targets distinguish durability targets from duration-bound "
+        + "comparison rows. Property names retained from v3-v7 support archival parsing only; "
+        + "their former global completion-target meaning is not qualification-compatible. "
+        + "New evidence tags disambiguate structural assertions from measured counters, and "
         + "overflow qualification fields expose the spill/cleanup/late-window transitions; "
         + "sync topology fields identify the deterministic key catalog, and early/late sample "
         + "counts identify the autonomous latency reservoirs; autonomous MaxMicroseconds "

@@ -4,7 +4,7 @@
 
 **Branch**: `codex/lock-free-csharp`
 
-**Review date**: 2026-07-14
+**Review date**: 2026-07-15
 
 **Decision**: **Code approved; immutable final release evidence pending**
 
@@ -14,12 +14,13 @@ The tracked implementation is approved on code, protocol, focused-test, and
 pre-final qualification grounds. Independent re-review of the reclamation,
 cold-open, Linux record-lock lifetime, benchmark, and evidence-importer deltas
 found no unresolved High or Medium issue in the production implementation or
-release harness. The complete revised Linux one/eight-process matrix and all
-required Linux OS/interoperability rows passed on the clean R4 candidate, but
-R4 was rejected when its PR run exposed a disposal-test contract violation.
-The test-only correction and a clean provenance-bound PR diagnostic have since
-passed independent review and all configured gates. This is not yet release
-approval: every immutable artifact and
+release harness. R5 passed Linux, PR, and nightly on one clean source state but
+its release workload was rejected as non-convergent because the harness applied
+lock-free durability counts to the semaphore-serialized Legacy comparison rows.
+R6 corrects only the benchmark completion/evidence policy, preserves the full
+store matrix, and adds a hard monotonic deadline around duration-bound trials;
+it does not change production store code. This is not yet release approval:
+every immutable artifact and
 provenance condition in [Final evidence gate](#final-evidence-gate) must still
 pass on one identical clean source state. A missing, failed, provenance-mismatched,
 or incomplete gate leaves the feature unapproved for release.
@@ -68,6 +69,21 @@ qualification harnesses.
   uses normal non-override lease/reservation recovery and inspects only borrowed
   span shape after racing disposal; exact content remains covered on the live
   second handle and in dedicated data-path suites. No production code changed.
+- R6 completion-policy and convergence correction: **reviewed clean**. Config
+  schema 5 selects only `LockFree` as count-bound; probe schema 8/minimum 8
+  records the selected profiles and exact per-run targets. Legacy mixed-churn
+  and large-ingest remain three duration-bound comparisons, while every
+  LockFree mixed/large trial retains its 100,000,000-operation/100,000-frame
+  durability target. An atomic monotonic-deadline watchdog spans setup through
+  final cleanup, rejects delayed timer dispatch, bounds child-kill effort, and
+  then unconditionally fail-fast terminates the isolated probe on timeout.
+- R6 independent re-review: **no unresolved High or Medium finding** after the
+  initial watchdog, cleanup, schema-compatibility, identity, and exact-grace
+  findings were corrected. Target-policy and watchdog tests, both validation-
+  only importers, documentation validation, and a real four-row Legacy/LockFree
+  duration/count smoke passed on the final pre-freeze worktree. The complete
+  Release solution passed 1,028/1,028 tests with zero skips: Contract 117,
+  Linearizability 83, Interop 75, Unit 451, and Integration 302.
 
 ### Cold-open initialization-authority closure
 
@@ -146,17 +162,17 @@ and exact store dimensions, but schema 6 omitted several fields and Linux could
 record `processorIdentifier: unknown`. Both importers accepted any nonempty
 identifier.
 
-Schema 7 adds portable processor model, logical/physical counts, total host
+At that stage, schema 7 added portable processor model, logical/physical counts, total host
 memory, and exact per-scenario slot/value/descriptor/key/lease/participant
 dimensions. Windows uses processor-topology and physical-memory APIs; Linux uses
 the process-visible CPU topology, `/proc/cpuinfo`, and `/proc/meminfo`. Detection
 uncertainty emits an invalid zero/unknown value so qualification fails closed.
-Both importers require schema 7, reject missing/unknown/implausible metadata,
-verify the exact selected scenario-dimension set, and include negative
+The then-current importers required schema 7, rejected missing/unknown/implausible metadata,
+verified the exact selected scenario-dimension set, and included negative
 self-tests for unknown CPU, missing memory, and dimension tampering. Focused
 Windows/Linux builds, runtime smokes, and validator self-tests passed.
 
-### Current post-review convergence evidence
+### Historical schema-7 post-review convergence evidence
 
 After the OFD, teardown, persistent-inode, handoff, and schema-7 changes, fresh
 Windows x64 and Linux x64 Release restores/builds completed with zero warnings
@@ -541,6 +557,43 @@ nightly and release tiers were not run. The R4 Linux pass is valuable diagnostic
 evidence but cannot qualify the changed R5 source. Production synchronization,
 layout, public API, and the accepted Low observations remain unchanged.
 
+### Rejected R5 release convergence and R6 harness closure
+
+R5 froze clean source commit `0a1babaf2b72234a6aac3ef12121a7fee4cf594b`
+after the test-only disposal correction. Its immutable Linux, PR, and nightly
+artifacts passed, so they remain valuable historical evidence. The release run
+is nevertheless rejected and preserved incomplete at
+`artifacts/lock-free-qualification/009-final-r5-release`: its first Legacy
+mixed-churn trial had not completed after more than 141 minutes because the
+harness imposed 100,000,000 operations on the named-semaphore baseline. Fourteen
+workers remained live and a read-only mapped sequence advanced by 27,120 in 30
+seconds, proving slow progress rather than deadlock. The remaining two Legacy
+mixed trials, Legacy 100,000-frame ingest, and all LockFree rows could not fit
+the six-hour whole-step deadline. R5 therefore cannot qualify the release.
+
+R6 preserves both profiles and every scenario. It changes completion policy at
+the qualification boundary: Legacy mixed-churn and large-ingest use the same
+10-second warm-up and 60-second measurement as other duration rows; LockFree
+mixed-churn and large-ingest retain exact per-trial durability counts. Probe
+schema 8 records `CountBoundProfiles`, `OperationTarget`, `FrameTarget`, and the
+duration grace; minimum-compatible schema 8 prevents older global-target
+readers from qualifying the report. Both importers reject missing, inherited,
+swapped, dual, noncanonical, short-duration, or unmet evidence.
+
+The duration controller is an isolated-process hard boundary, not cancellation
+of an in-flight store call. It arms before store creation, tracks every child
+start, remains live through warm-up, measurement, result collection, child
+cleanup, store disposal, and affinity disposal, and latches completion against
+an absolute `Stopwatch` deadline. A late or fired deadline gives child-tree
+termination 100 ms of best-effort work and then calls `Environment.FailFast`
+unconditionally. Count-bound rows and fixed-work sticky-overflow do not arm this
+watchdog. Five direct watchdog cases cover delayed/early dispatch, ordinary
+completion, late completion, and a timer forcing `Completing -> TimedOut` while
+the completing thread is blocked. Focused runtime smoke, synthetic importer
+mutations, and independent adversarial review close
+the R6 harness with no unresolved High or Medium finding. Production layout,
+synchronization, public API, and steady-state paths are unchanged.
+
 ## Accepted design boundaries
 
 These are intentional contract boundaries, not open findings:
@@ -574,15 +627,15 @@ These are intentional contract boundaries, not open findings:
 
 All of the following prelinked artifacts must exist and report success:
 
-1. [artifacts/lock-free-qualification/009-final-r5-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r5-pr/summary.json)
-2. [artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-pr/sync-probe.json)
-3. [artifacts/lock-free-qualification/009-final-r5-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r5-nightly/summary.json)
-4. [artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-nightly/sync-probe.json)
-5. [artifacts/lock-free-qualification/009-final-r5-release/summary.json](../../artifacts/lock-free-qualification/009-final-r5-release/summary.json)
-6. [artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r5-release/sync-probe.json)
-7. [artifacts/lock-free-qualification/009-final-r5-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r5-release/os-validation.json)
-8. [artifacts/lock-free-os-validation/009-final-r5-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.json)
-9. [artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r5-linux-x64.evidence/linux-tiny-performance.json)
+1. [artifacts/lock-free-qualification/009-final-r6-pr/summary.json](../../artifacts/lock-free-qualification/009-final-r6-pr/summary.json)
+2. [artifacts/lock-free-qualification/009-final-r6-pr/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r6-pr/sync-probe.json)
+3. [artifacts/lock-free-qualification/009-final-r6-nightly/summary.json](../../artifacts/lock-free-qualification/009-final-r6-nightly/summary.json)
+4. [artifacts/lock-free-qualification/009-final-r6-nightly/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r6-nightly/sync-probe.json)
+5. [artifacts/lock-free-qualification/009-final-r6-release/summary.json](../../artifacts/lock-free-qualification/009-final-r6-release/summary.json)
+6. [artifacts/lock-free-qualification/009-final-r6-release/sync-probe.json](../../artifacts/lock-free-qualification/009-final-r6-release/sync-probe.json)
+7. [artifacts/lock-free-qualification/009-final-r6-release/os-validation.json](../../artifacts/lock-free-qualification/009-final-r6-release/os-validation.json)
+8. [artifacts/lock-free-os-validation/009-final-r6-linux-x64.json](../../artifacts/lock-free-os-validation/009-final-r6-linux-x64.json)
+9. [artifacts/lock-free-os-validation/009-final-r6-linux-x64.evidence/linux-tiny-performance.json](../../artifacts/lock-free-os-validation/009-final-r6-linux-x64.evidence/linux-tiny-performance.json)
 
 Approval requires the machine-checkable evidence to show that:
 
@@ -590,7 +643,7 @@ Approval requires the machine-checkable evidence to show that:
   passed;
 - the release synchronization probe and Windows OS validation passed;
 - the Linux x64 OS validation passed its required checks, including the exact
-  schema-7 one/eight-process tiny-operation raw matrix; one-process intrinsic
+  schema-8/minimum-8 one/eight-process tiny-operation raw matrix; one-process intrinsic
   p99, eight-process throughput, <=3x self-amplification, <=10 us p99, and
   every-lock-free-trial 10 ms stall ceilings for both scenarios;
 - both exact sibling OS evidence trees, manifests, executable logs, and accepted
