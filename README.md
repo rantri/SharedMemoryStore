@@ -8,17 +8,21 @@ payloads through a broker process.
 
 Distribution identities:
 
-- NuGet: `SharedMemoryStore` `1.0.2`, targeting `net10.0` with .NET BCL
-  runtime dependencies only.
+- NuGet: `SharedMemoryStore` `2.0.0`, targeting `net10.0` with .NET BCL
+  runtime dependencies only. The legacy layout remains the default; C# callers
+  opt in to the lock-free layout explicitly.
 - CMake: `SharedMemoryStore` `0.1.0`, exposing a C++20 RAII API and fixed-width
   C ABI `1.0` over the native shared library.
 - Python: `shared-memory-store` `0.1.0`, requiring Python 3.10 or newer and
   using standard-library `ctypes` with the packaged native library.
-- Shared protocol: mapped layout `1.2`, resource naming `1`, little-endian
-  64-bit Windows and Linux targets.
+- Shared protocol: C# supports mapped layouts `1.2` and `2.0`; C++ and Python
+  remain layout-`1.2` clients and reject layout 2.0. Resource naming versions
+  are `1` and `2` respectively.
 - License: MIT, see the [license file](LICENSE).
 
-The managed `1.0.0` line establishes the production .NET API contract. The
+The managed `1.0.0` line established the original production .NET API contract;
+the `2.0.0` line adds the explicit lock-free profile while retaining the legacy
+profile and its layout. The
 native and Python `0.1.0` lines are independently versioned initial
 distributions; they do not change or ship inside the NuGet package. Linux and
 Windows are implementation targets. Same-host Linux Docker containers require
@@ -55,6 +59,41 @@ over that same ABI; it does not maintain a second protocol state machine.
 The store does not parse frame headers, own application schemas, provide a
 cross-host cache, persist data beyond process and mapping lifetime, or turn
 Docker into distributed storage.
+
+## Explicit lock-free C# profile
+
+`SharedMemoryStoreOptions.CreateLockFree(...)` creates or opens mapped layout
+2.0. Existing helpers and manually constructed options remain on the legacy
+layout unless `StoreProfile.LockFree` is selected explicitly. Processes using
+different profiles cannot participate in the same live mapping; incompatible
+opens fail before payload projection.
+
+The lock-free profile is still a bounded key-value store. An application broker
+may load-balance work by sending keys to 6-12 workers, while observers and other
+processes independently acquire the same immutable values. The store does not
+enqueue keys, choose workers, acknowledge work, or turn a read lease into an
+exclusive claim. See the runnable
+[`LockFreeBrokerKeys`](samples/LockFreeBrokerKeys/Program.cs) sample.
+
+Steady-state layout-2.0 publish, acquire, release, remove, and helping paths do
+not enter the named cross-process lifecycle lock. Progress is system-wide
+lock-free, not wait-free: a paused or terminated participant cannot own a
+store-wide data-path lock, but one caller can still exhaust its bounded retry
+budget under sustained contention and receive `StoreBusy`. Reservations belong
+to one producer; leases are shared exact-generation protections; recovery is an
+explicit caller-controlled operation rather than a background worker.
+
+The trust boundary is same-host cooperating processes with write access to the
+mapping. Layout 2.0 is neither cross-host storage nor protection against a
+malicious mapped writer. Performance depends on payload size, key distribution,
+contention, lease duration, capacity pressure, process placement, and recovery;
+qualification reports separate those workloads instead of treating one
+throughput number as universal.
+
+To migrate under the same public name, drain and close every legacy handle,
+recreate the mapping as layout 2.0, and republish application-owned values. A
+side-by-side cutover uses a distinct store name. Rollback recreates layout 1.2;
+neither direction reinterprets mapped bytes in place.
 
 ## First Use
 
@@ -205,6 +244,7 @@ Runnable samples:
 - [Docker shared-memory sample](samples/DockerSharedMemory/README.md)
 - [C++ basic usage sample](samples/CppBasicUsage/README.md)
 - [Python basic usage sample](samples/PythonBasicUsage/README.md)
+- [Lock-free broker-key sample](samples/LockFreeBrokerKeys/Program.cs)
 
 ## Project Policies
 
@@ -248,5 +288,5 @@ pwsh ./scripts/validate-interoperability.ps1 -Configuration Release -Stress
 
 Documentation changes must keep package metadata, README content, release notes,
 support policy, security policy, compatibility metadata, and contract links
-aligned across managed `1.0.2`, native `0.1.0`, Python `0.1.0`, ABI `1.0`, and
-layout `1.2`.
+aligned across managed `2.0.0`, native `0.1.0`, Python `0.1.0`, ABI `1.0`, and
+layouts `1.2` and `2.0`.

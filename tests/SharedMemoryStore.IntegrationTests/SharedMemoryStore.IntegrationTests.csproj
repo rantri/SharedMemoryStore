@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,7 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\samples\DockerSharedMemory\DockerSharedMemory.csproj"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\samples\LockFreeBrokerKeys\LockFreeBrokerKeys.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\SharedMemoryStore\SharedMemoryStore.csproj" />
+    <ProjectReference Include="..\SharedMemoryStore.LockFreeAgent\SharedMemoryStore.LockFreeAgent.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\SharedMemoryStore.LeaseOwnerTool\SharedMemoryStore.LeaseOwnerTool.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 

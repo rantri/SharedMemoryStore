@@ -16,6 +16,10 @@
 #include <unordered_map>
 #include <unistd.h>
 
+#if !defined(F_OFD_SETLK)
+#define F_OFD_SETLK 37
+#endif
+
 namespace sms::detail {
 namespace {
 
@@ -24,15 +28,21 @@ using clock_type = std::chrono::steady_clock;
 class FileState {
 public:
     explicit FileState(std::string path) : path_(std::move(path)) {
-        fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-        if (fd_ >= 0) ::fchmod(fd_, 0600);
+        const auto descriptor = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        fd_.store(descriptor, std::memory_order_release);
+        if (descriptor >= 0) ::fchmod(descriptor, 0600);
     }
-    ~FileState() { if (fd_ >= 0) ::close(fd_); }
-    int fd() const noexcept { return fd_; }
+    ~FileState() { retire(); }
+    int fd() const noexcept { return fd_.load(std::memory_order_acquire); }
+    bool usable() const noexcept { return fd() >= 0; }
+    void retire() noexcept {
+        const auto descriptor = fd_.exchange(-1, std::memory_order_acq_rel);
+        if (descriptor >= 0) ::close(descriptor);
+    }
     std::timed_mutex mutex;
 private:
     std::string path_;
-    int fd_{-1};
+    std::atomic<int> fd_{-1};
 };
 
 std::mutex file_states_gate;
@@ -43,7 +53,7 @@ std::shared_ptr<FileState> get_file_state(const std::string& raw_path) {
     auto path = std::filesystem::absolute(raw_path, error).lexically_normal().string();
     if (error) path = raw_path;
     std::lock_guard guard(file_states_gate);
-    if (auto found = file_states[path].lock()) return found;
+    if (auto found = file_states[path].lock(); found && found->usable()) return found;
     auto created = std::make_shared<FileState>(path);
     file_states[path] = created;
     return created;
@@ -54,7 +64,7 @@ public:
     explicit LinuxFileLock(std::shared_ptr<FileState> state) : state_(std::move(state)) {}
     ~LinuxFileLock() override { release(); }
 
-    bool usable() const noexcept { return state_ && state_->fd() >= 0; }
+    bool usable() const noexcept { return state_ && state_->usable(); }
 
     sms_status acquire(const Wait& wait) noexcept override {
         if (!usable()) return errno == EACCES ? SMS_STATUS_ACCESS_DENIED : SMS_STATUS_UNKNOWN_FAILURE;
@@ -69,6 +79,10 @@ public:
             local_held_ = state_->mutex.try_lock_for(std::chrono::milliseconds(wait.milliseconds));
         }
         if (!local_held_) return SMS_STATUS_STORE_BUSY;
+        if (!usable()) {
+            release();
+            return SMS_STATUS_UNKNOWN_FAILURE;
+        }
 
         for (;;) {
             struct flock request{};
@@ -76,7 +90,7 @@ public:
             request.l_whence = SEEK_SET;
             request.l_start = 0;
             request.l_len = 1;
-            if (::fcntl(state_->fd(), F_SETLK, &request) == 0) {
+            if (::fcntl(state_->fd(), F_OFD_SETLK, &request) == 0) {
                 held_ = true;
                 return SMS_STATUS_SUCCESS;
             }
@@ -84,7 +98,9 @@ public:
             if (error != EACCES && error != EAGAIN) {
                 release();
                 if (error == EACCES || error == EPERM) return SMS_STATUS_ACCESS_DENIED;
-                if (error == ENOSYS || error == ENOTSUP) return SMS_STATUS_UNSUPPORTED_PLATFORM;
+                if (error == EINVAL || error == ENOSYS || error == ENOTSUP || error == EOPNOTSUPP) {
+                    return SMS_STATUS_UNSUPPORTED_PLATFORM;
+                }
                 return SMS_STATUS_UNKNOWN_FAILURE;
             }
             if (!wait.infinite()) {
@@ -108,12 +124,21 @@ public:
             request.l_whence = SEEK_SET;
             request.l_start = 0;
             request.l_len = 1;
-            ::fcntl(state_->fd(), F_SETLK, &request);
+            int result{};
+            do {
+                result = ::fcntl(state_->fd(), F_OFD_SETLK, &request);
+            } while (result != 0 && errno == EINTR);
+            if (result != 0) {
+                // Closing a descriptor releases every OFD lock attached to it.
+                // Retire before the local gate is reopened so local work never
+                // proceeds while foreign participants remain excluded.
+                state_->retire();
+            }
             held_ = false;
         }
         if (local_held_) {
-            state_->mutex.unlock();
             local_held_ = false;
+            state_->mutex.unlock();
         }
     }
 
@@ -235,7 +260,8 @@ bool write_owners(const std::string& path, const std::vector<std::string>& owner
 
 void delete_stale(const ResourceName& resource) noexcept {
     ::unlink(resource.linux_region_path.c_str());
-    ::unlink(resource.linux_lock_path.c_str());
+    // Keep the operation-lock inode as a permanent rendezvous, matching the
+    // lifecycle inode. It has no generation state and prevents pathname split.
     ::unlink(resource.linux_owners_path.c_str());
     ::unlink((resource.linux_owners_path + ".tmp").c_str());
 }

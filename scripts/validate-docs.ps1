@@ -264,7 +264,7 @@ function Assert-PackageMetadata {
     $expected = @{
         TargetFramework = "net10.0"
         PackageId = "SharedMemoryStore"
-        Version = "1.0.2"
+        Version = "2.0.0"
         Description = "A bounded named shared-memory key-value store for opaque binary values."
         PackageLicenseExpression = "MIT"
         PackageReadmeFile = "README.md"
@@ -304,7 +304,7 @@ function Assert-PackageMetadata {
     }
 
     Assert-Contains "README.md" "SharedMemoryStore" "package README identity"
-    Assert-Contains "README.md" "1.0.2" "package version alignment"
+    Assert-Contains "README.md" "2.0.0" "package version alignment"
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"

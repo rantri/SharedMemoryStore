@@ -10,19 +10,29 @@ these contracts.
 
 | Contract | Current identity | Canonical definition |
 |---|---:|---|
-| Mapped layout | `1.2` | [layout-v1.2.md](layout-v1.2.md) |
-| Platform resource naming | `1` | [resource-naming-v1.md](resource-naming-v1.md) |
-| Conformance manifest | `1` | [fixtures/v1.2/manifest.json](fixtures/v1.2/manifest.json) |
+| Legacy mapped layout | `1.2` | [layout-v1.2.md](layout-v1.2.md) |
+| Lock-free mapped layout | `2.0` | [layout-v2.0.md](layout-v2.0.md) |
+| Platform resource naming | `1`, `2` | [resource-naming-v1.md](resource-naming-v1.md), [resource-naming-v2.md](resource-naming-v2.md) |
+| Conformance manifests | `1`, `2` | [fixtures/v1.2/manifest.json](fixtures/v1.2/manifest.json), [fixtures/v2.0/manifest.json](fixtures/v2.0/manifest.json) |
 | Native C ABI | `1.0` | [native-c-api.md](../specs/008-cpp-python-implementations/contracts/native-c-api.md) |
 
 Package versions are independent of all four identities. A package release
 must declare the layout versions it can create and open, the resource-naming
 version it implements, and its C ABI range when applicable.
 
-## Layout version boundary
+## Layout version boundary and client support
 
-New stores created by this repository use layout major `1`, minor `2`. The
-advertised read and create boundary for this feature is exactly `1.2`.
+C# selects its layout explicitly: the default legacy profile creates/opens
+`1.2`, while `StoreProfile.LockFree` creates/opens `2.0`. C++ and Python remain
+`1.2`-only in this release and must reject `SMS2` before reading directory,
+slot, lease, descriptor, or payload data. Package, layout, resource-naming, and
+C ABI versions remain independent.
+
+Layout 2.0 is a bounded shared-memory key-value protocol, not a queue or stream.
+It replaces steady-state named-lock participation with generation-fenced atomic
+state machines and explicit record-local helping/recovery. This is lock-free
+system-wide progress, not a wait-free guarantee for each caller. The trust
+boundary remains cooperating same-host processes with mapped-memory access.
 
 The two header numbers are not sufficient evidence of compatibility. An opener
 must also validate the magic, major version, header and record sizes, configured
@@ -61,3 +71,10 @@ not live.
 Changes to an executable constant or algorithm must update the narrative,
 manifest, every language's static conformance tests, and the cross-runtime
 matrix in one review.
+
+Layout 2.0 currently requires feature bit 0 for its versioned-empty
+exact-generation spill summary, bit 1 for per-slot publication intent, and bit
+2 for exact store/participant Linux PID-namespace identities. The exact
+required mask is `7`. These bits intentionally fence the earlier pre-release
+required-features-zero, bit-0-only, and mask-3 v2 shapes in both directions
+without changing the 2.0 topology or resource-protocol number.

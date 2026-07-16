@@ -1,26 +1,36 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using Microsoft.Win32.SafeHandles;
 
 namespace SharedMemoryStore.Interop;
 
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxFileLock : IDisposable
 {
-    private static readonly ConcurrentDictionary<string, LocalLockEntry> LocalLocks = new(StringComparer.Ordinal);
+    private const int OpenFileDescriptionSetLock = 37;
+    private const short WriteLock = 1;
+    private const short Unlock = 2;
+    private const short SeekSet = 0;
+
+    private const int Interrupted = 4;
+    private const int TryAgain = 11;
+    private const int PermissionDenied = 13;
+    private const int InvalidArgument = 22;
+    private const int FunctionNotImplemented = 38;
+    private const int OperationNotSupported = 95;
 
     private readonly FileStream _stream;
-    private readonly string _localLockPath;
-    private readonly LocalLockEntry _localLockEntry;
+    private readonly SemaphoreSlim _localGate = new(1, 1);
     private bool _locked;
     private bool _localLockHeld;
+    private bool _streamClosed;
+    private bool _unusable;
     private bool _disposed;
 
-    private LinuxFileLock(string path, FileStream stream)
+    private LinuxFileLock(string path)
     {
-        _stream = stream;
-        _localLockPath = Path.GetFullPath(path);
-        _localLockEntry = AcquireLocalLockEntry(_localLockPath);
+        _stream = OpenLockFile(Path.GetFullPath(path));
     }
 
     public static StoreStatus TryAcquire(
@@ -34,10 +44,10 @@ internal sealed class LinuxFileLock : IDisposable
             return StoreStatus.OperationCanceled;
         }
 
-        FileStream stream;
+        LinuxFileLock candidate;
         try
         {
-            stream = OpenLockFile(path);
+            candidate = new LinuxFileLock(path);
         }
         catch (UnauthorizedAccessException)
         {
@@ -52,8 +62,7 @@ internal sealed class LinuxFileLock : IDisposable
             return StoreStatus.UnknownFailure;
         }
 
-        var candidate = new LinuxFileLock(path, stream);
-        var status = candidate.TryAcquire(waitOptions);
+        StoreStatus status = candidate.TryAcquire(waitOptions);
         if (status != StoreStatus.Success)
         {
             candidate.Dispose();
@@ -66,12 +75,12 @@ internal sealed class LinuxFileLock : IDisposable
 
     public StoreStatus TryAcquire(StoreWaitOptions waitOptions)
     {
-        if (_disposed)
+        if (_disposed || _unusable)
         {
             return StoreStatus.StoreDisposed;
         }
 
-        var startTimestamp = Stopwatch.GetTimestamp();
+        long startTimestamp = Stopwatch.GetTimestamp();
         if (!TryAcquireLocal(waitOptions, startTimestamp))
         {
             return waitOptions.CancellationToken.IsCancellationRequested
@@ -87,50 +96,52 @@ internal sealed class LinuxFileLock : IDisposable
                 return StoreStatus.OperationCanceled;
             }
 
-            try
+            var request = LinuxFlock.Create(WriteLock);
+            if (Fcntl(_stream.SafeFileHandle, OpenFileDescriptionSetLock, ref request) == 0)
             {
-                _stream.Lock(0, 1);
                 _locked = true;
                 return StoreStatus.Success;
             }
-            catch (IOException)
+
+            int error = Marshal.GetLastPInvokeError();
+            if (error == Interrupted)
             {
-                if (!waitOptions.IsInfinite && Stopwatch.GetElapsedTime(startTimestamp) >= waitOptions.Timeout)
+                if (!waitOptions.IsInfinite
+                    && Stopwatch.GetElapsedTime(startTimestamp) >= waitOptions.Timeout)
                 {
                     Release();
                     return StoreStatus.StoreBusy;
                 }
 
-                if (WaitBeforeRetry(waitOptions, startTimestamp))
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                var status = waitOptions.CancellationToken.IsCancellationRequested
-                    ? StoreStatus.OperationCanceled
-                    : StoreStatus.StoreBusy;
-                Release();
-                return status;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                Release();
-                return StoreStatus.AccessDenied;
-            }
-            catch (PlatformNotSupportedException)
+            if (error is InvalidArgument or FunctionNotImplemented or OperationNotSupported)
             {
                 Release();
                 return StoreStatus.UnsupportedPlatform;
             }
-            catch (ObjectDisposedException)
-            {
-                Release();
-                return StoreStatus.StoreDisposed;
-            }
-            catch
+
+            if (error is not (PermissionDenied or TryAgain))
             {
                 Release();
                 return StoreStatus.UnknownFailure;
+            }
+
+            if (!waitOptions.IsInfinite
+                && Stopwatch.GetElapsedTime(startTimestamp) >= waitOptions.Timeout)
+            {
+                Release();
+                return StoreStatus.StoreBusy;
+            }
+
+            if (!WaitBeforeRetry(waitOptions, startTimestamp))
+            {
+                StoreStatus status = waitOptions.CancellationToken.IsCancellationRequested
+                    ? StoreStatus.OperationCanceled
+                    : StoreStatus.StoreBusy;
+                Release();
+                return status;
             }
         }
     }
@@ -140,9 +151,7 @@ internal sealed class LinuxFileLock : IDisposable
         fileLock = null;
         try
         {
-            var stream = OpenLockFile(path);
-
-            fileLock = new LinuxFileLock(path, stream);
+            fileLock = new LinuxFileLock(path);
             return StoreStatus.Success;
         }
         catch (UnauthorizedAccessException)
@@ -163,22 +172,43 @@ internal sealed class LinuxFileLock : IDisposable
     {
         if (_locked)
         {
-            try
+            var request = LinuxFlock.Create(Unlock);
+            int result;
+            do
             {
-                _stream.Unlock(0, 1);
+                result = Fcntl(
+                    _stream.SafeFileHandle,
+                    OpenFileDescriptionSetLock,
+                    ref request);
             }
-            catch
-            {
-                // The stream is being torn down; callers receive operation status before this point.
-            }
+            while (result != 0 && Marshal.GetLastPInvokeError() == Interrupted);
+
+            bool unlocked = result == 0;
 
             _locked = false;
+            if (!unlocked)
+            {
+                // Releasing the process-local gate while an OFD lock might
+                // still be present would let local callers run while foreign
+                // callers remain excluded. Retire this descriptor first;
+                // close is the kernel-guaranteed OFD-lock release boundary.
+                _unusable = true;
+                try
+                {
+                    CloseStream();
+                }
+                catch
+                {
+                    // This wrapper remains unusable even if descriptor close
+                    // could not be confirmed; no local work can pass it.
+                }
+            }
         }
 
         if (_localLockHeld)
         {
-            Monitor.Exit(_localLockEntry.SyncRoot);
             _localLockHeld = false;
+            _localGate.Release();
         }
     }
 
@@ -191,21 +221,25 @@ internal sealed class LinuxFileLock : IDisposable
 
         _disposed = true;
         Release();
-        _stream.Dispose();
-        ReleaseLocalLockEntry(_localLockPath, _localLockEntry);
+        CloseStream();
     }
 
     private bool TryAcquireLocal(StoreWaitOptions waitOptions, long startTimestamp)
     {
         while (true)
         {
-            if (Monitor.TryEnter(_localLockEntry.SyncRoot))
+            // OFD locks contend across separately opened descriptors, loaded
+            // assemblies, and native modules in one PID. One lock wrapper can
+            // still be shared by several local callers, so keep it explicitly
+            // non-reentrant before entering the kernel.
+            if (_localGate.Wait(0))
             {
                 _localLockHeld = true;
                 return true;
             }
 
-            if (!waitOptions.IsInfinite && Stopwatch.GetElapsedTime(startTimestamp) >= waitOptions.Timeout)
+            if (!waitOptions.IsInfinite
+                && Stopwatch.GetElapsedTime(startTimestamp) >= waitOptions.Timeout)
             {
                 return false;
             }
@@ -222,7 +256,7 @@ internal sealed class LinuxFileLock : IDisposable
         var sleep = TimeSpan.FromMilliseconds(10);
         if (!waitOptions.IsInfinite)
         {
-            var remaining = waitOptions.Timeout - Stopwatch.GetElapsedTime(startTimestamp);
+            TimeSpan remaining = waitOptions.Timeout - Stopwatch.GetElapsedTime(startTimestamp);
             if (remaining <= TimeSpan.Zero)
             {
                 return false;
@@ -244,56 +278,62 @@ internal sealed class LinuxFileLock : IDisposable
             Share = FileShare.ReadWrite | FileShare.Delete,
             UnixCreateMode = LinuxSharedMemoryDirectory.PrivateFileMode
         });
-        File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
-        return stream;
-    }
-
-    private static LocalLockEntry AcquireLocalLockEntry(string path)
-    {
-        while (true)
+        try
         {
-            var entry = LocalLocks.GetOrAdd(path, static _ => new LocalLockEntry());
-            lock (entry.ReferenceGate)
-            {
-                if (entry.Retired)
-                {
-                    continue;
-                }
-
-                entry.ReferenceCount++;
-                return entry;
-            }
+            File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
         }
     }
 
-    private static void ReleaseLocalLockEntry(string path, LocalLockEntry entry)
+    private void CloseStream()
     {
-        var remove = false;
-        lock (entry.ReferenceGate)
+        if (_streamClosed)
         {
-            entry.ReferenceCount--;
-            if (entry.ReferenceCount == 0)
-            {
-                entry.Retired = true;
-                remove = true;
-            }
+            return;
         }
 
-        if (remove)
-        {
-            _ = ((ICollection<KeyValuePair<string, LocalLockEntry>>)LocalLocks).Remove(
-                new KeyValuePair<string, LocalLockEntry>(path, entry));
-        }
+        _streamClosed = true;
+        _stream.Dispose();
     }
 
-    private sealed class LocalLockEntry
+    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+    private static extern int Fcntl(
+        SafeFileHandle fileDescriptor,
+        int command,
+        ref LinuxFlock request);
+
+    // SharedMemoryStore requires a 64-bit process. Linux x64 and arm64 both
+    // use this LP64 struct flock ABI; OFD commands require l_pid to be zero.
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    private struct LinuxFlock
     {
-        public object SyncRoot { get; } = new();
+        [FieldOffset(0)]
+        internal short Type;
 
-        public object ReferenceGate { get; } = new();
+        [FieldOffset(2)]
+        internal short Whence;
 
-        public int ReferenceCount { get; set; }
+        [FieldOffset(8)]
+        internal long Start;
 
-        public bool Retired { get; set; }
+        [FieldOffset(16)]
+        internal long Length;
+
+        [FieldOffset(24)]
+        internal int ProcessId;
+
+        internal static LinuxFlock Create(short type) => new()
+        {
+            Type = type,
+            Whence = SeekSet,
+            Start = 0,
+            Length = 1,
+            ProcessId = 0
+        };
     }
 }

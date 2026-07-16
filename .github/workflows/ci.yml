@@ -42,7 +42,10 @@ jobs:
         run: dotnet format SharedMemoryStore.slnx --verify-no-changes --no-restore
 
       - name: Test
-        run: dotnet test SharedMemoryStore.slnx -c Release --no-build
+        # Keep the projects sequential: individual integration scenarios retain
+        # their real 8-12 process concurrency without unrelated test assemblies
+        # oversubscribing the hosted runner's one-second cold-open budget.
+        run: dotnet test SharedMemoryStore.slnx -c Release --no-build --maxcpucount:1
 
       - name: Validate documentation
         shell: pwsh

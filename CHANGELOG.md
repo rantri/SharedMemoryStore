@@ -5,6 +5,37 @@ chronological order.
 
 ## Unreleased
 
+## 2.0.0 - 2026-07-13
+
+### Added
+
+- Added an explicitly selected C# lock-free key-value profile using mapped
+  layout `2.0` and resource protocol `2`, with direct reservation publication,
+  shared zero-copy leases, generation-fenced removal/reuse, participant
+  incarnations, explicit recovery, and bounded diagnostics.
+- Added `StoreProfile`, `CreateLockFree`, profile-aware sizing,
+  `ParticipantRecordCount`, immutable `StoreProtocolInfo`, and the appended
+  `ParticipantTableFull` open status.
+
+### Changed
+
+- NuGet `SharedMemoryStore` advances to `2.0.0`. Lock-free wait options bound
+  local retry, revalidation, helping, and backoff; they do not acquire a named
+  operation lock or wait for keys/capacity to appear.
+- Documented reservation tokens as exclusive single-producer lifetimes and
+  clarified logical removal, `RemovePending`, borrowed-view, recovery, and
+  local-handle disposal semantics.
+
+### Compatibility
+
+- The legacy profile remains the default and preserves layout `1.2`, resource
+  protocol `1`, public workflow signatures, and existing status numbers.
+- Layout `1.2` and `2.0` are never reinterpreted in place or used by mixed
+  synchronization participants. Same-name upgrade and rollback require draining
+  handles, recreating the mapping, and republishing application-owned values.
+- C++ and Python `0.1.0` remain layout-1.2-only and reject layout `2.0`; their
+  independently versioned packages and C ABI `1.0` are unchanged.
+
 ## 1.0.2 - 2026-07-10
 
 ### Added

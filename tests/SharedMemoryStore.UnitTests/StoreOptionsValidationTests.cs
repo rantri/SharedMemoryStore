@@ -103,4 +103,54 @@ public sealed class StoreOptionsValidationTests
         Assert.Equal(StoreOpenStatus.InvalidOptions, result.Status);
         Assert.Contains(result.Failures, failure => failure.MemberName == nameof(SharedMemoryStoreOptions.TotalBytes));
     }
+
+    [Fact]
+    public void ValidateAppliesTheSlotCountCeilingOnlyToTheLockFreeProfile()
+    {
+        const int firstRejectedLockFreeSlotCount = 1_048_576;
+        var lockFree = new SharedMemoryStoreOptions
+        {
+            Profile = StoreProfile.LockFree,
+            Name = StoreTestNames.Create(),
+            OpenMode = OpenMode.CreateNew,
+            SlotCount = firstRejectedLockFreeSlotCount,
+            MaxValueBytes = 1,
+            MaxDescriptorBytes = 0,
+            MaxKeyBytes = 1,
+            LeaseRecordCount = 1,
+            ParticipantRecordCount = 1,
+            TotalBytes = long.MaxValue
+        };
+
+        var lockFreeResult = lockFree.Validate();
+
+        Assert.False(lockFreeResult.IsValid);
+        Assert.Equal(StoreOpenStatus.InvalidOptions, lockFreeResult.Status);
+        var failure = Assert.Single(
+            lockFreeResult.Failures,
+            static candidate => candidate.MemberName == nameof(SharedMemoryStoreOptions.SlotCount));
+        Assert.Contains("1,048,575", failure.Message, StringComparison.Ordinal);
+
+        long legacyBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(
+            firstRejectedLockFreeSlotCount,
+            maxValueBytes: 1,
+            maxDescriptorBytes: 0,
+            maxKeyBytes: 1,
+            leaseRecordCount: 1);
+        var legacy = new SharedMemoryStoreOptions
+        {
+            Profile = StoreProfile.Legacy,
+            Name = StoreTestNames.Create(),
+            OpenMode = OpenMode.CreateNew,
+            SlotCount = firstRejectedLockFreeSlotCount,
+            MaxValueBytes = 1,
+            MaxDescriptorBytes = 0,
+            MaxKeyBytes = 1,
+            LeaseRecordCount = 1,
+            ParticipantRecordCount = 0,
+            TotalBytes = legacyBytes
+        };
+
+        Assert.Equal(StoreOpenStatus.Success, legacy.Validate().Status);
+    }
 }

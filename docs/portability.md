@@ -5,7 +5,9 @@ ordinary same-host workflows on 64-bit little-endian Linux and Windows.
 Same-host Linux Docker participation requires deployment configuration that
 exposes compatible shared-memory, synchronization, owner-liveness, permission,
 and capacity capabilities. Layout `1.2` and resource naming `1` are the common
-interoperability boundary; similar public APIs alone are insufficient.
+cross-runtime interoperability boundary; similar public APIs alone are
+insufficient. The managed package also implements explicitly selected layout
+`2.0` and resource protocol `2`, which current C++ and Python clients reject.
 
 Detailed sources:
 
@@ -19,13 +21,14 @@ Detailed sources:
 
 ## Current Baseline
 
-- Managed distribution: NuGet `SharedMemoryStore` `1.0.2`, targeting
-  `net10.0`.
+- Managed distribution: NuGet `SharedMemoryStore` `2.0.0`, targeting
+  `net10.0`; it supports legacy layout `1.2` and explicit lock-free layout `2.0`.
 - Native distribution: CMake `SharedMemoryStore` `0.1.0`, C++20, C ABI `1.0`.
 - Python distribution: `shared-memory-store` `0.1.0`, Python 3.10 or newer,
   using `ctypes` over the bundled native library.
-- Shared identities: layout `1.2`, resource naming `1`, little-endian 64-bit
-  process model.
+- Shared cross-runtime identities: layout `1.2`, resource naming `1`,
+  little-endian 64-bit process model. Managed-only lock-free participation uses
+  layout `2.0` and resource protocol `2` on qualified x64 hosts.
 - Implementation targets: Linux and Windows. Release validation for each
   distribution and ordered runtime pairing must be recorded separately.
 - Managed supported container profile: Linux-based same-host Docker containers
@@ -95,7 +98,7 @@ the public API.
 
 Windows uses named operating-system memory mappings and named synchronization.
 An explicit `Global\` mapping name uses global synchronization in managed
-`1.0.2` and native `0.1.0`. All participants must implement compatible
+`2.0.0` and native `0.1.0`. All participants must implement compatible
 resource-naming version `1` behavior. Ordinary unqualified and explicit
 `Local\` names retain session-local synchronization.
 Linux uses deterministic files in a shared runtime memory location such as
@@ -104,14 +107,23 @@ prevention hash. Docker containers participate in the Linux model only when
 their IPC and process-liveness configuration lets all participants see the same
 resources and classify owners safely.
 
+Current managed handles supplement PID/start-token checks with a private locked
+per-owner liveness anchor. Consequently, an opener does not delete a live
+managed mapping merely because that owner's PID is hidden by a different PID
+namespace. A missing anchor retains the PID/start-token fallback needed for
+C++, Python, and older managed owners. This improves region-lifetime safety but
+does not relax the documented namespace requirements for lease/reservation
+recovery or make default-isolated containers a supported topology.
+
 The managed and native implementations must derive the same resources and
 participate in the same lock. Python inherits the native behavior rather than
 reimplementing it.
 
 The Linux resource directory is owner-only (`0700`), and region,
-synchronization, owner, and lifecycle files are owner-only (`0600`). Cooperating
-host processes must therefore run as the same Unix identity. Containers must
-share a compatible identity as well as IPC and process-liveness namespaces.
+synchronization, owner, lifecycle, and managed owner-anchor files are owner-only
+(`0600`). Cooperating host processes must therefore run as the same Unix
+identity. Containers must share a compatible identity as well as the namespaces
+required by the operations and recovery policies they use.
 
 ## Unsupported Scenarios
 

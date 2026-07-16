@@ -82,8 +82,13 @@ Producers:
 
 `TryRecoverLeases` is owner controlled. When `RecoverCurrentProcessLeases` is
 `true`, the store may recover current-process leases and stale-owner leases. It
-must still skip leases owned by another live process. Reports include scanned,
-recovered, active, unsupported, and failed counts.
+must still skip leases owned by another live process. Before selecting true, the
+caller must quiesce all current-process lease acquisition, projection,
+borrowed-span use, and release across every handle attached to the mapping and
+keep that activity quiescent until recovery returns. This is an administrative
+test/controlled-shutdown precondition; no hot-path gate enforces it. False is the
+normal mode and remains safe during concurrent lease activity. Reports include
+scanned, recovered, active, unsupported, and failed counts.
 
 `TryRecoverReservations` scans pending reservations, evaluates producer liveness
 where supported, removes pending index entries, and reclaims slots without
@@ -128,6 +133,30 @@ Linux removes region, synchronization, and owner metadata after the final live
 handle closes. A zero-length per-name lifecycle lock file may remain so a later
 opener cannot race a different lock inode; applications should use stable store
 names rather than generating an unbounded sequence of one-time names.
+
+Each current managed Linux handle also holds a private per-owner `flock`
+liveness anchor while its mapped view exists. Lifecycle cleanup treats a locked
+anchor as live even when the owner's PID is hidden by a container PID namespace,
+and treats an unlocked anchor as stale. Missing anchors use the existing
+PID/start-token check so C++, Python, and older managed participants remain
+compatible. Close unmaps before releasing the anchor; process termination
+releases it automatically. These files and checks are cold lifecycle metadata
+and are not entered by publish, acquire, release, or remove.
+
+After a lifecycle operation atomically commits the replacement owner sidecar,
+it may repair an orphan left by a crash between anchor creation and owner-line
+publication. The repair considers only the exact store's canonical
+`.owners.anchor.<32-lowercase-hex-guid>` names that are not referenced by the
+committed sidecar. It opens each candidate separately with symbolic-link
+following disabled, verifies a regular file, and deletes it only while holding
+a successfully acquired nonblocking exclusive `flock`. Referenced, locked,
+ambiguous, non-regular, symbolic-link, directory, malformed, or access-error
+artifacts are retained. Final-handle cleanup does not use a broad anchor glob.
+
+If bounded close cannot commit exact owner-line removal, a finalized release
+marker lets it safely release the local anchor after unmapping. The owner line,
+anchor pathname, or both may remain until a later lifecycle operation reconciles
+the marker and performs the same post-commit conservative sweep.
 
 ## Long-Running Identity
 

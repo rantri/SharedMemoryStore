@@ -19,7 +19,16 @@ internal static unsafe class StoreKey
 
     public static ulong Hash(ReadOnlySpan<byte> key)
     {
-        var hash = OffsetBasis;
+        return ContinueHash(OffsetBasis, key);
+    }
+
+    /// <summary>
+    /// Continues the canonical FNV-1a key hash across one caller-selected
+    /// chunk. Lock-free callers use this to observe an operation budget
+    /// without changing persisted hash identity.
+    /// </summary>
+    internal static ulong ContinueHash(ulong hash, ReadOnlySpan<byte> key)
+    {
         foreach (var value in key)
         {
             hash ^= value;
@@ -28,6 +37,8 @@ internal static unsafe class StoreKey
 
         return hash;
     }
+
+    internal static ulong HashSeed => OffsetBasis;
 
     public static bool Equals(byte* storedKey, int storedLength, ReadOnlySpan<byte> key)
     {

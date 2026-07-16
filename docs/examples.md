@@ -173,6 +173,9 @@ immediate writes.
 The [zero-copy ingest sample](../samples/ZeroCopyIngest/README.md) demonstrates
 direct chunked writes, a runnable length-prefixed stream adapter, abort cleanup,
 reader acquire, remove, and segmented publication.
+That adapter is application-side input plumbing: the store remains a keyed
+value lifecycle and adds no stream position, delivery, dequeue, or
+acknowledgement semantics.
 
 ## Segmented Payloads
 

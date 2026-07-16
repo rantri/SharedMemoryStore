@@ -83,6 +83,7 @@ internal sealed record AgentDefinition(
 
 internal sealed class AgentProcess : IAsyncDisposable
 {
+    private static readonly TimeSpan StartupResponseTimeout = TimeSpan.FromSeconds(30);
     private readonly AgentDefinition _definition;
     private readonly Process _process;
     private readonly Task<string> _stderr;
@@ -123,14 +124,25 @@ internal sealed class AgentProcess : IAsyncDisposable
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start the {definition.Runtime} interoperability agent.");
         var result = new AgentProcess(definition, process);
-        var ping = await result.SendAsync<object?>("ping", arguments: null).ConfigureAwait(false);
-        if (!ping.Ok || ping.Status.Name != "Success")
+        try
+        {
+            var ping = await result.SendAsync<object?>(
+                "ping",
+                arguments: null,
+                StartupResponseTimeout).ConfigureAwait(false);
+            if (!ping.Ok || ping.Status.Name != "Success")
+            {
+                throw new InvalidOperationException(
+                    $"The {definition.Runtime} agent did not answer ping successfully.");
+            }
+
+            return result;
+        }
+        catch
         {
             await result.DisposeAsync().ConfigureAwait(false);
-            throw new InvalidOperationException($"The {definition.Runtime} agent did not answer ping successfully.");
+            throw;
         }
-
-        return result;
     }
 
     public async Task<AgentResponse> SendAsync<T>(string command, T? arguments, TimeSpan? timeout = null)

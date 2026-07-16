@@ -7,6 +7,8 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $artifactRoot = Join-Path $root "artifacts"
 $packageDir = Join-Path $root "artifacts/package"
 $consumerDir = Join-Path $root "artifacts/consumer-smoke"
+$consumerCacheDir = Join-Path $root ("artifacts/consumer-smoke-packages-" + [Guid]::NewGuid().ToString('N'))
+$previousNuGetPackages = $env:NUGET_PACKAGES
 
 function Assert-UnderArtifactRoot {
     param([string]$Path)
@@ -24,6 +26,11 @@ function Invoke-DotNet {
         throw "dotnet $args failed with exit code $LASTEXITCODE"
     }
 }
+
+try {
+    Assert-UnderArtifactRoot $consumerCacheDir
+    New-Item -ItemType Directory -Force -Path $consumerCacheDir | Out-Null
+    $env:NUGET_PACKAGES = $consumerCacheDir
 
 if (Test-Path -LiteralPath $packageDir) {
     Assert-UnderArtifactRoot $packageDir
@@ -45,6 +52,7 @@ $program = @'
 using SharedMemoryStore;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 
 var options = new SharedMemoryStoreOptions
 {
@@ -108,6 +116,51 @@ var disposed = store.TryPublish([1], [6]);
 Console.WriteLine($"disposed publish: {disposed}");
 if (disposed != StoreStatus.StoreDisposed) return 19;
 
+if ((OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
+    && RuntimeInformation.ProcessArchitecture == Architecture.X64)
+{
+    var lockFreeOptions = SharedMemoryStoreOptions.CreateLockFree(
+        $"sms-consumer-v2-{Guid.NewGuid():N}",
+        slotCount: 2,
+        maxValueBytes: 32,
+        maxDescriptorBytes: 8,
+        maxKeyBytes: 8,
+        leaseRecordCount: 2,
+        participantRecordCount: 1,
+        openMode: OpenMode.CreateNew);
+    var lockFreeOpen = MemoryStore.TryCreateOrOpen(lockFreeOptions, out var lockFreeStore);
+    Console.WriteLine($"lock-free open: {lockFreeOpen}");
+    if (lockFreeOpen != StoreOpenStatus.Success || lockFreeStore is null) return 20;
+
+    using (lockFreeStore)
+    {
+        if (lockFreeStore.Profile != StoreProfile.LockFree) return 21;
+        if (lockFreeStore.ProtocolInfo.LayoutMajorVersion != 2
+            || lockFreeStore.ProtocolInfo.LayoutMinorVersion != 0
+            || lockFreeStore.ProtocolInfo.ResourceProtocolVersion != 2) return 22;
+        if (lockFreeStore.TryPublish([1], [7, 8, 9], [4]) != StoreStatus.Success) return 23;
+        if (lockFreeStore.TryAcquire([1], out var lockFreeLease) != StoreStatus.Success) return 24;
+        using (lockFreeLease)
+        {
+            if (!new byte[] { 7, 8, 9 }.AsSpan().SequenceEqual(lockFreeLease.ValueSpan)) return 25;
+        }
+
+        if (lockFreeStore.TryRemove([1]) != StoreStatus.Success) return 26;
+        var lockFreeOpenExisting = SharedMemoryStoreOptions.CreateLockFree(
+            lockFreeOptions.Name,
+            slotCount: 2,
+            maxValueBytes: 32,
+            maxDescriptorBytes: 8,
+            maxKeyBytes: 8,
+            leaseRecordCount: 2,
+            participantRecordCount: 1,
+            openMode: OpenMode.OpenExisting);
+        if (MemoryStore.TryCreateOrOpen(lockFreeOpenExisting, out var exhausted)
+            != StoreOpenStatus.ParticipantTableFull) return 27;
+        exhausted?.Dispose();
+    }
+}
+
 return 0;
 
 static async Task<StoreStatus> PublishLengthPrefixedFrameAsync(MemoryStore store, byte[] key, byte[] frame, byte[] descriptor)
@@ -168,3 +221,17 @@ static byte[] CreateLengthPrefixedFrame(byte[] payload)
 
 Set-Content -LiteralPath (Join-Path $consumerDir "Program.cs") -Value $program -Encoding UTF8
 Invoke-DotNet run --project (Join-Path $consumerDir "SharedMemoryStore.ConsumerSmoke.csproj") -c $Configuration
+}
+finally {
+    if ($null -eq $previousNuGetPackages) {
+        Remove-Item Env:NUGET_PACKAGES -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:NUGET_PACKAGES = $previousNuGetPackages
+    }
+
+    if (Test-Path -LiteralPath $consumerCacheDir) {
+        Assert-UnderArtifactRoot $consumerCacheDir
+        Remove-Item -LiteralPath $consumerCacheDir -Recurse -Force
+    }
+}

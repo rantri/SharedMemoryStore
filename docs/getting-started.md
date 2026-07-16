@@ -2,7 +2,9 @@
 
 This guide selects one of the .NET, native C++, or Python distributions and
 gets a clean consumer to a complete create/open, publish, acquire, release,
-remove, and close workflow. All three use layout `1.2` and resource naming `1`.
+remove, and close workflow. Layout `1.2` and resource naming `1` remain the
+cross-runtime boundary. The managed package additionally supports explicit C#
+layout `2.0`/resource protocol `2`; native and Python clients reject that layout.
 
 ## Prerequisites
 
@@ -15,13 +17,13 @@ remove, and close workflow. All three use layout `1.2` and resource naming `1`.
 - Docker Engine or Docker Desktop only when validating same-host container
   sharing.
 
-The managed package version is `1.0.2`; the native and Python distributions are
+The managed package version is `2.0.0`; the native and Python distributions are
 independently versioned `0.1.0`. If an artifact has not been published to its
 ecosystem feed, build it locally from the repository.
 
 | Consumer | Artifact | Public entry point |
 |----------|----------|--------------------|
-| .NET | NuGet `SharedMemoryStore` `1.0.2` | `MemoryStore` |
+| .NET | NuGet `SharedMemoryStore` `2.0.0` | `MemoryStore` |
 | C++ | CMake `SharedMemoryStore` `0.1.0` | `shared_memory_store::memory_store` |
 | Python | wheel `shared-memory-store` `0.1.0` | `shared_memory_store.MemoryStore` |
 

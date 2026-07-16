@@ -110,8 +110,13 @@ PlatformOpenResult platform_open(const ResourceName& resource, const Options& op
         }
     }
 
+    // Map the existing section's actual extent. Requesting the caller-computed
+    // layout-v1.2 length here can fail before Store::initialize_or_validate can
+    // inspect an SMS2 header when the v1 request is larger than the v2 region.
+    // A zero byte count is the Windows API's header-first/full-section form;
+    // the store validates identity and dimensions before projecting layout data.
     auto* data = static_cast<std::uint8_t*>(MapViewOfFile(
-        mapping, FILE_MAP_ALL_ACCESS, 0, 0, static_cast<SIZE_T>(options.total_bytes)));
+        mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0));
     if (!data) {
         const auto error = GetLastError();
         CloseHandle(mapping);

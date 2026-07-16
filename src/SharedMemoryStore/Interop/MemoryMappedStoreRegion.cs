@@ -14,13 +14,12 @@ internal sealed unsafe class MemoryMappedStoreRegion : ISharedStoreRegion
     private MemoryMappedStoreRegion(
         MemoryMappedFile mapping,
         MemoryMappedViewAccessor accessor,
-        long capacity,
         Action? disposeCallback)
     {
         _mapping = mapping;
         _accessor = accessor;
         _disposeCallback = disposeCallback;
-        Capacity = capacity;
+        Capacity = accessor.Capacity;
         _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref _pointer);
     }
 
@@ -38,10 +37,9 @@ internal sealed unsafe class MemoryMappedStoreRegion : ISharedStoreRegion
     public static MemoryMappedStoreRegion Create(
         MemoryMappedFile mapping,
         MemoryMappedViewAccessor accessor,
-        long capacity,
         Action? disposeCallback = null)
     {
-        return new MemoryMappedStoreRegion(mapping, accessor, capacity, disposeCallback);
+        return new MemoryMappedStoreRegion(mapping, accessor, disposeCallback);
     }
 
     public static StoreOpenStatus TryOpen(SharedMemoryStoreOptions options, out MemoryMappedStoreRegion? region)
@@ -57,14 +55,33 @@ internal sealed unsafe class MemoryMappedStoreRegion : ISharedStoreRegion
         }
 
         _disposed = true;
-        if (_pointer is not null)
+        try
         {
-            _accessor.SafeMemoryMappedViewHandle.ReleasePointer();
-            _pointer = null;
+            if (_pointer is not null)
+            {
+                _accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+                _pointer = null;
+            }
         }
-
-        _accessor.Dispose();
-        _mapping.Dispose();
-        _disposeCallback?.Invoke();
+        finally
+        {
+            try
+            {
+                _accessor.Dispose();
+            }
+            finally
+            {
+                try
+                {
+                    _mapping.Dispose();
+                }
+                finally
+                {
+                    // Linux owner cleanup must run only after the view is unmapped, and it
+                    // must still run when an earlier local-handle teardown reports an error.
+                    _disposeCallback?.Invoke();
+                }
+            }
+        }
     }
 }

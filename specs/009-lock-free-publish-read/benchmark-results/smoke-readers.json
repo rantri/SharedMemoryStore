@@ -1,0 +1,772 @@
+{
+  "SchemaVersion": 2,
+  "TimestampUtc": "2026-07-12T23:05:38.0746798+00:00",
+  "Environment": {
+    "RepositoryCommit": "0cf7a43f9c39de1691b237a9761035339edd0964",
+    "OperatingSystem": "Microsoft Windows 10.0.26200",
+    "OperatingSystemArchitecture": "X64",
+    "ProcessArchitecture": "X64",
+    "Framework": ".NET 10.0.5",
+    "RuntimeVersion": "10.0.5",
+    "LogicalProcessorCount": 32,
+    "ProcessorIdentifier": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "ServerGarbageCollection": false,
+    "StopwatchFrequency": 10000000
+  },
+  "Configuration": {
+    "Mode": "readers",
+    "DurationSeconds": 1,
+    "Trials": 1,
+    "Profiles": [
+      "Legacy",
+      "LockFree"
+    ],
+    "Scenarios": [
+      "same-key-read",
+      "distributed-key-read"
+    ],
+    "ProcessCounts": [
+      1,
+      6,
+      12
+    ],
+    "ReaderKeyCount": 256,
+    "ReaderPayloadBytes": 256,
+    "WarmupCycles": 10000,
+    "SamplingInterval": 64,
+    "MaxLatencySamplesPerWorker": 65536,
+    "AffinityRequested": true
+  },
+  "Runs": [
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 1,
+      "Trial": 1,
+      "Cycles": 322965,
+      "ApiCallsPerSecond": 645917.1462487896,
+      "P50Microseconds": 2.1,
+      "P95Microseconds": 7.4,
+      "P99Microseconds": 10.4,
+      "MaxMicroseconds": 120.6,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000199,
+      "WallSeconds": 1.0763231,
+      "SampleCount": 5047,
+      "FairnessIndex": 1,
+      "MinWorkerApiCallsPerSecond": 645917.1462487896,
+      "MaxWorkerApiCallsPerSecond": 645917.1462487896,
+      "WorstWorkerP99Microseconds": 10.4,
+      "AffinityAppliedCount": 1,
+      "AssignedProcessors": [
+        0
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 322965,
+        "Release.Success": 322965
+      },
+      "WorkerCycles": [
+        322965
+      ]
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 6,
+      "Trial": 1,
+      "Cycles": 41255,
+      "ApiCallsPerSecond": 82461.36428734333,
+      "P50Microseconds": 113.8,
+      "P95Microseconds": 244.1,
+      "P99Microseconds": 1251.9,
+      "MaxMicroseconds": 2554.3,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0005898,
+      "WallSeconds": 1.0560255,
+      "SampleCount": 648,
+      "FairnessIndex": 0.999999864837961,
+      "MinWorkerApiCallsPerSecond": 13733.96837529413,
+      "MaxWorkerApiCallsPerSecond": 13748.483703959047,
+      "WorstWorkerP99Microseconds": 1259.1,
+      "AffinityAppliedCount": 6,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 41255,
+        "Release.Success": 41255
+      },
+      "WorkerCycles": [
+        6871,
+        6875,
+        6877,
+        6877,
+        6877,
+        6878
+      ]
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 12,
+      "Trial": 1,
+      "Cycles": 32478,
+      "ApiCallsPerSecond": 64896.78817047326,
+      "P50Microseconds": 219.1,
+      "P95Microseconds": 368,
+      "P99Microseconds": 708.7,
+      "MaxMicroseconds": 1468.5,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0009124,
+      "WallSeconds": 1.0674693,
+      "SampleCount": 516,
+      "FairnessIndex": 0.9999999187818723,
+      "MinWorkerApiCallsPerSecond": 5407.480114266751,
+      "MaxWorkerApiCallsPerSecond": 5412.614409686741,
+      "WorstWorkerP99Microseconds": 1468.5,
+      "AffinityAppliedCount": 12,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 32478,
+        "Release.Success": 32478
+      },
+      "WorkerCycles": [
+        2708,
+        2708,
+        2706,
+        2707,
+        2707,
+        2707,
+        2706,
+        2706,
+        2706,
+        2705,
+        2706,
+        2706
+      ]
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 1,
+      "Trial": 1,
+      "Cycles": 278892,
+      "ApiCallsPerSecond": 557773.9042923324,
+      "P50Microseconds": 2.1,
+      "P95Microseconds": 8.1,
+      "P99Microseconds": 10.6,
+      "MaxMicroseconds": 30.3,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000181,
+      "WallSeconds": 1.0379606,
+      "SampleCount": 4358,
+      "FairnessIndex": 1,
+      "MinWorkerApiCallsPerSecond": 557773.9042923324,
+      "MaxWorkerApiCallsPerSecond": 557773.9042923324,
+      "WorstWorkerP99Microseconds": 10.6,
+      "AffinityAppliedCount": 1,
+      "AssignedProcessors": [
+        0
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 278892,
+        "Release.Success": 278892
+      },
+      "WorkerCycles": [
+        278892
+      ]
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 6,
+      "Trial": 1,
+      "Cycles": 51921,
+      "ApiCallsPerSecond": 103831.65836682667,
+      "P50Microseconds": 110.6,
+      "P95Microseconds": 117.7,
+      "P99Microseconds": 129.6,
+      "MaxMicroseconds": 230.7,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000996,
+      "WallSeconds": 1.0538927,
+      "SampleCount": 816,
+      "FairnessIndex": 0.9999969825737371,
+      "MinWorkerApiCallsPerSecond": 17291.273766501807,
+      "MaxWorkerApiCallsPerSecond": 17372.79953955182,
+      "WorstWorkerP99Microseconds": 131.1,
+      "AffinityAppliedCount": 6,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 51921,
+        "Release.Success": 51921
+      },
+      "WorkerCycles": [
+        8687,
+        8647,
+        8647,
+        8646,
+        8647,
+        8647
+      ]
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 12,
+      "Trial": 1,
+      "Cycles": 32631,
+      "ApiCallsPerSecond": 65250.17014415287,
+      "P50Microseconds": 223.6,
+      "P95Microseconds": 585.9,
+      "P99Microseconds": 3779.6,
+      "MaxMicroseconds": 6852.1,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0001813,
+      "WallSeconds": 1.0637495,
+      "SampleCount": 516,
+      "FairnessIndex": 0.9999999867797692,
+      "MinWorkerApiCallsPerSecond": 5437.523129221568,
+      "MaxWorkerApiCallsPerSecond": 5439.198806015874,
+      "WorstWorkerP99Microseconds": 6852.1,
+      "AffinityAppliedCount": 12,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 32631,
+        "Release.Success": 32631
+      },
+      "WorkerCycles": [
+        2719,
+        2720,
+        2720,
+        2719,
+        2719,
+        2719,
+        2719,
+        2720,
+        2719,
+        2719,
+        2719,
+        2719
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 1,
+      "Trial": 1,
+      "Cycles": 2944943,
+      "ApiCallsPerSecond": 5889770.560497015,
+      "P50Microseconds": 0.2,
+      "P95Microseconds": 1.3,
+      "P99Microseconds": 1.7,
+      "MaxMicroseconds": 19.3,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000196,
+      "WallSeconds": 1.0600165,
+      "SampleCount": 46015,
+      "FairnessIndex": 1,
+      "MinWorkerApiCallsPerSecond": 5889770.560497015,
+      "MaxWorkerApiCallsPerSecond": 5889770.560497015,
+      "WorstWorkerP99Microseconds": 1.7,
+      "AffinityAppliedCount": 1,
+      "AssignedProcessors": [
+        0
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 2944943,
+        "Release.Success": 2944943
+      },
+      "WorkerCycles": [
+        2944943
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 6,
+      "Trial": 1,
+      "Cycles": 8561205,
+      "ApiCallsPerSecond": 17121922.025222283,
+      "P50Microseconds": 0.5,
+      "P95Microseconds": 2.6,
+      "P99Microseconds": 3,
+      "MaxMicroseconds": 391.4,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000285,
+      "WallSeconds": 1.0954311,
+      "SampleCount": 133771,
+      "FairnessIndex": 0.999289467690636,
+      "MinWorkerApiCallsPerSecond": 2770705.069950209,
+      "MaxWorkerApiCallsPerSecond": 2956687.3351726895,
+      "WorstWorkerP99Microseconds": 3.2,
+      "AffinityAppliedCount": 6,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 8561205,
+        "Release.Success": 8561205
+      },
+      "WorkerCycles": [
+        1396754,
+        1469434,
+        1389738,
+        1478379,
+        1385388,
+        1441512
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 12,
+      "Trial": 1,
+      "Cycles": 13091243,
+      "ApiCallsPerSecond": 26181292.13307873,
+      "P50Microseconds": 0.6,
+      "P95Microseconds": 2.9,
+      "P99Microseconds": 3.8,
+      "MaxMicroseconds": 6278.7,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000456,
+      "WallSeconds": 1.1608522,
+      "SampleCount": 204555,
+      "FairnessIndex": 0.992488044913211,
+      "MinWorkerApiCallsPerSecond": 1796062.8551200284,
+      "MaxWorkerApiCallsPerSecond": 2411962.8683261117,
+      "WorstWorkerP99Microseconds": 4.3,
+      "AffinityAppliedCount": 12,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 13091243,
+        "Release.Success": 13091243
+      },
+      "WorkerCycles": [
+        1128539,
+        1091536,
+        1081705,
+        962413,
+        898044,
+        1196215,
+        1138296,
+        1206031,
+        1122685,
+        1166473,
+        1139640,
+        959666
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 1,
+      "Trial": 1,
+      "Cycles": 3058843,
+      "ApiCallsPerSecond": 6117564.87221553,
+      "P50Microseconds": 0.2,
+      "P95Microseconds": 0.3,
+      "P99Microseconds": 1.6,
+      "MaxMicroseconds": 284.8,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000198,
+      "WallSeconds": 1.0520635,
+      "SampleCount": 47795,
+      "FairnessIndex": 1,
+      "MinWorkerApiCallsPerSecond": 6117564.87221553,
+      "MaxWorkerApiCallsPerSecond": 6117564.87221553,
+      "WorstWorkerP99Microseconds": 1.6,
+      "AffinityAppliedCount": 1,
+      "AssignedProcessors": [
+        0
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 3058843,
+        "Release.Success": 3058843
+      },
+      "WorkerCycles": [
+        3058843
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 6,
+      "Trial": 1,
+      "Cycles": 8817349,
+      "ApiCallsPerSecond": 17634131.944364585,
+      "P50Microseconds": 0.5,
+      "P95Microseconds": 2.6,
+      "P99Microseconds": 3.3,
+      "MaxMicroseconds": 53.3,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000321,
+      "WallSeconds": 1.0786938,
+      "SampleCount": 137775,
+      "FairnessIndex": 0.9980324763504409,
+      "MinWorkerApiCallsPerSecond": 2660870.5860541873,
+      "MaxWorkerApiCallsPerSecond": 3034958.896679665,
+      "WorstWorkerP99Microseconds": 3.4,
+      "AffinityAppliedCount": 6,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 8817349,
+        "Release.Success": 8817349
+      },
+      "WorkerCycles": [
+        1330478,
+        1517523,
+        1507022,
+        1515342,
+        1459923,
+        1487061
+      ]
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 12,
+      "Trial": 1,
+      "Cycles": 14806220,
+      "ApiCallsPerSecond": 29611178.563793182,
+      "P50Microseconds": 0.5,
+      "P95Microseconds": 2.9,
+      "P99Microseconds": 3.5,
+      "MaxMicroseconds": 340.2,
+      "Failures": 0,
+      "MeasuredSeconds": 1.0000426,
+      "WallSeconds": 1.1167662,
+      "SampleCount": 231355,
+      "FairnessIndex": 0.9991852477028011,
+      "MinWorkerApiCallsPerSecond": 2336495.5506694093,
+      "MaxWorkerApiCallsPerSecond": 2653952.532392073,
+      "WorstWorkerP99Microseconds": 3.9,
+      "AffinityAppliedCount": 12,
+      "AssignedProcessors": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "Oversubscribed": false,
+      "Qualification": "smoke-only",
+      "StatusHistogram": {
+        "Acquire.Success": 14806220,
+        "Release.Success": 14806220
+      },
+      "WorkerCycles": [
+        1239249,
+        1213100,
+        1221067,
+        1255337,
+        1235950,
+        1213783,
+        1220169,
+        1235079,
+        1168266,
+        1248394,
+        1327004,
+        1228822
+      ]
+    }
+  ],
+  "Summary": [
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 1,
+      "MedianApiCallsPerSecond": 557773.9042923324,
+      "MedianP50Microseconds": 2.1,
+      "MedianP95Microseconds": 8.1,
+      "MedianP99Microseconds": 10.6,
+      "MedianMaxMicroseconds": 30.3,
+      "MedianFairnessIndex": 1,
+      "MedianWorstWorkerP99Microseconds": 10.6,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 278892,
+        "Release.Success": 278892
+      }
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 6,
+      "MedianApiCallsPerSecond": 103831.65836682667,
+      "MedianP50Microseconds": 110.6,
+      "MedianP95Microseconds": 117.7,
+      "MedianP99Microseconds": 129.6,
+      "MedianMaxMicroseconds": 230.7,
+      "MedianFairnessIndex": 0.9999969825737371,
+      "MedianWorstWorkerP99Microseconds": 131.1,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 51921,
+        "Release.Success": 51921
+      }
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 12,
+      "MedianApiCallsPerSecond": 65250.17014415287,
+      "MedianP50Microseconds": 223.6,
+      "MedianP95Microseconds": 585.9,
+      "MedianP99Microseconds": 3779.6,
+      "MedianMaxMicroseconds": 6852.1,
+      "MedianFairnessIndex": 0.9999999867797692,
+      "MedianWorstWorkerP99Microseconds": 6852.1,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 32631,
+        "Release.Success": 32631
+      }
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 1,
+      "MedianApiCallsPerSecond": 645917.1462487896,
+      "MedianP50Microseconds": 2.1,
+      "MedianP95Microseconds": 7.4,
+      "MedianP99Microseconds": 10.4,
+      "MedianMaxMicroseconds": 120.6,
+      "MedianFairnessIndex": 1,
+      "MedianWorstWorkerP99Microseconds": 10.4,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 322965,
+        "Release.Success": 322965
+      }
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 6,
+      "MedianApiCallsPerSecond": 82461.36428734333,
+      "MedianP50Microseconds": 113.8,
+      "MedianP95Microseconds": 244.1,
+      "MedianP99Microseconds": 1251.9,
+      "MedianMaxMicroseconds": 2554.3,
+      "MedianFairnessIndex": 0.999999864837961,
+      "MedianWorstWorkerP99Microseconds": 1259.1,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 41255,
+        "Release.Success": 41255
+      }
+    },
+    {
+      "Profile": "Legacy",
+      "Scenario": "same-key-read",
+      "ProcessCount": 12,
+      "MedianApiCallsPerSecond": 64896.78817047326,
+      "MedianP50Microseconds": 219.1,
+      "MedianP95Microseconds": 368,
+      "MedianP99Microseconds": 708.7,
+      "MedianMaxMicroseconds": 1468.5,
+      "MedianFairnessIndex": 0.9999999187818723,
+      "MedianWorstWorkerP99Microseconds": 1468.5,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 32478,
+        "Release.Success": 32478
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 1,
+      "MedianApiCallsPerSecond": 6117564.87221553,
+      "MedianP50Microseconds": 0.2,
+      "MedianP95Microseconds": 0.3,
+      "MedianP99Microseconds": 1.6,
+      "MedianMaxMicroseconds": 284.8,
+      "MedianFairnessIndex": 1,
+      "MedianWorstWorkerP99Microseconds": 1.6,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 3058843,
+        "Release.Success": 3058843
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 6,
+      "MedianApiCallsPerSecond": 17634131.944364585,
+      "MedianP50Microseconds": 0.5,
+      "MedianP95Microseconds": 2.6,
+      "MedianP99Microseconds": 3.3,
+      "MedianMaxMicroseconds": 53.3,
+      "MedianFairnessIndex": 0.9980324763504409,
+      "MedianWorstWorkerP99Microseconds": 3.4,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 8817349,
+        "Release.Success": 8817349
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "distributed-key-read",
+      "ProcessCount": 12,
+      "MedianApiCallsPerSecond": 29611178.563793182,
+      "MedianP50Microseconds": 0.5,
+      "MedianP95Microseconds": 2.9,
+      "MedianP99Microseconds": 3.5,
+      "MedianMaxMicroseconds": 340.2,
+      "MedianFairnessIndex": 0.9991852477028011,
+      "MedianWorstWorkerP99Microseconds": 3.9,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 14806220,
+        "Release.Success": 14806220
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 1,
+      "MedianApiCallsPerSecond": 5889770.560497015,
+      "MedianP50Microseconds": 0.2,
+      "MedianP95Microseconds": 1.3,
+      "MedianP99Microseconds": 1.7,
+      "MedianMaxMicroseconds": 19.3,
+      "MedianFairnessIndex": 1,
+      "MedianWorstWorkerP99Microseconds": 1.7,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 2944943,
+        "Release.Success": 2944943
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 6,
+      "MedianApiCallsPerSecond": 17121922.025222283,
+      "MedianP50Microseconds": 0.5,
+      "MedianP95Microseconds": 2.6,
+      "MedianP99Microseconds": 3,
+      "MedianMaxMicroseconds": 391.4,
+      "MedianFairnessIndex": 0.999289467690636,
+      "MedianWorstWorkerP99Microseconds": 3.2,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 8561205,
+        "Release.Success": 8561205
+      }
+    },
+    {
+      "Profile": "LockFree",
+      "Scenario": "same-key-read",
+      "ProcessCount": 12,
+      "MedianApiCallsPerSecond": 26181292.13307873,
+      "MedianP50Microseconds": 0.6,
+      "MedianP95Microseconds": 2.9,
+      "MedianP99Microseconds": 3.8,
+      "MedianMaxMicroseconds": 6278.7,
+      "MedianFairnessIndex": 0.992488044913211,
+      "MedianWorstWorkerP99Microseconds": 4.3,
+      "TotalFailures": 0,
+      "StatusHistogram": {
+        "Acquire.Success": 13091243,
+        "Release.Success": 13091243
+      }
+    }
+  ]
+}

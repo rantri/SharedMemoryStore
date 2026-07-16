@@ -1,8 +1,24 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "shared_protocol": {
-    "layout": { "major": 1, "minor": 2 },
-    "resource_naming": 1,
+    "layouts": [
+      {
+        "version": "1.2",
+        "major": 1,
+        "minor": 2,
+        "magic": "SMS1",
+        "resource_protocol": 1
+      },
+      {
+        "version": "2.0",
+        "major": 2,
+        "minor": 0,
+        "magic": "SMS2",
+        "resource_protocol": 2,
+        "required_features_mask": 7,
+        "required_features": ["versioned_empty_spill_summary", "publication_intent", "pid_namespace_identity"]
+      }
+    ],
     "byte_order": "little",
     "required_pointer_width": 64
   },
@@ -10,10 +26,14 @@
     {
       "name": "SharedMemoryStore",
       "ecosystem": "NuGet",
-      "version": "1.0.2",
-      "creates_layouts": ["1.2"],
-      "reads_layouts": ["1.2"],
-      "resource_naming": 1,
+      "version": "2.0.0",
+      "creates_layouts": ["1.2", "2.0"],
+      "reads_layouts": ["1.2", "2.0"],
+      "recognizes_layout_headers": ["1.2", "2.0"],
+      "layout_resource_protocols": {
+        "1.2": 1,
+        "2.0": 2
+      },
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     },
     {
@@ -23,7 +43,13 @@
       "c_abi": "1.0",
       "creates_layouts": ["1.2"],
       "reads_layouts": ["1.2"],
-      "resource_naming": 1,
+      "recognizes_layout_headers": ["1.2", "2.0"],
+      "rejects_layouts": ["2.0"],
+      "rejection_status": "IncompatibleLayout",
+      "payload_access_before_rejection": false,
+      "layout_resource_protocols": {
+        "1.2": 1
+      },
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     },
     {
@@ -33,7 +59,13 @@
       "requires_c_abi": "1.0",
       "creates_layouts": ["1.2"],
       "reads_layouts": ["1.2"],
-      "resource_naming": 1,
+      "recognizes_layout_headers": ["1.2", "2.0"],
+      "rejects_layouts": ["2.0"],
+      "rejection_status": "IncompatibleLayout",
+      "payload_access_before_rejection": false,
+      "layout_resource_protocols": {
+        "1.2": 1
+      },
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     }
   ],
@@ -55,7 +87,10 @@
       "reservation-commit-abort",
       "bounded-lock-contention",
       "explicit-crash-recovery",
-      "linux-owner-cleanup"
+      "linux-owner-cleanup",
+      "layout-2.0-rejects-required-features-zero-bit-0-only-and-mask-3-drafts",
+      "older-layout-2.0-drafts-reject-required-features-mask-7",
+      "v1.2-only-client-rejects-layout-2.0-before-payload-access"
     ]
   }
 }
