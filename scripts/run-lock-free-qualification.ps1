@@ -950,6 +950,69 @@ function Invoke-BoundedStep {
     }
 }
 
+function Get-ValidatedInteropEnvironment {
+    param(
+        [Parameter(Mandatory)][string]$NativeBuildDirectory,
+        [Parameter(Mandatory)][string]$PythonArtifactsDirectory)
+
+    $nativeBuildPath = if ([IO.Path]::IsPathFullyQualified($NativeBuildDirectory)) {
+        [IO.Path]::GetFullPath($NativeBuildDirectory)
+    }
+    else {
+        [IO.Path]::GetFullPath((Join-Path $root $NativeBuildDirectory))
+    }
+    $pythonArtifactsPath = if ([IO.Path]::IsPathFullyQualified($PythonArtifactsDirectory)) {
+        [IO.Path]::GetFullPath($PythonArtifactsDirectory)
+    }
+    else {
+        [IO.Path]::GetFullPath((Join-Path $root $PythonArtifactsDirectory))
+    }
+    $nativeAgent = Join-Path $nativeBuildPath $(if ($IsWindows) {
+        'tests/cpp/sms_cpp_interop_agent.exe'
+    }
+    else {
+        'tests/cpp/sms_cpp_interop_agent'
+    })
+    $pythonCheckpointLibrary = Join-Path $nativeBuildPath $(if ($IsWindows) {
+        'src/cpp/shared_memory_store_python_checkpoint.dll'
+    }
+    else {
+        'src/cpp/libshared_memory_store_python_checkpoint.so'
+    })
+    $installedPython = Join-Path $pythonArtifactsPath $(if ($IsWindows) {
+        'wheel-environment/Scripts/python.exe'
+    }
+    else {
+        'wheel-environment/bin/python'
+    })
+    foreach ($artifact in @($nativeAgent, $pythonCheckpointLibrary, $installedPython)) {
+        if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Validated interoperability artifact is missing: '$artifact'."
+        }
+    }
+
+    $savedPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('PYTHONPATH', $null, 'Process')
+        $pythonPackageRoot = (& $installedPython '-c' `
+            'import pathlib, shared_memory_store; print(pathlib.Path(shared_memory_store.__file__).resolve().parent.parent)')
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pythonPackageRoot)) {
+            throw 'The validated wheel interpreter could not resolve its package root.'
+        }
+        $pythonPackageRoot = [IO.Path]::GetFullPath(([string]$pythonPackageRoot).Trim())
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('PYTHONPATH', $savedPythonPath, 'Process')
+    }
+
+    return @{
+        SMS_CPP_AGENT = $nativeAgent
+        SMS_PYTHON_EXECUTABLE = $installedPython
+        SMS_PYTHONPATH = $pythonPackageRoot
+        SMS_PYTHON_CHECKPOINT_LIBRARY = $pythonCheckpointLibrary
+    }
+}
+
 function Add-EvidenceResult {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -5363,11 +5426,37 @@ try {
             "assemblies=$($testedAssemblyManifest.Count)",
             "manifestSha256=$testedAssemblyDigest")
 
+        $interopWorkRoot = Join-Path $outputRoot ($runId + '.interop-work')
+        if (Test-Path -LiteralPath $interopWorkRoot) {
+            throw "Refusing to reuse qualification interoperability work '$interopWorkRoot'."
+        }
+        $interopBuild = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-build'))
+        $interopInstall = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-install'))
+        $interopPython = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'python'))
+        Invoke-BoundedStep 'native-artifact-validation' $powershell @(
+            '-NoProfile', '-File', 'scripts/validate-native.ps1',
+            '-Configuration', $Configuration,
+            '-BuildDirectory', $interopBuild,
+            '-InstallDirectory', $interopInstall)
+        Set-StepValidation 'native-artifact-validation' 'passed' `
+            'clean-native-build-test-install-consumer-pass' @(
+                "buildDirectory=$interopBuild",
+                "installDirectory=$interopInstall")
+        Invoke-BoundedStep 'python-artifact-validation' $powershell @(
+            '-NoProfile', '-File', 'scripts/validate-python.ps1',
+            '-Configuration', $Configuration,
+            '-ArtifactsDirectory', $interopPython)
+        Set-StepValidation 'python-artifact-validation' 'passed' `
+            'clean-source-wheel-sdist-installed-consumer-pass' @(
+                "artifactsDirectory=$interopPython")
+        $interopRuntimeEnvironment = Get-ValidatedInteropEnvironment `
+            $interopBuild $interopPython
+
         $fullSuiteTrx = Join-Path $runRoot 'trx/full-test-suite'
         New-Item -ItemType Directory -Path $fullSuiteTrx | Out-Null
         Invoke-BoundedStep 'full-test-suite' $dotnet @(
             'test', 'SharedMemoryStore.slnx', '-c', $Configuration, '--nologo', '--no-build', '--no-restore',
-            '--logger', 'trx', '--results-directory', $fullSuiteTrx)
+            '--logger', 'trx', '--results-directory', $fullSuiteTrx) $interopRuntimeEnvironment
         Assert-FullSuiteEvidence $fullSuiteTrx
 
         Invoke-BoundedStep 'unit-contract' $dotnet (@(
@@ -5486,13 +5575,6 @@ try {
         # artifacts are absent from this immutable evidence tree. Release uses
         # the stricter host and Docker rows embedded in command=all OS evidence.
         if ($Tier -ne 'release') {
-            $interopWorkRoot = Join-Path $outputRoot ($runId + '.interop-work')
-            if (Test-Path -LiteralPath $interopWorkRoot) {
-                throw "Refusing to reuse qualification interoperability work '$interopWorkRoot'."
-            }
-            $interopBuild = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-build'))
-            $interopInstall = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-install'))
-            $interopPython = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'python'))
             $interopArtifactEvidencePath = Join-Path $runRoot 'interoperability-artifacts.json'
             Invoke-BoundedStep 'interoperability' $powershell @(
                 '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
@@ -5500,6 +5582,9 @@ try {
                 '-BuildDirectory', $interopBuild,
                 '-InstallDirectory', $interopInstall,
                 '-PythonArtifactsDirectory', $interopPython,
+                '-PythonExecutable', [string]$interopRuntimeEnvironment.SMS_PYTHON_EXECUTABLE,
+                '-SkipBuild',
+                '-ArtifactsPrevalidated',
                 '-Stress',
                 '-StressValueCount', [string]$selected.interopValueCount,
                 '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
