@@ -1747,7 +1747,8 @@ function Invoke-Required {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$FileName,
         [Parameter(Mandatory)][string[]]$Arguments,
-        [bool]$Required = $true)
+        [bool]$Required = $true,
+        [hashtable]$Environment = @{})
 
     $safeName = $Name -replace '[^A-Za-z0-9_.-]', '-'
     $stdoutPath = Join-Path $evidenceRoot ($safeName + '.stdout.log')
@@ -1761,6 +1762,9 @@ function Invoke-Required {
     $start.RedirectStandardError = $true
     foreach ($argument in $Arguments) {
         $start.ArgumentList.Add($argument)
+    }
+    foreach ($entry in $Environment.GetEnumerator()) {
+        $start.Environment[$entry.Key] = [string]$entry.Value
     }
 
     $process = [Diagnostics.Process]::new()
@@ -1993,6 +1997,57 @@ function Invoke-OptionalScript {
     }
 
     Invoke-Required $Name $pwsh (@('-NoProfile', '-File', $ScriptPath) + $Arguments)
+}
+
+function Get-ValidatedInteropEnvironment {
+    param(
+        [Parameter(Mandatory)][string]$NativeBuildDirectory,
+        [Parameter(Mandatory)][string]$PythonArtifactsDirectory)
+
+    $nativeAgent = Join-Path $root ($NativeBuildDirectory + $(if ($IsWindows) {
+        '/tests/cpp/sms_cpp_interop_agent.exe'
+    }
+    else {
+        '/tests/cpp/sms_cpp_interop_agent'
+    }))
+    $pythonCheckpointLibrary = Join-Path $root ($NativeBuildDirectory + $(if ($IsWindows) {
+        '/src/cpp/shared_memory_store_python_checkpoint.dll'
+    }
+    else {
+        '/src/cpp/libshared_memory_store_python_checkpoint.so'
+    }))
+    $installedPython = Join-Path $root ($PythonArtifactsDirectory + $(if ($IsWindows) {
+        '/wheel-environment/Scripts/python.exe'
+    }
+    else {
+        '/wheel-environment/bin/python'
+    }))
+    foreach ($artifact in @($nativeAgent, $pythonCheckpointLibrary, $installedPython)) {
+        if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+            throw "Validated interoperability artifact is missing: '$artifact'."
+        }
+    }
+
+    $savedPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('PYTHONPATH', $null, 'Process')
+        $pythonPackageRoot = (& $installedPython '-c' `
+            'import pathlib, shared_memory_store; print(pathlib.Path(shared_memory_store.__file__).resolve().parent.parent)')
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($pythonPackageRoot)) {
+            throw 'The validated wheel interpreter could not resolve its package root.'
+        }
+        $pythonPackageRoot = [IO.Path]::GetFullPath(([string]$pythonPackageRoot).Trim())
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('PYTHONPATH', $savedPythonPath, 'Process')
+    }
+
+    return @{
+        SMS_CPP_AGENT = $nativeAgent
+        SMS_PYTHON_EXECUTABLE = $installedPython
+        SMS_PYTHONPATH = $pythonPackageRoot
+        SMS_PYTHON_CHECKPOINT_LIBRARY = $pythonCheckpointLibrary
+    }
 }
 
 function Test-Selected {
@@ -2314,6 +2369,9 @@ try {
         Invoke-OptionalScript 'native' @('cmake') (Join-Path $PSScriptRoot 'validate-native.ps1') @('-Configuration', $Configuration)
         Invoke-OptionalScript 'python' @('python', 'cmake') (Join-Path $PSScriptRoot 'validate-python.ps1') @('-Configuration', $Configuration)
 
+        $interopRuntimeEnvironment = Get-ValidatedInteropEnvironment `
+            'artifacts/native-build' 'artifacts/python-validation'
+
         $installedPythonRelativePath = if ($IsWindows) {
             'artifacts/python-validation/wheel-environment/Scripts/python.exe'
         }
@@ -2344,7 +2402,7 @@ try {
         New-Item -ItemType Directory -Path $releaseTrx -Force | Out-Null
         Invoke-Required 'release-tests' $dotnet @(
             'test', 'SharedMemoryStore.slnx', '-c', $Configuration, '--nologo', '--no-build', '--no-restore',
-            '--logger', 'trx', '--results-directory', $releaseTrx)
+            '--logger', 'trx', '--results-directory', $releaseTrx) $true $interopRuntimeEnvironment
         Assert-TrxPassed 'release-tests' $releaseTrx
     }
 
