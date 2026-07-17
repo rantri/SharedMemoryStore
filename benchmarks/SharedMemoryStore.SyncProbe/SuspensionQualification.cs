@@ -276,7 +276,7 @@ internal static class SuspensionQualification
         {
             Seed(owner, workload.Name);
             (int spillFirstBucket, int spillSecondBucket) = SelectUnusedSpillBucketPair(workload.Name);
-            var workers = new List<Process>(workload.HealthyProcessCount);
+            var workers = new List<SuspensionWorkerProcess>(workload.HealthyProcessCount);
             Process? pausedAgent = null;
             bool agentReleased = false;
             try
@@ -808,7 +808,7 @@ internal static class SuspensionQualification
         }
     }
 
-    private static Process StartWorker(
+    private static SuspensionWorkerProcess StartWorker(
         string workload,
         string storeName,
         string role,
@@ -832,17 +832,25 @@ internal static class SuspensionQualification
             start.ArgumentList.Add(argument);
         }
 
-        return Process.Start(start) ?? throw new InvalidOperationException("Failed to start suspension worker.");
+        Process process = Process.Start(start)
+            ?? throw new InvalidOperationException("Failed to start suspension worker.");
+        return new SuspensionWorkerProcess(
+            process,
+            process.StandardError.ReadToEndAsync(),
+            role,
+            workerId);
     }
 
-    private static async Task<SuspensionWorkerReady[]> AwaitWorkersReady(IReadOnlyList<Process> workers)
+    private static async Task<SuspensionWorkerReady[]> AwaitWorkersReady(
+        IReadOnlyList<SuspensionWorkerProcess> workers)
     {
         Task<SuspensionWorkerReady>[] tasks = workers.Select(async worker =>
         {
-            string? line = await ReadLine(worker, ChildStartupTimeout);
+            string? line = await ReadLine(worker.Process, ChildStartupTimeout);
             if (line is null)
             {
-                throw new InvalidOperationException("Suspension worker exited before READY.");
+                throw new InvalidOperationException(
+                    await DescribeWorkerExit(worker, "before READY"));
             }
 
             return JsonSerializer.Deserialize<SuspensionWorkerReady>(line)
@@ -852,24 +860,25 @@ internal static class SuspensionQualification
     }
 
     private static async Task<SuspensionWindowResult[]> MeasureWorkers(
-        IReadOnlyList<Process> workers,
+        IReadOnlyList<SuspensionWorkerProcess> workers,
         int durationSeconds,
         string window)
     {
         string command = $"MEASURE|{checked(durationSeconds * 1000).ToString(CultureInfo.InvariantCulture)}|{window}";
-        foreach (Process worker in workers)
+        foreach (SuspensionWorkerProcess worker in workers)
         {
-            await worker.StandardInput.WriteLineAsync(command);
-            await worker.StandardInput.FlushAsync();
+            await worker.Process.StandardInput.WriteLineAsync(command);
+            await worker.Process.StandardInput.FlushAsync();
         }
 
         TimeSpan timeout = TimeSpan.FromSeconds(durationSeconds + 30);
         Task<SuspensionWindowResult>[] tasks = workers.Select(async worker =>
         {
-            string? line = await ReadLine(worker, timeout);
+            string? line = await ReadLine(worker.Process, timeout);
             if (line is null)
             {
-                throw new InvalidOperationException("Suspension worker exited during " + window + ".");
+                throw new InvalidOperationException(
+                    await DescribeWorkerExit(worker, "during " + window));
             }
 
             return JsonSerializer.Deserialize<SuspensionWindowResult>(line)
@@ -878,16 +887,17 @@ internal static class SuspensionQualification
         return await Task.WhenAll(tasks);
     }
 
-    private static async Task StopWorkers(IEnumerable<Process> workers)
+    private static async Task StopWorkers(IEnumerable<SuspensionWorkerProcess> workers)
     {
-        foreach (Process worker in workers)
+        foreach (SuspensionWorkerProcess worker in workers)
         {
+            Process process = worker.Process;
             try
             {
-                if (!worker.HasExited)
+                if (!process.HasExited)
                 {
-                    await worker.StandardInput.WriteLineAsync("STOP");
-                    await worker.StandardInput.FlushAsync();
+                    await process.StandardInput.WriteLineAsync("STOP");
+                    await process.StandardInput.FlushAsync();
                 }
             }
             catch
@@ -895,28 +905,82 @@ internal static class SuspensionQualification
             }
         }
 
-        foreach (Process worker in workers)
+        foreach (SuspensionWorkerProcess worker in workers)
         {
+            Process process = worker.Process;
             try
             {
-                if (!worker.HasExited)
+                if (!process.HasExited)
                 {
                     using var timeout = new CancellationTokenSource(ChildExitTimeout);
-                    await worker.WaitForExitAsync(timeout.Token);
+                    await process.WaitForExitAsync(timeout.Token);
                 }
             }
             catch
             {
-                if (!worker.HasExited)
+                if (!process.HasExited)
                 {
-                    worker.Kill(entireProcessTree: true);
+                    process.Kill(entireProcessTree: true);
                 }
             }
             finally
             {
-                worker.Dispose();
+                try
+                {
+                    _ = await worker.StandardError.WaitAsync(ChildExitTimeout);
+                }
+                catch
+                {
+                }
+
+                process.Dispose();
             }
         }
+    }
+
+    private static async Task<string> DescribeWorkerExit(
+        SuspensionWorkerProcess worker,
+        string phase)
+    {
+        Process process = worker.Process;
+        try
+        {
+            if (!process.HasExited)
+            {
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+        }
+        catch
+        {
+        }
+
+        string exitCode = process.HasExited
+            ? process.ExitCode.ToString(CultureInfo.InvariantCulture)
+            : "not-exited";
+        string standardError;
+        try
+        {
+            standardError = (await worker.StandardError.WaitAsync(TimeSpan.FromSeconds(5))).Trim();
+        }
+        catch (Exception exception)
+        {
+            standardError = "unavailable:" + exception.GetType().Name + ":" + exception.Message;
+        }
+
+        const int maximumDiagnosticCharacters = 4096;
+        if (standardError.Length > maximumDiagnosticCharacters)
+        {
+            standardError = standardError[^maximumDiagnosticCharacters..];
+        }
+
+        if (standardError.Length == 0)
+        {
+            standardError = "<empty>";
+        }
+
+        return $"Suspension worker role={worker.Role} workerId={worker.WorkerId} "
+            + $"pid={process.Id} exited {phase}; "
+            + $"exitCode={exitCode}; stderr={standardError}.";
     }
 
     private static Process StartPausedAgent(
@@ -1364,6 +1428,12 @@ internal static class SuspensionQualification
 
         internal SortedDictionary<string, long> ToHistogram() => _statusCounters.ToHistogram();
     }
+
+    private sealed record SuspensionWorkerProcess(
+        Process Process,
+        Task<string> StandardError,
+        string Role,
+        int WorkerId);
 }
 
 internal sealed record SuspensionWorkload(string Name, int ReaderCount, int WriterCount)
