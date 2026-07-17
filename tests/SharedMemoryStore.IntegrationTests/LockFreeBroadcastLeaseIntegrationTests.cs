@@ -233,7 +233,7 @@ public sealed class LockFreeBroadcastLeaseIntegrationTests
 
     private static MemoryStore CreateStore(string name)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,
@@ -250,7 +250,7 @@ public sealed class LockFreeBroadcastLeaseIntegrationTests
 
     private static MemoryStore OpenStore(string name)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,

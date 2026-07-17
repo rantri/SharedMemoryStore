@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
-#include <iomanip>
-#include <sstream>
+#include <limits>
+#include <utility>
 
 #if defined(_WIN32)
 #  ifndef NOMINMAX
@@ -16,47 +16,58 @@
 #endif
 
 namespace sms::detail {
+
+bool checked_add_nonnegative(
+    std::int64_t left,
+    std::int64_t right,
+    std::int64_t& result) noexcept {
+    if (left < 0 || right < 0 ||
+        left > std::numeric_limits<std::int64_t>::max() - right) {
+        return false;
+    }
+    result = left + right;
+    return true;
+}
+
+bool checked_multiply_nonnegative(
+    std::int64_t left,
+    std::int64_t right,
+    std::int64_t& result) noexcept {
+    if (left < 0 || right < 0 ||
+        (left != 0 && right > std::numeric_limits<std::int64_t>::max() / left)) {
+        return false;
+    }
+    result = left * right;
+    return true;
+}
+
+bool checked_align_up_nonnegative(
+    std::int64_t value,
+    std::int64_t alignment_value,
+    std::int64_t& result) noexcept {
+    if (alignment_value <= 0 ||
+        (alignment_value & (alignment_value - 1)) != 0) {
+        return false;
+    }
+    std::int64_t expanded{};
+    if (!checked_add_nonnegative(value, alignment_value - 1, expanded)) {
+        return false;
+    }
+    result = expanded & ~(alignment_value - 1);
+    return true;
+}
+
+bool exact_bytes_equal(
+    std::span<const std::uint8_t> left,
+    std::span<const std::uint8_t> right) noexcept {
+    return left.size() == right.size() &&
+        std::equal(left.begin(), left.end(), right.begin());
+}
+
 namespace {
 
 constexpr std::uint64_t fnv_offset = 14695981039346656037ULL;
 constexpr std::uint64_t fnv_prime = 1099511628211ULL;
-
-bool checked_add(std::int64_t a, std::int64_t b, std::int64_t& result) noexcept {
-    if (a < 0 || b < 0 || a > std::numeric_limits<std::int64_t>::max() - b) {
-        return false;
-    }
-    result = a + b;
-    return true;
-}
-
-bool checked_mul(std::int64_t a, std::int64_t b, std::int64_t& result) noexcept {
-    if (a < 0 || b < 0 || (a != 0 && b > std::numeric_limits<std::int64_t>::max() / a)) {
-        return false;
-    }
-    result = a * b;
-    return true;
-}
-
-bool align8(std::int64_t value, std::int64_t& result) noexcept {
-    std::int64_t expanded{};
-    if (!checked_add(value, alignment - 1, expanded)) {
-        return false;
-    }
-    result = expanded & ~static_cast<std::int64_t>(alignment - 1);
-    return true;
-}
-
-bool next_power_of_two(std::int64_t value, std::int32_t& result) noexcept {
-    if (value <= 0 || value > (1LL << 30)) {
-        return false;
-    }
-    std::int32_t current = 1;
-    while (current < value) {
-        current <<= 1;
-    }
-    result = current;
-    return true;
-}
 
 bool next_utf8(std::string_view text, std::size_t& index, std::uint32_t& cp) noexcept {
     if (index >= text.size()) {
@@ -103,12 +114,14 @@ bool next_utf8(std::string_view text, std::size_t& index, std::uint32_t& cp) noe
 }
 
 std::string lowercase_hex(std::span<const std::uint8_t> bytes) {
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
+    constexpr char digits[] = "0123456789abcdef";
+    std::string output;
+    output.reserve(bytes.size() * 2);
     for (auto byte : bytes) {
-        output << std::setw(2) << static_cast<unsigned>(byte);
+        output.push_back(digits[byte >> 4]);
+        output.push_back(digits[byte & 0x0f]);
     }
-    return output.str();
+    return output;
 }
 
 constexpr std::array<std::uint32_t, 64> sha_k{
@@ -127,7 +140,7 @@ constexpr std::uint32_t rotr(std::uint32_t value, int bits) noexcept {
 }
 
 #if defined(_WIN32)
-bool utf8_to_wide(std::string_view value, std::wstring& result) noexcept {
+bool utf8_to_wide(std::string_view value, std::wstring& result) {
     if (value.empty()) {
         result.clear();
         return true;
@@ -156,85 +169,6 @@ bool starts_global(const std::wstring& value) noexcept {
 
 } // namespace
 
-bool Layout::calculate(std::int64_t total, std::int32_t slots, std::int32_t max_value,
-                       std::int32_t max_descriptor, std::int32_t max_key,
-                       std::int32_t leases, Layout& result) noexcept {
-    if (slots <= 0 || max_value <= 0 || max_descriptor < 0 || max_key <= 0 || leases <= 0) {
-        return false;
-    }
-    Layout value{};
-    value.total_bytes = total;
-    value.slot_count = slots;
-    value.lease_record_count = leases;
-    value.max_value_bytes = max_value;
-    value.max_descriptor_bytes = max_descriptor;
-    value.max_key_bytes = max_key;
-
-    std::int64_t temp{};
-    if (!align8(sizeof(StoreHeader), temp) || temp > std::numeric_limits<std::int32_t>::max()) return false;
-    value.header_length = static_cast<std::int32_t>(temp);
-    if (!next_power_of_two(std::max<std::int64_t>(4, static_cast<std::int64_t>(slots) * 2), value.index_entry_count)) return false;
-    if (!checked_add(sizeof(IndexEntryHeader), max_key, temp) || !align8(temp, temp) ||
-        temp > std::numeric_limits<std::int32_t>::max()) return false;
-    value.index_entry_size = static_cast<std::int32_t>(temp);
-    value.index_offset = value.header_length;
-    if (!checked_mul(value.index_entry_count, value.index_entry_size, value.index_length) ||
-        !checked_add(value.index_offset, value.index_length, temp) || !align8(temp, value.lease_registry_offset) ||
-        !checked_mul(leases, sizeof(LeaseRecord), value.lease_registry_length) ||
-        !checked_add(value.lease_registry_offset, value.lease_registry_length, temp) || !align8(temp, value.slot_metadata_offset) ||
-        !checked_mul(slots, sizeof(SlotMetadata), value.slot_metadata_length) ||
-        !align8(std::max<std::int64_t>(1, max_descriptor), temp) || temp > std::numeric_limits<std::int32_t>::max()) return false;
-    value.descriptor_stride = static_cast<std::int32_t>(temp);
-    if (!checked_add(value.slot_metadata_offset, value.slot_metadata_length, temp) || !align8(temp, value.descriptor_storage_offset) ||
-        !checked_mul(slots, value.descriptor_stride, value.descriptor_storage_length) ||
-        !align8(std::max<std::int64_t>(1, max_value), temp) || temp > std::numeric_limits<std::int32_t>::max()) return false;
-    value.payload_stride = static_cast<std::int32_t>(temp);
-    if (!checked_add(value.descriptor_storage_offset, value.descriptor_storage_length, temp) || !align8(temp, value.payload_storage_offset) ||
-        !checked_mul(slots, value.payload_stride, value.payload_storage_length) ||
-        !checked_add(value.payload_storage_offset, value.payload_storage_length, temp) || !align8(temp, value.required_bytes)) return false;
-    result = value;
-    return true;
-}
-
-bool Layout::matches(const StoreHeader& h) const noexcept {
-    return h.HeaderLength == header_length && h.TotalBytes == total_bytes && h.SlotCount == slot_count &&
-        h.LeaseRecordCount == lease_record_count && h.MaxKeyBytes == max_key_bytes &&
-        h.MaxDescriptorBytes == max_descriptor_bytes && h.MaxValueBytes == max_value_bytes &&
-        h.IndexEntryCount == index_entry_count && h.IndexEntrySize == index_entry_size &&
-        h.IndexOffset == index_offset && h.IndexLength == index_length &&
-        h.LeaseRegistryOffset == lease_registry_offset && h.LeaseRegistryLength == lease_registry_length &&
-        h.SlotMetadataOffset == slot_metadata_offset && h.SlotMetadataLength == slot_metadata_length &&
-        h.DescriptorStorageOffset == descriptor_storage_offset && h.DescriptorStorageLength == descriptor_storage_length &&
-        h.PayloadStorageOffset == payload_storage_offset && h.PayloadStorageLength == payload_storage_length;
-}
-
-bool Layout::bounds_valid(const StoreHeader& h) const noexcept {
-    auto within = [&](std::int64_t offset, std::int64_t length, std::int64_t minimum) {
-        std::int64_t end{};
-        return offset >= minimum && checked_add(offset, length, end) && end <= h.TotalBytes;
-    };
-    std::int64_t index_end{}, lease_end{}, slot_end{}, descriptor_end{};
-    return within(h.IndexOffset, h.IndexLength, h.HeaderLength) &&
-        checked_add(h.IndexOffset, h.IndexLength, index_end) &&
-        within(h.LeaseRegistryOffset, h.LeaseRegistryLength, index_end) &&
-        checked_add(h.LeaseRegistryOffset, h.LeaseRegistryLength, lease_end) &&
-        within(h.SlotMetadataOffset, h.SlotMetadataLength, lease_end) &&
-        checked_add(h.SlotMetadataOffset, h.SlotMetadataLength, slot_end) &&
-        within(h.DescriptorStorageOffset, h.DescriptorStorageLength, slot_end) &&
-        checked_add(h.DescriptorStorageOffset, h.DescriptorStorageLength, descriptor_end) &&
-        within(h.PayloadStorageOffset, h.PayloadStorageLength, descriptor_end);
-}
-
-bool LifecycleId::advance(LifecycleId& next) const noexcept {
-    if (generation == std::numeric_limits<std::int32_t>::max()) {
-        if (reuse_epoch == std::numeric_limits<std::int64_t>::max()) return false;
-        next = {1, reuse_epoch + 1};
-    } else {
-        next = {generation + 1, reuse_epoch};
-    }
-    return true;
-}
-
 std::uint64_t hash_key(std::span<const std::uint8_t> key) noexcept {
     auto hash = fnv_offset;
     for (auto byte : key) {
@@ -244,7 +178,7 @@ std::uint64_t hash_key(std::span<const std::uint8_t> key) noexcept {
     return hash;
 }
 
-std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> input) noexcept {
+std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> input) {
     std::array<std::uint32_t, 8> state{0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
                                       0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
     const auto total = input.size() + 1 + 8;
@@ -324,7 +258,7 @@ bool utf8_whitespace_only(std::string_view value) noexcept {
     return true;
 }
 
-bool make_resource_name(std::string_view name, ResourceName& result) noexcept {
+bool make_resource_name(std::string_view name, ResourceName& result) {
     if (!valid_utf8(name)) return false;
     std::string readable;
     readable.reserve(name.size());

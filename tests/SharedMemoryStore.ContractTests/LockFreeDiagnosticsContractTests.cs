@@ -1,7 +1,6 @@
 using System.Reflection;
 using SharedMemoryStore.Diagnostics;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 
@@ -10,10 +9,10 @@ namespace SharedMemoryStore.ContractTests;
 public sealed class LockFreeDiagnosticsContractTests
 {
     [Fact]
-    public void SnapshotSurfaceAddsV2PressureAndRecoverySignalsWithoutRemovingLegacyMembers()
+    public void SnapshotSurfaceExposesCanonicalPressureAndRecoverySignals()
     {
         Type snapshot = typeof(DiagnosticsSnapshot);
-        string[] legacyProperties =
+        string[] coreProperties =
         [
             nameof(DiagnosticsSnapshot.TotalBytes),
             nameof(DiagnosticsSnapshot.SlotCount),
@@ -22,13 +21,10 @@ public sealed class LockFreeDiagnosticsContractTests
             nameof(DiagnosticsSnapshot.PendingRemovalCount),
             nameof(DiagnosticsSnapshot.ActiveLeaseCount),
             nameof(DiagnosticsSnapshot.ActiveReservationCount),
-            nameof(DiagnosticsSnapshot.IndexEntryCount),
-            nameof(DiagnosticsSnapshot.TombstoneIndexEntryCount),
             nameof(DiagnosticsSnapshot.LastFailureStatus)
         ];
         string[] v2Properties =
         [
-            "Profile",
             "ProtocolInfo",
             "InitializingSlotCount",
             "ReservedSlotCount",
@@ -67,9 +63,12 @@ public sealed class LockFreeDiagnosticsContractTests
             "ChangingOwnerClassificationCount"
         ];
 
-        Assert.All(legacyProperties, name => AssertReadableProperty(snapshot, name));
+        Assert.All(coreProperties, name => AssertReadableProperty(snapshot, name));
         Assert.All(v2Properties, name => AssertReadableProperty(snapshot, name));
-        Assert.Equal(typeof(StoreProfile), snapshot.GetProperty("Profile")!.PropertyType);
+        Assert.Null(snapshot.GetProperty("Profile"));
+        Assert.Null(snapshot.GetProperty("TombstoneIndexEntryCount"));
+        Assert.Null(snapshot.GetProperty("TombstonePressureRatio"));
+        Assert.Null(snapshot.GetProperty("IndexCompactionCount"));
         Assert.Equal(typeof(StoreProtocolInfo), snapshot.GetProperty("ProtocolInfo")!.PropertyType);
         Assert.Equal(typeof(bool), snapshot.GetProperty("IsParticipantTableExhausted")!.PropertyType);
     }
@@ -106,7 +105,6 @@ public sealed class LockFreeDiagnosticsContractTests
 
         DiagnosticsSnapshot snapshot = diagnostics.CreateSnapshot();
 
-        Assert.Equal(StoreProfile.LockFree, snapshot.Profile);
         Assert.Equal(first.ProtocolInfo, snapshot.ProtocolInfo);
         Assert.Equal(slotCount, snapshot.SlotCount);
         Assert.Equal(slotCount, snapshot.PublishedSlotCount);
@@ -214,28 +212,7 @@ public sealed class LockFreeDiagnosticsContractTests
     }
 
     [Fact]
-    public void LegacySnapshotRetainsExistingValuesAndMarksV2OnlySignalsNotApplicable()
-    {
-        using MemoryStore store = ContractStoreFactory.Create(
-            ContractStoreFactory.Options(slotCount: 2));
-        Assert.Equal(StoreStatus.Success, store.TryPublish([1], [1]));
-
-        DiagnosticsSnapshot snapshot = store.GetDiagnostics();
-
-        Assert.Equal(StoreProfile.Legacy, snapshot.Profile);
-        Assert.Equal(new StoreProtocolInfo(StoreProfile.Legacy, 1, 2, 1, 0, 0), snapshot.ProtocolInfo);
-        Assert.Equal(1, snapshot.PublishedSlotCount);
-        Assert.Equal(0, snapshot.PrimaryDirectoryOccupancy);
-        Assert.Equal(0, snapshot.SpilledBucketCount);
-        Assert.Equal(0, snapshot.OverflowDirectoryOccupancy);
-        Assert.Equal(0, snapshot.ParticipantRecordCount);
-        Assert.False(snapshot.IsParticipantTableExhausted);
-        Assert.Equal(0, snapshot.CasRetryCount);
-        Assert.Equal(0, snapshot.HelpedTransitionCount);
-    }
-
-    [Fact]
-    public void PublicLockFreeDiagnosticsExposeTheOpenedProfileAndCurrentOccupancy()
+    public void PublicDiagnosticsExposeTheProtocolIdentityAndCurrentOccupancy()
     {
         SharedMemoryStoreOptions options = Options(
             $"sms-v2-diagnostics-public-{Guid.NewGuid():N}",
@@ -248,7 +225,7 @@ public sealed class LockFreeDiagnosticsContractTests
         StoreStatus status = store.TryGetDiagnostics(out DiagnosticsSnapshot snapshot);
 
         Assert.Equal(StoreStatus.Success, status);
-        Assert.Equal(StoreProfile.LockFree, snapshot.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), snapshot.ProtocolInfo);
         Assert.Equal(store.ProtocolInfo, snapshot.ProtocolInfo);
         Assert.Equal(1, snapshot.PublishedSlotCount);
         Assert.Equal(1, snapshot.ActiveParticipantCount);
@@ -293,7 +270,7 @@ public sealed class LockFreeDiagnosticsContractTests
         OpenMode mode,
         int slotCount,
         int participantCount) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 8,

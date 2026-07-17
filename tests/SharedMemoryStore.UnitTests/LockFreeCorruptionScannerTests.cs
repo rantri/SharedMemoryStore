@@ -222,7 +222,7 @@ public sealed unsafe class LockFreeCorruptionScannerTests
 
     private static MemoryStore Open(string purpose)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-corruption-{purpose}-{Guid.NewGuid():N}",
             slotCount: 4,
             maxValueBytes: 8,

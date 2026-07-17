@@ -403,7 +403,7 @@ public sealed class LockFreeDirectoryCleanupCorruptionTests
 
     private static MemoryStore CreateStore(out EngineInternals internals)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-cleanup-corruption-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,
@@ -447,7 +447,7 @@ public sealed class LockFreeDirectoryCleanupCorruptionTests
     }
 
     private static SharedMemoryStoreOptions Options(string name) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 2,
             maxValueBytes: 16,

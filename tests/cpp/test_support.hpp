@@ -12,7 +12,9 @@
 #include <string_view>
 
 #if defined(_WIN32)
-#  define NOMINMAX
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <unistd.h>
@@ -48,5 +50,6 @@ inline shared_memory_store::store_options sms_test_options(std::string suffix, s
                                                             std::int32_t leases = 8) {
     return shared_memory_store::store_options::create(
         sms_test_name(suffix), slots, 128, 32, 32, leases,
+        64,
         shared_memory_store::open_mode::create_new, true);
 }

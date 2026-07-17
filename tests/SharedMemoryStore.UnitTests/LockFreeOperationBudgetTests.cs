@@ -1,7 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Reflection;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using System.Runtime.InteropServices;
@@ -70,7 +69,7 @@ public sealed class LockFreeOperationBudgetTests
         Assert.Equal(
             StoreStatus.Success,
             LockFreeByteOperations.TryHash(belowQuantum, infinite, out ulong hash));
-        Assert.Equal(SharedMemoryStore.Layout.StoreKey.Hash(belowQuantum), hash);
+        Assert.Equal(SharedMemoryStore.LockFree.StoreKey.Hash(belowQuantum), hash);
         Assert.Equal(
             StoreStatus.StoreBusy,
             LockFreeByteOperations.TryHash(fullQuantum, noWait, out _));
@@ -105,7 +104,7 @@ public sealed class LockFreeOperationBudgetTests
         }
 
         byte[] key = Enumerable.Repeat((byte)0x5A, 4_096).ToArray();
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-key-budget-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 1,
@@ -156,7 +155,7 @@ public sealed class LockFreeOperationBudgetTests
             .Select(index => new[] { checked((byte)index) })
             .ToArray();
         ReadOnlySequence<byte> payload = Sequence(buffers);
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-segment-budget-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 65,
@@ -485,7 +484,7 @@ public sealed class LockFreeOperationBudgetTests
         int maxValueBytes,
         InstrumentedLockFreeCheckpoint checkpoint)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-advance-budget-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes,

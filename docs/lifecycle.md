@@ -1,180 +1,145 @@
 # Lifecycle
 
-SharedMemoryStore owns one handle to a named memory-mapped region. The public
-API lifecycle is defined by
-[public-api.md](../specs/001-frame-memory-store/contracts/public-api.md), status
-outcomes are defined by
-[error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md),
-shared layout state is defined by
-[shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md),
-owner recovery is defined by
-[owner-recovery-contract.md](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md),
-and disposal/rollover behavior is defined by
-[disposal-rollover-contract.md](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md).
+SharedMemoryStore exposes one SMS2 lifecycle in C#, C++, and Python. The
+normative ownership, token, recovery, and close rules are defined by the
+[public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+and
+[protocol conformance contract](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md).
 
-## Roles
+## Open and Participant Ownership
 
-- Store owner: creates or opens the mapping, chooses capacity limits, enables or
-  disables explicit lease recovery, and disposes the handle.
-- Producer: publishes immutable payload bytes and optional descriptor bytes
-  under an opaque byte key through `TryPublish`, `TryReserve`, or
-  `TryPublishSegments`.
-- Reader: acquires a `ValueLease`, reads descriptor and value spans, and
-  releases or disposes the lease exactly once.
-- Maintainer: updates contracts, docs, samples, tests, and release notes when
-  lifecycle behavior changes.
+Create/open is a cold lifecycle operation. It derives the canonical resources,
+creates or opens the mapping, validates every layout dimension before payload
+projection, and claims one participant record. A handle does not escape until
+its exact participant incarnation is Active.
 
-## Store Handle
+Only operating-system creation evidence authorizes initialization. An existing
+zeroed, malformed, or retired mapping is never treated as a new store.
+Participant capacity exhaustion returns `ParticipantTableFull` without
+stealing a live record.
 
-`MemoryStore` is a disposable process-local handle. Disposing one handle does
-not make another process-local handle disappear, but the disposed handle must no
-longer be used. Operations after disposal return `StoreDisposed` or token-level
-invalid outcomes instead of exposing internal disposal exceptions.
+After attachment, data operations use mapped atomics and bounded helping. They
+do not enter the platform lifecycle lock or a store-wide operation lock.
 
-## Published Value
+## Published Values
 
-A published value is immutable. Removing an unleased value reclaims its slot
-immediately. Removing a leased value returns `RemovePending`; the slot remains
-protected until the final active lease releases, then storage becomes reusable.
+A successful publication makes one immutable descriptor and payload visible
+under an opaque binary key. Readers validate the directory binding, slot
+generation, participant incarnation, lengths, and publication state before
+returning a borrowed view.
+
+Removing an unleased value logically unlinks and reclaims it. Removing a value
+with active readers returns `RemovePending`; its slot cannot be reused until
+the final exact lease releases and reclamation completes.
 
 ## Lease Ownership
 
-A lease protects one slot generation and reuse epoch. Holding the lease prevents
-the removed slot from being reused for another value. The lease spans are valid
-only while the lease is active and the store handle remains open.
+A lease protects one slot generation and is owned by one exact participant and
+lease-record incarnation. Its descriptor and value views remain valid only
+while both the lease and store handle are open.
 
-Call `Release()` when the return status matters. `Dispose()` is useful for
-best-effort cleanup paths where the caller does not need the release status.
-Repeated release returns deterministic statuses.
+Call `Release()` when the status matters. Dispose/context-manager cleanup is
+the best-effort language adapter. Reusing a released, stale, or foreign token
+returns a deterministic non-success status and must not mutate a newer record.
 
 ## Reservation Ownership
 
-A reservation owns one slot generation while its state is pending publication.
-During that period the key is present for duplicate detection, but `TryAcquire`
-returns `NotFound`. The producer may write only into the remaining payload
-region returned by `GetSpan()` or, for trusted direct-I/O adapters,
-`DangerousGetMemory()`, and must call `Advance()` with the exact number of bytes
-written.
+A reservation owns an initializing slot generation while the producer fills
+store-owned memory. The key participates in duplicate detection, but readers
+cannot acquire the value before commit.
 
-`Commit()` publishes the value only when progress equals the announced payload
-length. `Abort()` removes the pending key before reclaiming the slot. Disposing
-an active reservation aborts it; completing a reservation more than once returns
-deterministic statuses. The memory lifetime rules are covered by
-[reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md).
+The producer writes only through the current writable view, records exact
+progress, and commits only after the announced length is complete. `Abort()`
+unlinks the tentative key before reclamation. Commit, abort, recovery, or store
+close invalidates the writable view and all derived views.
 
-## Reader and Producer Rules
+Segmented publication copies caller segments into one ordinary contiguous SMS2
+payload before release-publishing it.
 
-Readers:
+## Wait and Cancellation
 
-- treat descriptor and payload spans as read-only and short-lived.
-- release or dispose every successful `ValueLease`.
-- do not retain spans after release or store disposal.
+One operation-wide policy bounds retry, stable revalidation, helping, scans,
+and backoff. A finite deadline or cancellation is observed throughout the
+operation. `NoWait` permits only the immediate protocol attempt; `Infinite`
+means the caller accepts unbounded retries.
 
-Producers:
-
-- choose byte keys deterministically.
-- publish only payloads and descriptors within configured maxima.
-- commit, abort, dispose, or recover every reservation.
-- handle `DuplicateKey`, `StoreFull`, `StoreBusy`, and cancellation outcomes
-  through caller-owned policy.
+`StoreBusy` is an individual operation's bounded-contention outcome. It does
+not mean a hot-path global lock is owned. `OperationCanceled` means the caller's
+cancellation won before a terminal result.
 
 ## Explicit Recovery
 
-`TryRecoverLeases` is owner controlled. When `RecoverCurrentProcessLeases` is
-`true`, the store may recover current-process leases and stale-owner leases. It
-must still skip leases owned by another live process. Before selecting true, the
-caller must quiesce all current-process lease acquisition, projection,
-borrowed-span use, and release across every handle attached to the mapping and
-keep that activity quiescent until recovery returns. This is an administrative
-test/controlled-shutdown precondition; no hot-path gate enforces it. False is the
-normal mode and remains safe during concurrent lease activity. Reports include
-scanned, recovered, active, unsupported, and failed counts.
+Recovery is caller-triggered and conservative. It classifies the owner using
+the complete participant identity and platform evidence, then revalidates the
+same raw control word before attempting an exact compare/exchange.
 
-`TryRecoverReservations` scans pending reservations, evaluates producer liveness
-where supported, removes pending index entries, and reclaims slots without
-exposing payload bytes. Current-process reservation recovery is for tests and
-controlled shutdown paths.
+- live, changing, unsupported, or inconsistent ownership is retained;
+- a stable stale owner may be reclaimed according to configured policy; and
+- a reused PID alone never authorizes recovery.
 
-Recovery is not automatic and is not a replacement for ordinary release, abort,
-and dispose paths.
+Lease recovery releases eligible stale lease records and may finish pending
+removal. Reservation recovery unlinks eligible unpublished keys and reclaims
+their slots without exposing bytes. Reports separate recovered, active,
+unsupported, and failed observations.
 
-## Abnormal Termination
+Current-process recovery is an administrative/test operation. The application
+must quiesce relevant borrowed views and token operations itself before opting
+into it. Recovery is not a substitute for ordinary release, abort, and close.
 
-If a process terminates while holding a lease, the shared lease record can
-remain active until an owner explicitly runs recovery. Platforms without
-reliable owner-liveness checks report unsupported counts rather than unsafe
-cleanup.
+## Abnormal Termination and Helping
 
-Linux, Windows, and supported same-host Docker profiles use the same recovery
-categories. Docker deployments that hide process liveness must be treated as
-unsupported or unsafe for recovery rather than reclaiming storage aggressively.
+A terminated participant may leave slot, lease, directory, or participant
+transitions in progress. Later participants can help only transitions whose
+published descriptor and exact identity satisfy the protocol. Persistent
+impossible shared state may be latched as `CorruptStore` only after the required
+stable revalidation; caller errors, capacity, cancellation, and legal races do
+not corrupt the store.
 
-If a process terminates while holding a reservation, the pending key remains
-invisible to readers and occupies capacity until an owner aborts or recovers it.
+Where owner evidence is unavailable or ambiguous, recovery reports unsupported
+or retains the record. It does not guess that the owner is dead.
 
-If a process terminates while publishing or reclaiming, later operations
-validate shared state before exposing payload spans. Impossible transitions move
-the store toward safe error outcomes such as `CorruptStore`.
+## Close
 
-## Cleanup Responsibilities
+Closing a handle rejects new local operations, drains operations already
+entered through that handle, publishes Closing for its exact participant,
+cleans or hands off its owned records, and retires the participant only after
+exact-reference scans permit it. Borrowed views and tokens must not be used
+after their wrapper closes.
 
-- Dispose every store handle.
-- Release or dispose every successful `ValueLease`.
-- Commit, abort, dispose, or recover every pending `ValueReservation`.
-- Avoid retaining span references after release, abort, commit, recovery, or
-  store disposal.
-- Avoid retaining `DangerousGetMemory()` results beyond the direct I/O operation
-  that is filling the active reservation.
-- Record diagnostics before disposal when troubleshooting a failure.
-- Use `TryRecoverLeases` and `TryRecoverReservations` only when owner policy
-  permits recovery.
+Closing one handle does not close another participant. After the final live
+handle closes, platform lifecycle cleanup may retire mapping and owner
+artifacts according to resource protocol 2. Applications should still use
+stable deployment names and should not manipulate protocol-owned files or
+named resources directly.
 
-Linux removes region, synchronization, and owner metadata after the final live
-handle closes. A zero-length per-name lifecycle lock file may remain so a later
-opener cannot race a different lock inode; applications should use stable store
-names rather than generating an unbounded sequence of one-time names.
+At the native C boundary, `sms_close_store` is the thread-safe, idempotent
+logical close. After every thread has stopped using the opaque pointer,
+`sms_destroy_store` releases the handle allocation. The C++ and Python
+wrappers perform this second, caller-synchronized step automatically after
+their local operation drain.
 
-Each current managed Linux handle also holds a private per-owner `flock`
-liveness anchor while its mapped view exists. Lifecycle cleanup treats a locked
-anchor as live even when the owner's PID is hidden by a container PID namespace,
-and treats an unlocked anchor as stale. Missing anchors use the existing
-PID/start-token check so C++, Python, and older managed participants remain
-compatible. Close unmaps before releasing the anchor; process termination
-releases it automatically. These files and checks are cold lifecycle metadata
-and are not entered by publish, acquire, release, or remove.
+## Generations and Incarnations
 
-After a lifecycle operation atomically commits the replacement owner sidecar,
-it may repair an orphan left by a crash between anchor creation and owner-line
-publication. The repair considers only the exact store's canonical
-`.owners.anchor.<32-lowercase-hex-guid>` names that are not referenced by the
-committed sidecar. It opens each candidate separately with symbolic-link
-following disabled, verifies a regular file, and deletes it only while holding
-a successfully acquired nonblocking exclusive `flock`. Referenced, locked,
-ambiguous, non-regular, symbolic-link, directory, malformed, or access-error
-artifacts are retained. Final-handle cleanup does not use a broad anchor glob.
+Slots, leases, participants, directory operations, and their public tokens use
+generation/incarnation identity. A transition compares the complete encoded
+identity before exposing memory, helping, releasing, or reclaiming. Terminal
+generations retire instead of wrapping to a previously valid identity.
 
-If bounded close cannot commit exact owner-line removal, a finalized release
-marker lets it safely release the local anchor after unmapping. The owner line,
-anchor pathname, or both may remain until a later lifecycle operation reconciles
-the marker and performs the same post-commit conservative sweep.
+## Application Responsibilities
 
-## Long-Running Identity
-
-Reusable slots carry generation and reuse-epoch identity. Index entries, lease
-records, lease tokens, and reservation tokens compare the full identity before
-exposing memory or reclaiming storage. When a generation reaches its integer
-boundary, generation returns to `1` and the reuse epoch advances, so old tokens
-do not become valid again after long-running reuse cycles.
+- Close every store handle.
+- Release or close every successful lease.
+- Commit, abort, close, or explicitly recover every reservation.
+- Do not retain borrowed C# spans, C++ spans, Python memoryviews, or derived
+  views past token completion or handle close.
+- Treat recovery as an owner-policy decision and preserve conservative
+  behavior when liveness evidence is unavailable.
+- Drain and close every runtime before replacing a deployment mapping.
 
 ## Related Samples
 
-- [samples/BasicUsage/README.md](../samples/BasicUsage/README.md): ordinary
-  publish, acquire, release, remove, reuse, and dispose.
-- [samples/FrameValue/README.md](../samples/FrameValue/README.md): multiple
-  readers and `RemovePending`.
-- [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md):
-  reservation commit, abort, and reader visibility.
-- [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md):
-  startup, diagnostics, explicit recovery, and shutdown cleanup.
-- [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md):
-  same-host container sharing, diagnostics, and recovery validation.
+- [Basic usage](../samples/BasicUsage/README.md)
+- [Frame value](../samples/FrameValue/README.md)
+- [Zero-copy ingest](../samples/ZeroCopyIngest/README.md)
+- [Hosted integration](../samples/HostedServiceIntegration/README.md)
+- [Docker shared memory](../samples/DockerSharedMemory/README.md)

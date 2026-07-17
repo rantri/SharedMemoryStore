@@ -49,7 +49,10 @@ $requiredSampleReadmes = @(
     "samples/FrameValue/README.md",
     "samples/ZeroCopyIngest/README.md",
     "samples/HostedServiceIntegration/README.md",
-    "samples/DockerSharedMemory/README.md"
+    "samples/DockerSharedMemory/README.md",
+    "samples/LockFreeBrokerKeys/README.md",
+    "samples/CppBasicUsage/README.md",
+    "samples/PythonBasicUsage/README.md"
 )
 
 $sampleSourceFiles = @(
@@ -59,35 +62,26 @@ $sampleSourceFiles = @(
     "samples/FrameValue/FrameDescriptor.cs",
     "samples/ZeroCopyIngest/Program.cs",
     "samples/HostedServiceIntegration/Program.cs",
-    "samples/DockerSharedMemory/Program.cs"
+    "samples/DockerSharedMemory/Program.cs",
+    "samples/LockFreeBrokerKeys/Program.cs",
+    "samples/CppBasicUsage/main.cpp",
+    "samples/PythonBasicUsage/main.py"
 )
 
 $contractFiles = @(
-    "specs/001-frame-memory-store/contracts/public-api.md",
-    "specs/001-frame-memory-store/contracts/error-taxonomy.md",
-    "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-    "specs/003-zero-copy-ingest/contracts/reservation-api.md",
-    "specs/003-zero-copy-ingest/contracts/ingest-layout.md",
-    "specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md",
-    "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
-    "specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md",
-    "specs/004-store-reliability-hardening/contracts/index-health-contract.md",
-    "specs/005-api-production-readiness/contracts/public-api-contract.md",
-    "specs/005-api-production-readiness/contracts/contention-configuration-contract.md",
-    "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md",
-    "specs/005-api-production-readiness/contracts/reservation-memory-contract.md",
-    "specs/006-improve-docs-samples/contracts/documentation-information-architecture.md",
-    "specs/006-improve-docs-samples/contracts/sample-contract.md",
-    "specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md",
-    "specs/006-improve-docs-samples/contracts/documentation-validation-contract.md"
+    "specs/010-lock-free-only-multilang/contracts/public-api.md",
+    "specs/010-lock-free-only-multilang/contracts/protocol-conformance.md",
+    "specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md",
+    "specs/010-lock-free-only-multilang/contracts/packaging-and-migration.md",
+    "protocol/README.md"
 )
 
 $featureTrackingFiles = @(
-    "specs/006-improve-docs-samples/documentation-inventory.md",
-    "specs/006-improve-docs-samples/documentation-coverage.md",
-    "specs/006-improve-docs-samples/sample-validation.md",
-    "specs/006-improve-docs-samples/public-reference-map.md",
-    "specs/006-improve-docs-samples/quickstart.md"
+    "specs/010-lock-free-only-multilang/spec.md",
+    "specs/010-lock-free-only-multilang/plan.md",
+    "specs/010-lock-free-only-multilang/tasks.md",
+    "specs/010-lock-free-only-multilang/quickstart.md",
+    "specs/010-lock-free-only-multilang/release-qualification.md"
 )
 
 $allRequiredFiles = $requiredRootFiles + $requiredGithubFiles + $requiredGuideFiles + $requiredSampleReadmes + $contractFiles + $featureTrackingFiles
@@ -264,7 +258,7 @@ function Assert-PackageMetadata {
     $expected = @{
         TargetFramework = "net10.0"
         PackageId = "SharedMemoryStore"
-        Version = "2.0.0"
+        Version = "3.0.0"
         Description = "A bounded named shared-memory key-value store for opaque binary values."
         PackageLicenseExpression = "MIT"
         PackageReadmeFile = "README.md"
@@ -288,8 +282,10 @@ function Assert-PackageMetadata {
     if ([string]::IsNullOrWhiteSpace($propertyGroup.PackageReleaseNotes)) {
         Add-Failure "PackageReleaseNotes must be populated."
     }
-    elseif ($propertyGroup.PackageReleaseNotes.IndexOf("Linux, Windows, and same-host Docker support", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-        Add-Failure "PackageReleaseNotes must mention Linux, Windows, and same-host Docker support."
+    elseif ($propertyGroup.PackageReleaseNotes.IndexOf("one lock-free mapped protocol", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+        $propertyGroup.PackageReleaseNotes.IndexOf("SMS2 layout 2.0", [System.StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+        $propertyGroup.PackageReleaseNotes.IndexOf("C ABI 2.0", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        Add-Failure "PackageReleaseNotes must identify the one SMS2 protocol and C ABI 2.0 release boundary."
     }
 
     if ($propertyGroup.IncludeSymbols -ne "true" -or $propertyGroup.SymbolPackageFormat -ne "snupkg") {
@@ -304,15 +300,15 @@ function Assert-PackageMetadata {
     }
 
     Assert-Contains "README.md" "SharedMemoryStore" "package README identity"
-    Assert-Contains "README.md" "2.0.0" "package version alignment"
+    Assert-Contains "README.md" "3.0.0" "package version alignment"
     Assert-Contains "README.md" "net10.0" "target framework alignment"
     Assert-Contains "README.md" "MIT" "license alignment"
     Assert-Contains "LICENSE" "MIT License" "license metadata alignment"
-    Assert-Contains "CHANGELOG.md" "same-host Docker" "platform support changelog alignment"
-    Assert-Contains "docs/releases.md" "Linux, Windows, and Docker Support Notes" "platform release review"
+    Assert-Contains "CHANGELOG.md" "SMS2" "single-protocol changelog alignment"
+    Assert-Contains "docs/releases.md" "Current release matrix" "current release review"
     Assert-Contains "docs/packaging.md" "PackageId" "package documentation notes"
     Assert-Contains "docs/packaging.md" "PackageReleaseNotes" "package release notes documentation"
-    Assert-Contains "docs/packaging.md" "Linux, Windows, and same-host Docker support" "package release notes alignment"
+    Assert-Contains "docs/packaging.md" "SMS2" "package release notes alignment"
 }
 
 function Assert-RequiredLinks {
@@ -339,6 +335,9 @@ function Assert-RequiredLinks {
         "samples/ZeroCopyIngest/README.md",
         "samples/HostedServiceIntegration/README.md",
         "samples/DockerSharedMemory/README.md",
+        "samples/LockFreeBrokerKeys/README.md",
+        "samples/CppBasicUsage/README.md",
+        "samples/PythonBasicUsage/README.md",
         "CONTRIBUTING.md",
         "SUPPORT.md",
         "SECURITY.md",
@@ -367,63 +366,23 @@ function Assert-RequiredLinks {
         Assert-Contains $sampleReadme "../../docs/samples.md" "sample README links to ladder"
     }
 
+    $publicApiContract = "specs/010-lock-free-only-multilang/contracts/public-api.md"
+    $protocolContract = "specs/010-lock-free-only-multilang/contracts/protocol-conformance.md"
+    $interopContract = "specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md"
+    $packagingContract = "specs/010-lock-free-only-multilang/contracts/packaging-and-migration.md"
     $contractCoverage = @{
-        "docs/concepts.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-            "specs/003-zero-copy-ingest/contracts/reservation-api.md"
-        )
-        "docs/byte-encoding.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md"
-        )
-        "docs/usage.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/003-zero-copy-ingest/contracts/reservation-api.md",
-            "specs/005-api-production-readiness/contracts/contention-configuration-contract.md"
-        )
-        "docs/examples.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-            "specs/003-zero-copy-ingest/contracts/reservation-api.md"
-        )
-        "docs/errors.md" = @(
-            "specs/001-frame-memory-store/contracts/error-taxonomy.md",
-            "specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md"
-        )
-        "docs/diagnostics.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/004-store-reliability-hardening/contracts/index-health-contract.md",
-            "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md"
-        )
-        "docs/lifecycle.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-            "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
-            "specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md"
-        )
-        "docs/integration.md" = @(
-            "specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md"
-        )
-        "docs/performance.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/004-store-reliability-hardening/contracts/index-health-contract.md"
-        )
-        "docs/portability.md" = @(
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-            "specs/003-zero-copy-ingest/contracts/ingest-layout.md"
-        )
-        "docs/architecture.md" = @(
-            "specs/001-frame-memory-store/contracts/shared-memory-layout.md",
-            "specs/003-zero-copy-ingest/contracts/ingest-layout.md",
-            "specs/004-store-reliability-hardening/contracts/index-health-contract.md"
-        )
-        "docs/maintainers.md" = @(
-            "specs/001-frame-memory-store/contracts/public-api.md",
-            "specs/003-zero-copy-ingest/contracts/reservation-api.md",
-            "specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md",
-            "specs/005-api-production-readiness/contracts/public-api-contract.md"
-        )
+        "docs/concepts.md" = @($publicApiContract, $protocolContract)
+        "docs/byte-encoding.md" = @($publicApiContract, $protocolContract)
+        "docs/usage.md" = @($publicApiContract, $protocolContract)
+        "docs/examples.md" = @($publicApiContract)
+        "docs/errors.md" = @($publicApiContract, $protocolContract)
+        "docs/diagnostics.md" = @($publicApiContract, $interopContract)
+        "docs/lifecycle.md" = @($publicApiContract, $protocolContract)
+        "docs/integration.md" = @($publicApiContract)
+        "docs/performance.md" = @($protocolContract)
+        "docs/portability.md" = @($protocolContract, $interopContract)
+        "docs/architecture.md" = @($publicApiContract, $protocolContract, $interopContract)
+        "docs/maintainers.md" = @($publicApiContract, $protocolContract, $interopContract, $packagingContract)
     }
 
     foreach ($doc in $contractCoverage.Keys) {
@@ -464,9 +423,20 @@ function Assert-SampleReadmeContracts {
             Assert-Contains $sampleReadme $section "required sample README contract section"
         }
 
-        Assert-Contains $sampleReadme "dotnet run --project" "sample run command"
-        Assert-Contains $sampleReadme "net10.0" "sample prerequisite target framework"
-        Assert-Contains $sampleReadme "UnsupportedPlatform" "sample non-success platform guidance"
+        if ($sampleReadme -eq "samples/CppBasicUsage/README.md") {
+            Assert-Contains $sampleReadme "cmake" "native sample run command"
+            Assert-Contains $sampleReadme "C++20" "native sample language requirement"
+        }
+        elseif ($sampleReadme -eq "samples/PythonBasicUsage/README.md") {
+            Assert-Contains $sampleReadme "python" "Python sample run command"
+            Assert-Contains $sampleReadme "Python 3.10" "Python sample language requirement"
+        }
+        else {
+            Assert-Contains $sampleReadme "dotnet run --project" "managed sample run command"
+            Assert-Contains $sampleReadme "net10.0" "managed sample target framework"
+        }
+        Assert-Contains $sampleReadme "unsupported" "sample non-success platform guidance"
+        Assert-Contains $sampleReadme "SMS2" "single-protocol sample guidance"
         Assert-Contains $sampleReadme "../../docs/" "sample related documentation links"
     }
 }
@@ -498,6 +468,7 @@ function Assert-PublicReferenceDrift {
             "MaxDescriptorBytes",
             "MaxKeyBytes",
             "LeaseRecordCount",
+            "ParticipantRecordCount",
             "EnableLeaseRecovery",
             "CalculateRequiredBytes",
             "Create",
@@ -526,6 +497,7 @@ function Assert-PublicReferenceDrift {
             "AccessDenied",
             "MappingFailed",
             "StoreBusy",
+            "ParticipantTableFull",
             "OperationCanceled",
             "DuplicateKey",
             "InvalidKey",
@@ -575,7 +547,12 @@ function Assert-PublicReferenceDrift {
             "ActiveLeaseCount",
             "ActiveReservationCount",
             "CapacityPressureCount",
-            "TombstonePressureRatio",
+            "ParticipantRecordCount",
+            "PrimaryDirectoryOccupancy",
+            "OverflowDirectoryOccupancy",
+            "CasRetryCount",
+            "HelpedTransitionCount",
+            "ContentionBudgetExhaustionCount",
             "GetFailureCount"
         )
     }
@@ -617,8 +594,8 @@ function Assert-PublicReferenceDrift {
 
     foreach ($doc in @("README.md", "docs/getting-started.md", "docs/usage.md", "docs/examples.md", "docs/samples.md") + $requiredSampleReadmes) {
         Assert-NotContains $doc "ValueReservation.GetMemory" "current reservation API uses GetSpan"
-        Assert-NotContains $doc "current C++ binding" "future language bindings are not delivered"
-        Assert-NotContains $doc "current Python binding" "future language bindings are not delivered"
+        Assert-NotContains $doc "StoreProfile" "single protocol has no profile selector"
+        Assert-NotContains $doc "CreateLockFree" "ordinary creation is the only creator"
         Assert-NotContains $doc "distributed cache" "package is not a distributed cache"
         Assert-NotContains $doc "persists after process" "package does not promise persistence"
     }

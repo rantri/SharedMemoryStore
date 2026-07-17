@@ -6,10 +6,12 @@ This is the first sample for new package consumers. It demonstrates the primary
 create/open, publish, acquire, read, release, remove, reuse, diagnostics, and
 dispose workflow described in
 [Getting started](../../docs/getting-started.md).
+It uses the ordinary participant-aware API and the only current protocol, SMS2.
 
 ## Concepts Demonstrated
 
-- `SharedMemoryStoreOptions` capacity configuration.
+- `SharedMemoryStoreOptions.Create` with explicit slot, lease, and participant
+  capacity.
 - `MemoryStore.TryCreateOrOpen`.
 - Opaque byte key, descriptor, and payload values.
 - Allocation-conscious helper methods for canonical integer keys and fixed
@@ -35,6 +37,7 @@ dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
 Expected success shape:
 
 ```text
+protocol: SMS2 2.0, resource 2, required 0x7, optional 0x0, participants 4
 Success
 Success
 value bytes: 04-05-06-07
@@ -44,7 +47,8 @@ Success
 free slots: 1
 ```
 
-The first two lines are publish and acquire statuses. The value bytes line shows
+The first line pins the immutable protocol and participant-capacity identity.
+The next two lines are publish and acquire statuses. The value bytes line shows
 the acquired payload. The key is a one-byte application namespace plus a
 little-endian integer, and the descriptor is a small fixed binary structure.
 The remaining status lines are release, remove, and reuse publish results.
@@ -55,8 +59,9 @@ The remaining status lines are release, remove, and reuse publish results.
   named memory-mapped-file behavior.
 - `InvalidOptions` or `InsufficientCapacity`: sample options no longer match
   package validation rules.
-- `StoreBusy`: another process holds shared synchronization longer than the
-  default wait policy.
+- `ParticipantTableFull`: every configured participant record is occupied by
+  an open handle.
+- `StoreBusy`: a bounded cold-open or local retry/help budget expired.
 
 If open fails, the program prints `open failed: <status>` and exits with a
 nonzero code.

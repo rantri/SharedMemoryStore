@@ -174,7 +174,7 @@ public sealed class LeaseCapacityHistoryTests
         MonotonicHistoryRecorder recorder,
         ILockFreeLeaseTableFullProofObserver leaseProofObserver)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-linearizable-lease-full-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,

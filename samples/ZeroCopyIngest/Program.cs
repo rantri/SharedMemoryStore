@@ -14,6 +14,12 @@ if (openStatus != StoreOpenStatus.Success || store is null)
 
 using (store)
 {
+    if (store.ProtocolInfo != new StoreProtocolInfo(2, 0, 2, 7, 0))
+    {
+        Console.WriteLine($"unexpected protocol: {store.ProtocolInfo}");
+        return 2;
+    }
+
     switch (mode)
     {
         case "all":
@@ -191,18 +197,16 @@ static void RunReaderExample(MemoryStore store, byte[] key, string label)
 
 static SharedMemoryStoreOptions CreateOptions()
 {
-    return new SharedMemoryStoreOptions
-    {
-        Name = $"sms-ingest-{Guid.NewGuid():N}",
-        OpenMode = OpenMode.CreateOrOpen,
-        SlotCount = 4,
-        MaxValueBytes = 64,
-        MaxDescriptorBytes = 16,
-        MaxKeyBytes = 16,
-        LeaseRecordCount = 8,
-        EnableLeaseRecovery = true,
-        TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(4, 64, 16, 16, 8)
-    };
+    return SharedMemoryStoreOptions.Create(
+        name: $"sms-ingest-{Guid.NewGuid():N}",
+        slotCount: 4,
+        maxValueBytes: 64,
+        maxDescriptorBytes: 16,
+        maxKeyBytes: 16,
+        leaseRecordCount: 8,
+        participantRecordCount: 4,
+        openMode: OpenMode.CreateNew,
+        enableLeaseRecovery: true);
 }
 
 static byte[] CreateLengthPrefixedFrame(byte[] payload)

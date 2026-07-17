@@ -8,20 +8,12 @@ internal readonly record struct ProbeRunTargets(long OperationTarget, long Frame
 internal static class ProbeCompletionTargetPolicy
 {
     internal static ProbeRunTargets Resolve(
-        StoreProfile profile,
         ProbeScenarioKind scenarioKind,
-        IReadOnlyCollection<StoreProfile> countBoundProfiles,
         long mixedOperationTarget,
         long largeFrameTarget)
     {
-        ArgumentNullException.ThrowIfNull(countBoundProfiles);
         ArgumentOutOfRangeException.ThrowIfNegative(mixedOperationTarget);
         ArgumentOutOfRangeException.ThrowIfNegative(largeFrameTarget);
-
-        if (!countBoundProfiles.Contains(profile))
-        {
-            return default;
-        }
 
         return scenarioKind switch
         {

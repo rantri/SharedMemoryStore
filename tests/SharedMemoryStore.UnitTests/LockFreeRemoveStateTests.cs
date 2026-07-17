@@ -344,7 +344,7 @@ public sealed class LockFreeRemoveStateTests
         return Assert.IsType<MemoryStore>(store);
     }
 
-    private static SharedMemoryStoreOptions Options(int leaseRecordCount = 4) => SharedMemoryStoreOptions.CreateLockFree(
+    private static SharedMemoryStoreOptions Options(int leaseRecordCount = 4) => SharedMemoryStoreOptions.Create(
         $"sms-v2-remove-state-{Guid.NewGuid():N}",
         slotCount: 2,
         maxValueBytes: 16,

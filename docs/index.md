@@ -71,6 +71,9 @@ by goal first, then provides the full file inventory for validation and review.
 - [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
 - [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md)
 - [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md)
+- [samples/LockFreeBrokerKeys/README.md](../samples/LockFreeBrokerKeys/README.md)
+- [samples/CppBasicUsage/README.md](../samples/CppBasicUsage/README.md)
+- [samples/PythonBasicUsage/README.md](../samples/PythonBasicUsage/README.md)
 
 ## Repository Entry Points
 
@@ -92,27 +95,12 @@ by goal first, then provides the full file inventory for validation and review.
 
 ## Contract Sources
 
-- [specs/001-frame-memory-store/contracts/public-api.md](../specs/001-frame-memory-store/contracts/public-api.md)
-- [specs/001-frame-memory-store/contracts/error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
-- [specs/001-frame-memory-store/contracts/shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
-- [specs/003-zero-copy-ingest/contracts/reservation-api.md](../specs/003-zero-copy-ingest/contracts/reservation-api.md)
-- [specs/003-zero-copy-ingest/contracts/ingest-layout.md](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
-- [specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md](../specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
-- [specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
-- [specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
-- [specs/004-store-reliability-hardening/contracts/index-health-contract.md](../specs/004-store-reliability-hardening/contracts/index-health-contract.md)
-- [specs/005-api-production-readiness/contracts/public-api-contract.md](../specs/005-api-production-readiness/contracts/public-api-contract.md)
-- [specs/005-api-production-readiness/contracts/contention-configuration-contract.md](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
-- [specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md](../specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md)
-- [specs/005-api-production-readiness/contracts/reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
-- [specs/006-improve-docs-samples/contracts/documentation-information-architecture.md](../specs/006-improve-docs-samples/contracts/documentation-information-architecture.md)
-- [specs/006-improve-docs-samples/contracts/sample-contract.md](../specs/006-improve-docs-samples/contracts/sample-contract.md)
-- [specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md](../specs/006-improve-docs-samples/contracts/maintainer-documentation-contract.md)
-- [specs/006-improve-docs-samples/contracts/documentation-validation-contract.md](../specs/006-improve-docs-samples/contracts/documentation-validation-contract.md)
-- [specs/007-linux-windows-support/contracts/platform-runtime-contract.md](../specs/007-linux-windows-support/contracts/platform-runtime-contract.md)
-- [specs/007-linux-windows-support/contracts/docker-container-sharing-contract.md](../specs/007-linux-windows-support/contracts/docker-container-sharing-contract.md)
-- [specs/007-linux-windows-support/contracts/development-validation-contract.md](../specs/007-linux-windows-support/contracts/development-validation-contract.md)
-- [specs/007-linux-windows-support/contracts/compatibility-contract.md](../specs/007-linux-windows-support/contracts/compatibility-contract.md)
+- [Current feature specification](../specs/010-lock-free-only-multilang/spec.md)
+- [Public API](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+- [Protocol conformance](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md)
+- [Interoperability and validation](../specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md)
+- [Packaging and migration](../specs/010-lock-free-only-multilang/contracts/packaging-and-migration.md)
+- [Canonical protocol artifacts](../protocol/README.md)
 
 Runtime behavior claims in public documentation must trace to these contracts,
 current package metadata, tests, or a guide that links to the relevant contract.

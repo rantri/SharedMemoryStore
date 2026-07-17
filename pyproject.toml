@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "shared-memory-store"
-version = "0.1.0"
+version = "1.0.0"
 description = "Bounded, cross-process shared-memory values for Python"
 readme = "README.md"
 requires-python = ">=3.10"

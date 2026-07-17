@@ -1,249 +1,252 @@
 # Architecture
 
-This maintainer guide explains the current implementation at a level useful for
-review and onboarding. It distinguishes current implementation details from
-stable public contracts. Public behavior is governed by the linked contracts,
-not by incidental private type names.
+SharedMemoryStore is one language-neutral mapped protocol with three language
+surfaces. C# and native C++ contain independent SMS2 engines; Python is an
+idiomatic lifetime adapter over the native C ABI. All implementations share
+byte layout, atomic transitions, hashing, status values, resource naming, owner
+classification, and recovery rules.
 
-Primary contracts:
-
-- [Public API contract](../specs/001-frame-memory-store/contracts/public-api.md)
-- [Error taxonomy contract](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
-- [Shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
-- [Ingest layout contract](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
-- [Owner recovery contract](../specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
-- [Disposal and rollover contract](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
-- [Index health contract](../specs/004-store-reliability-hardening/contracts/index-health-contract.md)
-- [Language-neutral protocol](../protocol/README.md)
-- [Native C ABI contract](../specs/008-cpp-python-implementations/contracts/native-c-api.md)
-- [C++ API contract](../specs/008-cpp-python-implementations/contracts/cpp-api.md)
-- [Python API contract](../specs/008-cpp-python-implementations/contracts/python-api.md)
-- [Interoperability contract](../specs/008-cpp-python-implementations/contracts/interoperability.md)
-
-## Responsibility Boundary
-
-The repository delivers independently consumable .NET, native C++, and Python
-libraries. Their common responsibility is to provide a bounded named
-shared-memory store for opaque byte keys, optional descriptor bytes, immutable
-payload bytes, leases, direct reservations, segmented publish, explicit
-recovery, and diagnostics through one layout and platform-resource protocol.
-
-The package does not own application schemas, frame parsing, persistence,
-network distribution, hosting, logging, health checks, dependency injection, or
-background cleanup. Those belong to consumers or optional adapters.
-
-## Source Areas
-
-| Area | Current responsibility | Stability |
-|------|------------------------|-----------|
-| [`src/SharedMemoryStore/MemoryStore.cs`](../src/SharedMemoryStore/MemoryStore.cs) | Public store facade, operation validation, synchronization entry points, lifecycle and diagnostics composition | Public API names are stable contracts; private flow can change |
-| [`src/SharedMemoryStore/Layout/`](../src/SharedMemoryStore/Layout/) | Shared header, slot, key-index, lease record, layout constants, lifecycle identity | Shared record layout and state values are compatibility contracts |
-| [`src/SharedMemoryStore/Slots/`](../src/SharedMemoryStore/Slots/) | Slot reservation, writing, reading, reclaiming, remove/reuse transitions | Internal algorithms can change when contracts and tests remain valid |
-| [`src/SharedMemoryStore/Ingest/`](../src/SharedMemoryStore/Ingest/) | Reservation token backing, reservation recovery, segmented publish helper | Public reservation semantics are contracts; helper internals can change |
-| [`src/SharedMemoryStore/Leasing/`](../src/SharedMemoryStore/Leasing/) | Lease registry, release, owner classification, recovery | Public lease and recovery outcomes are contracts |
-| [`src/SharedMemoryStore/Diagnostics/`](../src/SharedMemoryStore/Diagnostics/) | Snapshot construction and failure counters | Snapshot fields and `GetFailureCount` behavior are public contracts |
-| [`src/SharedMemoryStore/Lifecycle/`](../src/SharedMemoryStore/Lifecycle/) | Store operation gate for disposal-safe public boundaries | Public post-disposal outcomes are contracts |
-| [`src/SharedMemoryStore/Interop/`](../src/SharedMemoryStore/Interop/) | Platform resource names, memory-mapped region adapters, and shared synchronization adapters for Linux and Windows | Platform behavior is a documented compatibility contract |
-| [`src/SharedMemoryStore/Options/`](../src/SharedMemoryStore/Options/) | Option validation and detailed validation results | Public option names and validation status are contracts |
-| [`protocol/`](../protocol/) | Canonical layout `1.2`, resource naming `1`, compatibility metadata, and conformance fixtures | Language-neutral bytes, names, states, hashes, and version identities are contracts |
-| [`src/cpp/include/shared_memory_store/c_api.h`](../src/cpp/include/shared_memory_store/c_api.h) | Fixed-width C ABI `1.0`, versioned structures, statuses, and opaque handles | Exported names, widths, status numbers, ownership, and lifetime rules are ABI contracts |
-| [`src/cpp/include/shared_memory_store/store.hpp`](../src/cpp/include/shared_memory_store/store.hpp) | Move-only C++20 RAII stores, leases, reservations, spans, reports, and diagnostics | Public C++ surface and status behavior follow the C++ distribution version |
-| [`src/cpp/src/`](../src/cpp/src/) | Native protocol algorithms plus Windows and Linux mapping, lock, ownership, and cleanup adapters | Algorithms may change only while mapped and platform-resource contracts remain compatible |
-| [`src/python/shared_memory_store/`](../src/python/shared_memory_store/) | Python enums and context-managed wrappers over the packaged C ABI through `ctypes` | Python public names, result shapes, view ownership, and loader policy follow the Python distribution version |
-| [`tests/SharedMemoryStore.InteropTests/`](../tests/SharedMemoryStore.InteropTests/) | JSON-lines agents and ordered runtime-pair orchestration | Test protocol is test-only; observed cross-runtime behavior is release evidence |
-
-## Dependency Direction
+## Fixed protocol identity
 
 ```text
-Python API -> ctypes declarations -> C ABI -> C++ protocol core -> OS adapter
-C++ RAII API ------------------------^             |
-.NET implementation ------------------------------+-> protocol fixtures
-interop agents -> public APIs only
+SMS2 layout 2.0
+resource protocol 2
+required features 7
+optional features 0
+C ABI 2.0
 ```
 
-The C ABI does not depend on Python and never exposes exceptions, C++ standard
-library types, platform-sized lengths, or allocator ownership. Python loads the
-native library bundled beside its modules and validates ABI, layout, record
-sizes, and resource-naming identities before use. The .NET implementation
-remains independent of the native ABI; both implementations depend on the
-canonical protocol.
+The immutable identity exposed by a handle is `(2, 0, 2, 7, 0)`. NuGet
+`3.0.0`, CMake `1.0.0`, and Python `1.0.0` are distribution versions, not
+alternate mapped protocols.
 
-## Storage Model
+Canonical definitions:
 
-The mapped region contains a header, key index, lease registry, slot metadata,
-descriptor storage, and payload storage. Capacity is fixed at create/open time.
-Each API exposes the canonical capacity calculation from slot count, value
-length, descriptor length, key length, and lease-record count. Exact records,
-offsets, state numbers, and arithmetic are pinned in
-[`protocol/layout-v1.2.md`](../protocol/layout-v1.2.md) and its fixtures.
+- [protocol overview](../protocol/README.md)
+- [layout 2.0](../protocol/layout-v2.0.md)
+- [resource protocol 2](../protocol/resource-naming-v2.md)
+- [executable manifest](../protocol/fixtures/v2.0/manifest.json)
+- [public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+- [protocol conformance contract](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md)
+- [interoperability and validation](../specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md)
 
-Keys, descriptors, and payloads are byte sequences. The layout does not encode
-application schemas. The consumer may place frame metadata in descriptor bytes
-or payload headers, but the core package remains schema-neutral.
+## Responsibility boundaries
 
-## Slot Lifecycle
+| Boundary | Owns | Must not own |
+|---|---|---|
+| Protocol contract | bytes, offsets, sizes, hashes, states, codecs, memory order, feature masks, corruption rules | language objects, platform handles, presentation |
+| Store engine | operation orchestration, local budgets, helping, exact token validation, corruption latch | resource-name derivation, package loading |
+| Platform lifecycle | mappings, cold locks, owner evidence, namespace identity, final cleanup | key lookup, slot algorithms, payload schemas |
+| Language adapter | idiomatic options, statuses, RAII/context management, cancellation and view lifetime | different shared semantics |
+| Diagnostics/qualification | bounded observation, counters, failure schedules, performance gates | correctness dependencies or hidden workers |
 
-A slot moves through free, publishing, published, pending removal, and reclaim
-paths. Reuse advances lifecycle identity so stale tokens do not regain access
-after rollover. Maintainers must preserve the generation plus reuse-epoch
-checks described in the
-[disposal and rollover contract](../specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md).
+Dependency direction:
 
-Current implementation detail: slot selection and key-index compaction are
-synchronous inside mutation paths. That detail does not create a public
-maintenance API guarantee, but the public guarantee is that the package does not
-start hidden background work.
+```text
+C# public API -> managed SMS2 engine -> protocol primitives -> platform adapter
+C++ RAII API -> C ABI 2 -> native SMS2 engine -> protocol primitives -> platform adapter
+Python API -> ctypes ABI 2 adapter ------------------------------^
 
-## Key Index
+tests and agents -> public APIs plus deterministic checkpoint seams
+```
 
-The key index uses fixed-capacity open addressing with tombstones. Tombstones
-preserve probe chains after removal. Diagnostics expose occupied, tombstone,
-empty, usable, probe-length, and compaction counts so consumers can distinguish
-key churn from live slot pressure.
+No engine calls a language runtime from mapped protocol code. The C ABI never
+exposes C++ standard-library objects, exceptions, allocators, or mapped record
+pointers.
 
-The current compaction threshold is an implementation detail documented in
-[Performance scope](performance.md) because it affects maintainer reasoning.
-Changing it requires test and benchmark review, not a public API change by
-itself.
+## Repository map
 
-## Lease Model
+| Path | Purpose |
+|---|---|
+| [`src/SharedMemoryStore/MemoryStore.cs`](../src/SharedMemoryStore/MemoryStore.cs) | Managed public handle and local operation-entry lifetime gate |
+| [`src/SharedMemoryStore/LayoutV2/`](../src/SharedMemoryStore/LayoutV2/) | Managed SMS2 sizes, offsets, codecs, and record access |
+| [`src/SharedMemoryStore/LockFree/`](../src/SharedMemoryStore/LockFree/) | Managed directory, slot, lease, participant, recovery, and diagnostics algorithms |
+| [`src/SharedMemoryStore/Interop/`](../src/SharedMemoryStore/Interop/) | Windows/Linux mapping, cold coordination, identity, and cleanup |
+| [`src/cpp/include/shared_memory_store/`](../src/cpp/include/shared_memory_store/) | C ABI 2 and C++20 public headers |
+| [`src/cpp/src/`](../src/cpp/src/) | Native SMS2 engine and platform adapters |
+| [`src/python/shared_memory_store/`](../src/python/shared_memory_store/) | Python values, context managers, `ctypes` declarations, and adjacent-library loader |
+| [`protocol/`](../protocol/) | Current language-neutral protocol and conformance evidence |
+| [`tests/SharedMemoryStore.InteropTests/`](../tests/SharedMemoryStore.InteropTests/) | Ordered runtime-pair lifecycle, recovery, diagnostics, and ownership tests |
 
-A lease token references a slot lifecycle identity and an active lease record.
-The managed `ValueLease`, C++ `value_lease`, and Python `ValueLease` protect
-readers from slot reuse. Release is explicit and status-returning; disposal,
-destruction, and finalization are best-effort fallbacks appropriate to each
-runtime.
+## Mapped layout
 
-Maintainers must preserve these invariants:
+The region contains fixed sections calculated before creation:
 
-- no read span is exposed unless the slot is still published and lifecycle
-  identity matches.
-- removal with active leases returns `RemovePending`.
-- final release can reclaim a pending-removal slot.
-- repeated release returns deterministic statuses.
-- explicit recovery never reclaims records owned by another live process.
+```text
+512-byte store header
+participant records (64 bytes each)
+primary directory buckets (128 bytes each, eight lanes)
+overflow directory bindings (8 bytes each)
+lease records (64 bytes each)
+value-slot metadata (128 bytes each)
+fixed-stride key storage
+fixed-stride descriptor storage
+fixed-stride payload storage
+```
 
-## Reservation Model
+Offsets and lengths use checked 64-bit arithmetic and required alignment. Every
+opener recomputes the layout and validates it against the header and actual
+mapped capacity before accessing a later section.
 
-A reservation token represents pending direct ingest. The managed
-`ValueReservation`, C++ `value_reservation`, and Python `ValueReservation`
-announce payload length and descriptor bytes before payload writes, expose
-runtime-appropriate writable views, record exact progress, and publish only
-after an exact commit.
+All cross-process atomic words are naturally aligned 64-bit values. The
+qualified x86-64 implementation uses sequentially consistent read/modify/write
+operations across processes. Plain descriptor, key, and payload bytes are
+published only after their owning atomic state establishes visibility.
 
-Successfully ordered explicit reservations are invisible to readers, occupy
-capacity, and block duplicate keys. Lock-free v2 records immutable
-`PublicationIntent` ordinary metadata for each current lifecycle. `TryReserve`
-uses `ExplicitReservation` and orders at `Initializing -> Reserved`; the
-`TryPublish` and `TryPublishSegments` convenience workflows use
-`AtomicPublication`, remain tentative through internal `Reserved`, and order
-only at `Reserved -> Published`. Tentative `Initializing` and
-`Reserved(AtomicPublication)` claims are helpable and consume physical capacity
-but do not alone block a duplicate key. Abort, dispose, and recovery remove the
-pending index entry before reclaiming the slot. Public memory lifetime rules are
-in the
-[reservation memory contract](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md).
+## Participants
 
-## Synchronization and Waits
+Every open handle claims one generation-tagged participant record before it may
+claim a slot or lease. The participant publishes process identity, process-start
+evidence, open sequence, and PID namespace identity through helpable states:
 
-Legacy-profile public operations synchronize through the platform store lock
-and the process-local lifecycle gate. Windows uses named synchronization; Linux
-uses a deterministic shared lock resource in the runtime shared-memory
-location. Lock-free-v2 steady-state operations instead use bounded mapped
-atomics, helping, and generation revalidation, and never enter that global
-operation lock. `StoreWaitOptions` bounds either legacy lock waiting or v2 local
-retry/helping. Busy and canceled waits return `StoreBusy` or
-`OperationCanceled`.
+```text
+Free -> Registering -> Active -> Closing -> Reclaiming -> Free
+                         \-> Recovering -/
+```
 
-Lock-free directory observations are cached atomic-reference witnesses, not
-ownership of a slot. Before reporting a would-be corrupt binding, v2 rereads the
-exact raw reference word around a fresh stable classification of its separately
-decoded slot binding. A primary/overflow source equals the binding; a versioned
-spill summary is the complete encoded `Present(binding)` source word. Source
-movement causes a budgeted lookup or maintenance retry, while only an unchanged
-exact source enclosing a repeated malformed slot may fail closed. This
-source/slot/source rule adds no shared epoch, multi-word atomic, or global owner.
+Generation wrap retires a record instead of allowing an ambiguous token.
+Participant identity is included in slot, reservation, and lease ownership so a
+reused PID or participant index cannot authorize a later incarnation.
 
-The native adapters reproduce the same Windows mapping/mutex and Linux region,
-byte-range lock, owner-sidecar, lifecycle-lock, permission, and cleanup rules.
-Matching mapped bytes without matching resource participation is not
-interoperability.
+## Key directory
 
-Do not add hidden worker threads or implicit global state to avoid contention.
-Callers choose retry, cancellation, health check, and backoff policy.
+SMS2 uses a fixed primary directory and bounded overflow directory:
+
+- canonical FNV-1a selects two primary buckets;
+- each bucket contains eight generation-tagged lanes;
+- exact key bytes confirm equality;
+- a versioned spill summary announces possible overflow candidates; and
+- overflow scans are bounded by configured capacity.
+
+Directory modifications publish helpable operation descriptors. Participants
+may complete an interrupted insertion or unlink only after validating the exact
+operation, location, publisher binding, slot generation, and state. A summary
+cannot claim “empty” while a valid overflow binding is reachable.
+
+## Slots and reservations
+
+A slot carries generation-tagged control, directory binding/location,
+helpable-directory operation, key hash and lengths, publication intent, progress
+and commit sequence, plus immutable section offsets.
+
+High-level lifecycle:
+
+```text
+Free -> Initializing -> Reserved -> Published -> PendingRemoval -> Reclaiming -> Free
+                             \-> Reclaiming -------------------------------/
+```
+
+Atomic publication and explicit reservation use distinct publication-intent
+values. Readers may project bytes only after validating a published slot and
+then revalidating it after lease activation. Reclamation advances the generation
+before reuse; generation wrap retires the slot.
+
+## Leases
+
+Acquisition claims a lease record, binds the exact participant and slot
+generation, revalidates directory publication, and only then exposes descriptor
+and payload spans. Release changes only the exact active lease incarnation.
+
+Logical removal unlinks the key first. Existing leases keep the old generation
+readable; new acquires cannot find it. The final release or a bounded helper can
+complete physical reclamation.
+
+## Helping and lock-free progress
+
+Hot operations use compare/exchange loops, immutable published bytes, bounded
+candidate scans, version revalidation, and cooperative completion. An
+interrupted participant cannot own an unobservable process mutex that blocks
+the entire store. Another participant can finish or safely roll back a
+published transition.
+
+Lock-free means system-wide progress. It does not mean every individual call is
+wait-free. A no-wait or finite call can return `StoreBusy` after exhausting its
+local retry/help/backoff budget.
+
+Hot operations include publish, segmented publish, reserve, advance, commit,
+abort, acquire, projection validation, release, remove, reclaim, explicit
+recovery, and diagnostics. They do not acquire named mutexes or Linux record
+locks.
+
+## Cold platform lifecycle
+
+Physical create/open, participant attachment, close, owner reconciliation, and
+final cleanup use bounded OS coordination.
+
+Windows uses the canonical named mapping and cold named mutex. Kernel handle
+lifetime removes resources after the final close.
+
+Linux uses deterministic files under `/dev/shm/SharedMemoryStore` (or a guarded
+temporary fallback): region, stable cold locks, owner sidecar, private owner
+anchors, and finalized release markers. Exact PID/start/namespace identity and
+anchor-lock evidence prevent PID reuse or container namespace ambiguity from
+being treated as stale.
+
+Cold coordination is acquired before mapping inspection. An existing zero,
+truncated, noncurrent, or malformed header is rejected; it is never initialized
+by an opener.
 
 ## Recovery
 
-Recovery is explicit and owner-scoped:
+There is no hidden recovery worker. A caller explicitly scans leases or
+reservations. For each candidate the engine:
 
-- `TryRecoverLeases` scans lease records and reports recovered, active,
-  unsupported, and failed records.
-- `TryRecoverReservations` scans pending reservations and reports recovered,
-  active, unsupported, and failed records.
+1. reads a complete incarnation and owner token;
+2. classifies the participant as current, live, stale, unsupported,
+   inconsistent, or changing;
+3. retains any owner that may be live;
+4. revalidates that the shared record is unchanged; and
+5. performs one exact recovery compare/exchange.
 
-Recovery exists to make cleanup policy observable. It must not become automatic
-background reclamation. Normal v2 recovery preserves owner-controlled resources
-whose exact participant is live Active. Current-process lease or reservation
-overrides are administrative test/controlled-shutdown policies and require the
-corresponding process-wide borrowed-view and operation quiescence; racing an
-override with current-process activity is outside the supported result contract.
+Recovery may help directory and slot transitions, but cannot reclaim a later
+incarnation. Reports distinguish recovered, active, unsupported, and failed
+records.
+
+## Process-local lifetime gates
+
+One handle accepts concurrent calls. A local entry counter admits operations
+until close begins. Close prevents new entries, drains entered calls, invalidates
+local token access, releases the participant, and then performs bounded platform
+cleanup.
+
+This gate protects language object lifetime only. It is not shared, mapped, or
+used as a hot operation lock. Python's local lock is limited to this close-safe
+entry accounting; native calls can progress concurrently.
 
 ## Diagnostics
 
-Diagnostics are snapshots, not a telemetry pipeline. `DiagnosticsSnapshot`
-captures capacity, slot state, lease and reservation activity, recovery
-results, key-index health, last failure, and per-status counters. Consumers own
-formatting and export.
+Bounded scanners report shared slot, lease, participant, and directory state.
+Process-local atomics report retries, help, contention exhaustion, token errors,
+recovery, owner classification, and status counts. Diagnostics do not mutate
+ownership and are not an algorithmic dependency.
 
-When adding public statuses or changing failure accounting, update
-`docs/diagnostics.md`, `docs/errors.md`, tests under
-[`tests/SharedMemoryStore.ContractTests/`](../tests/SharedMemoryStore.ContractTests/),
-and `scripts/validate-docs.ps1`.
+See [diagnostics.md](diagnostics.md).
 
-## Performance Model
+## Corruption boundary
 
-The design aims to keep hot-path managed allocation low after initialization and
-warm-up. Public performance wording must remain evidence-bounded and tied to
-benchmark commands or measured validation notes. See
-[Performance scope](performance.md) and
-[`benchmarks/SharedMemoryStore.Benchmarks/`](../benchmarks/SharedMemoryStore.Benchmarks/).
+Caller input, capacity pressure, legal races, cancellation, and missed bounded
+work do not latch corruption. A terminal `CorruptStore` condition is published
+only after an impossible shared observation is revalidated.
 
-Each lock-free open handle eagerly owns a process-local `long[SlotCount]`
-scratch snapshot used only to certify rare `StoreFull` candidates. It costs
-approximately eight bytes per slot (about 8 MiB at the v2 slot ceiling), is
-reused without per-operation allocation, and is protected by a nonblocking
-local guard. The guard and buffer are not mapped state and cannot serialize
-another process or handle.
+After corruption, operations fail closed. No implementation guesses record
+ownership or projects questionable payload bytes.
 
-The same handle owns a separate `long[LeaseRecordCount]` snapshot and local
-guard for rare `LeaseTableFull` candidates. Both capacity outcomes require two
-same-order, structurally valid, entirely non-Free, exactly equal collects; a
-malformed control fails closed, while movement, reusable capacity, or local
-guard contention follows the caller's wait policy. The lease buffer has the same
-eight-bytes-per-record private-memory cost and likewise adds no shared or OS
-synchronization.
+## Interoperability
 
-## Portability Model
+The validation matrix covers all nine ordered producer/consumer pairs among
+.NET, C++, and Python. The same command and checkpoint catalogs exercise binary
+publication, segmented publication, reservations, leases, removal/reuse,
+participant capacity, crash recovery, diagnostics, cold-lock independence,
+corruption rejection, and Linux final-owner cleanup.
 
-The repository now contains managed, C++20, and Python 3.10+ implementations
-targeting 64-bit little-endian Linux and Windows. Distribution presence is not
-the same as release validation: native tests, wheel installation, clean CMake
-consumption, Windows/Linux checks, and the required ordered runtime-pair matrix
-must be recorded for each release. Do not imply cross-host, macOS,
-Windows-container, persistence, or distributed-cache support beyond
-[Portability](portability.md).
+Application interoperability also requires a shared byte schema. The library
+does not normalize text, choose integer encoding, or serialize application
+objects.
 
-## Review Invariants
+## Deployment replacement
 
-Before approving a change to storage, lifecycle, synchronization, diagnostics,
-recovery, public APIs, or package metadata, answer:
-
-- Which public contract does this touch?
-- Does it change a public status, method, option, layout field, package
-  metadata field, or compatibility promise?
-- Which docs and sample READMEs must change?
-- Which contract, unit, integration, package, and documentation validations
-  must pass?
-- Does the wording accidentally promise persistence, distributed-cache
-  semantics, hidden background work, unsupported platforms, registry
-  publication, or interoperability evidence that was not actually run?
+SMS2 has no in-place converter. A current implementation rejects a noncurrent
+mapping before payload access. Drain all tokens, close all handles, replace the
+physical store, create fresh SMS2 resources, and republish from an
+application-owned authoritative source. Side-by-side operation requires a new
+public name.

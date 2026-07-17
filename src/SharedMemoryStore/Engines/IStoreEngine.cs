@@ -14,8 +14,6 @@ namespace SharedMemoryStore.Engines;
 /// </remarks>
 internal interface IStoreEngine : IDisposable
 {
-    StoreProfile Profile { get; }
-
     StoreProtocolInfo ProtocolInfo { get; }
 
     /// <summary>

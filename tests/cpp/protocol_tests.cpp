@@ -3,28 +3,39 @@
 
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <span>
+#include <string_view>
+#include <utility>
+
+static_assert(!noexcept(sms::detail::sha256(
+    std::span<const std::uint8_t>{})));
+static_assert(!noexcept(sms::detail::make_resource_name(
+    std::string_view{},
+    std::declval<sms::detail::ResourceName&>())));
 
 int main() {
     using namespace sms::detail;
-    Layout layout{};
-    SMS_CHECK(Layout::calculate(0, 3, 17, 5, 9, 4, layout));
-    SMS_CHECK(layout.header_length == 160);
-    SMS_CHECK(layout.index_entry_count == 8);
-    SMS_CHECK(layout.index_entry_size == 48);
-    SMS_CHECK(layout.index_offset == 160);
-    SMS_CHECK(layout.index_length == 384);
-    SMS_CHECK(layout.lease_registry_offset == 544);
-    SMS_CHECK(layout.slot_metadata_offset == 704);
-    SMS_CHECK(layout.descriptor_storage_offset == 920);
-    SMS_CHECK(layout.payload_storage_offset == 944);
-    SMS_CHECK(layout.required_bytes == 1016);
-    SMS_CHECK(!Layout::calculate(0, 0, 1, 0, 1, 1, layout));
-    SMS_CHECK(!Layout::calculate(0, 1, 1, 0, INT32_MAX, 1, layout));
+    std::int64_t arithmetic{};
+    SMS_CHECK(checked_add_nonnegative(5, 7, arithmetic) && arithmetic == 12);
+    SMS_CHECK(!checked_add_nonnegative(-1, 7, arithmetic));
+    SMS_CHECK(!checked_add_nonnegative(
+        std::numeric_limits<std::int64_t>::max(), 1, arithmetic));
+    SMS_CHECK(checked_multiply_nonnegative(5, 7, arithmetic) && arithmetic == 35);
+    SMS_CHECK(!checked_multiply_nonnegative(
+        std::numeric_limits<std::int64_t>::max(), 2, arithmetic));
+    SMS_CHECK(checked_align_up_nonnegative(65, 64, arithmetic) && arithmetic == 128);
+    SMS_CHECK(!checked_align_up_nonnegative(65, 3, arithmetic));
 
     constexpr std::array<std::uint8_t, 5> hello{'h', 'e', 'l', 'l', 'o'};
     SMS_CHECK(hash_key(hello) == 0xa430d84680aabd0bULL);
     constexpr std::array<std::uint8_t, 4> binary{0x00, 0x01, 0xff, 0x80};
     SMS_CHECK(hash_key(binary) == 0x4653dd7f9a76930dULL);
+    constexpr std::array<std::uint8_t, 4> same_binary{0x00, 0x01, 0xff, 0x80};
+    constexpr std::array<std::uint8_t, 4> other_binary{0x00, 0x01, 0xff, 0x81};
+    SMS_CHECK(exact_bytes_equal(binary, same_binary));
+    SMS_CHECK(!exact_bytes_equal(binary, other_binary));
+    SMS_CHECK(!exact_bytes_equal(binary, hello));
 
     ResourceName simple{};
     SMS_CHECK(make_resource_name("sms.compatibility", simple));
@@ -47,5 +58,7 @@ int main() {
 #endif
     SMS_CHECK(utf16_length("\xF0\x9F\x98\x80") == 2);
     SMS_CHECK(!valid_utf8("\xC0\x80"));
+    SMS_CHECK(!valid_utf8("\xED\xA0\x80"));
+    SMS_CHECK(!valid_utf8("\xF4\x90\x80\x80"));
     return 0;
 }

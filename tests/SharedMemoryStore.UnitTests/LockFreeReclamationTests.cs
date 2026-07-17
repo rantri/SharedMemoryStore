@@ -1,5 +1,4 @@
 using System.Reflection;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using SharedMemoryStore.UnitTests.TestSupport;
@@ -122,7 +121,7 @@ public sealed class LockFreeReclamationTests
     public async Task SecondHandlePublishesAtCapacityOneWhileAbortOwnerIsPausedAfterOwnershipRelease()
     {
         string name = $"sms-v2-reclamation-abort-help-{Guid.NewGuid():N}";
-        var createOptions = SharedMemoryStoreOptions.CreateLockFree(
+        var createOptions = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 16,
@@ -132,7 +131,7 @@ public sealed class LockFreeReclamationTests
             participantRecordCount: 2,
             openMode: OpenMode.CreateNew,
             enableLeaseRecovery: true);
-        var openOptions = SharedMemoryStoreOptions.CreateLockFree(
+        var openOptions = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 16,
@@ -754,7 +753,7 @@ public sealed class LockFreeReclamationTests
 
     private static MemoryStore CreateStore(int slotCount, int leaseRecordCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-reclamation-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 16,
@@ -774,7 +773,7 @@ public sealed class LockFreeReclamationTests
         int slotCount,
         int leaseRecordCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-reclamation-instrumented-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 16,

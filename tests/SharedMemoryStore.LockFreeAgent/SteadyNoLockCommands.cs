@@ -104,7 +104,7 @@ internal static class SteadyNoLockCommands
                 out ReservationRecoveryReport reservationReport) != StoreStatus.Success
             || reservationReport.RecoveredReservationCount != 0
             || store.TryGetDiagnostics(out DiagnosticsSnapshot diagnostics) != StoreStatus.Success
-            || diagnostics.Profile != StoreProfile.LockFree)
+            || diagnostics.ProtocolInfo != new StoreProtocolInfo(2, 0, 2, 7, 0))
         {
             return false;
         }
@@ -233,7 +233,7 @@ internal static class SteadyNoLockCommands
             }
 
             parsed = new Arguments(
-                SharedMemoryStoreOptions.CreateLockFree(
+                SharedMemoryStoreOptions.Create(
                     arguments[1],
                     slotCount,
                     maxValueBytes,

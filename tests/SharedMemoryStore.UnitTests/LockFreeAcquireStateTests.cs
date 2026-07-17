@@ -150,7 +150,7 @@ public sealed class LockFreeAcquireStateTests
             throw new PlatformNotSupportedException("The lock-free profile is qualified only on Windows/Linux x64.");
         }
 
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-acquire-state-{Guid.NewGuid():N}",
             slotCount: 3,
             maxValueBytes: 16,

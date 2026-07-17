@@ -222,13 +222,13 @@ public sealed class LockFreeNoOperationLockIntegrationTests
         Assert.Equal(0, reservationReport.RecoveredReservationCount);
 
         Assert.Equal(StoreStatus.Success, store.TryGetDiagnostics(wait, out var diagnostics));
-        Assert.Equal(StoreProfile.LockFree, diagnostics.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), diagnostics.ProtocolInfo);
         Assert.Equal(0, diagnostics.ActiveLeaseCount);
         Assert.Equal(0, diagnostics.ActiveReservationCount);
         Assert.Equal(0, diagnostics.PublishedSlotCount);
         Assert.Equal(0, diagnostics.PendingRemovalCount);
         Assert.Equal(SlotCount, diagnostics.FreeSlotCount);
-        Assert.Equal(StoreProfile.LockFree, store.GetDiagnostics().Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), store.GetDiagnostics().ProtocolInfo);
     }
 
     private static void AssertRemovalAndReclaim(
@@ -248,7 +248,7 @@ public sealed class LockFreeNoOperationLockIntegrationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: SlotCount,
             maxValueBytes: 64,

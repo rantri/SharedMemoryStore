@@ -4,7 +4,12 @@ using System.Runtime.CompilerServices;
 
 namespace SharedMemoryStore.UnitTests
 {
+    [CollectionDefinition("DynamicEngineFacade", DisableParallelization = true)]
+    public sealed class DynamicEngineFacadeCollection
+    {
+    }
 
+    [Collection("DynamicEngineFacade")]
     public sealed class MemoryStoreFacadeTests
     {
         private static readonly Assembly StoreAssembly = typeof(MemoryStore).Assembly;
@@ -27,6 +32,37 @@ namespace SharedMemoryStore.UnitTests
             Assert.Equal(1, FakeEngineCallLog.Count("TryReserve"));
             Assert.Equal(1, FakeEngineCallLog.Count("TryAcquire"));
             Assert.Equal(1, FakeEngineCallLog.Count("TryRemove"));
+        }
+
+        [Fact]
+        public void EngineBoundaryAndFacadeExposeNoProfileSelector()
+        {
+            Type engineType = RequireInternalType("SharedMemoryStore.Engines.IStoreEngine");
+
+            Assert.Null(engineType.GetProperty("Profile", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+            Assert.Null(typeof(MemoryStore).GetProperty("Profile", BindingFlags.Instance | BindingFlags.Public));
+        }
+
+        [Fact]
+        public void FacadeOwnsOneAlwaysPresentEngineAndNoEmbeddedLegacyTopology()
+        {
+            Type engineType = RequireInternalType("SharedMemoryStore.Engines.IStoreEngine");
+            FieldInfo[] fields = typeof(MemoryStore).GetFields(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+            Assert.Single(fields, field => field.FieldType == engineType);
+            Assert.DoesNotContain(fields, static field => field.FieldType == typeof(SemaphoreSlim));
+            Assert.DoesNotContain(fields, static field => field.FieldType.FullName == "SharedMemoryStore.Interop.MemoryMappedStoreRegion");
+            Assert.DoesNotContain(fields, static field => field.FieldType.FullName == "SharedMemoryStore.Interop.ISharedStoreSynchronization");
+            Assert.DoesNotContain(fields, static field => field.FieldType.Namespace == "SharedMemoryStore.Layout");
+            Assert.DoesNotContain(fields, static field => field.FieldType.Namespace == "SharedMemoryStore.Slots");
+            Assert.DoesNotContain(fields, static field => field.FieldType.Namespace == "SharedMemoryStore.Leasing");
+
+            ConstructorInfo constructor = Assert.Single(
+                typeof(MemoryStore).GetConstructors(
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+            ParameterInfo parameter = Assert.Single(constructor.GetParameters());
+            Assert.Equal(engineType, parameter.ParameterType);
         }
 
         [Fact]
@@ -114,6 +150,18 @@ namespace SharedMemoryStore.UnitTests
             Assert.DoesNotContain(fields, field => field.FieldType == typeof(int));
         }
 
+        internal static MemoryStore CreateFacadeWithFakeEngine()
+        {
+            Type engineType = RequireInternalType("SharedMemoryStore.Engines.IStoreEngine");
+            return CreateFacadeWithFakeEngine(engineType);
+        }
+
+        internal static object CreateFakeEngine()
+        {
+            Type engineType = RequireInternalType("SharedMemoryStore.Engines.IStoreEngine");
+            return FakeEngineEmitter.Create(engineType);
+        }
+
         private static MemoryStore CreateFacadeWithFakeEngine(Type engineType)
         {
             var constructor = typeof(MemoryStore)
@@ -183,6 +231,24 @@ namespace SharedMemoryStore.UnitTests
                 il.Emit(OpCodes.Ldstr, interfaceMethod.Name);
                 il.Emit(OpCodes.Call, typeof(FakeEngineCallLog).GetMethod(nameof(FakeEngineCallLog.Record))!);
 
+                if (interfaceMethod.Name == "get_ProtocolInfo")
+                {
+                    il.Emit(
+                        OpCodes.Call,
+                        typeof(FakeEngineCallLog).GetMethod(nameof(FakeEngineCallLog.ThrowIfProtocolInfoRequested))!);
+                }
+
+                for (var index = 0; index < parameters.Length; index++)
+                {
+                    if (parameters[index].ParameterType == typeof(StoreWaitOptions))
+                    {
+                        il.Emit(OpCodes.Ldarg, index + 1);
+                        il.Emit(
+                            OpCodes.Call,
+                            typeof(FakeEngineCallLog).GetMethod(nameof(FakeEngineCallLog.RecordWait))!);
+                    }
+                }
+
                 for (var index = 0; index < parameters.Length; index++)
                 {
                     var parameterType = parameters[index].ParameterType;
@@ -195,7 +261,15 @@ namespace SharedMemoryStore.UnitTests
                     il.Emit(OpCodes.Initobj, parameterType.GetElementType()!);
                 }
 
-                EmitReturn(il, interfaceMethod.ReturnType);
+                if (interfaceMethod.Name == "RecordFacadeStatus")
+                {
+                    il.Emit(OpCodes.Ldarg_1);
+                    il.Emit(OpCodes.Ret);
+                }
+                else
+                {
+                    EmitReturn(il, interfaceMethod.ReturnType);
+                }
                 type.DefineMethodOverride(implementation, interfaceMethod);
             }
 
@@ -235,13 +309,17 @@ namespace SharedMemoryStore.UnitTests
         private static readonly object Sync = new();
         private static readonly List<string> Calls = [];
         private static StoreStatus _status;
+        private static StoreWaitOptions _lastWait;
+        private static bool _throwOnProtocolInfo;
 
-        public static void Reset(StoreStatus status)
+        public static void Reset(StoreStatus status, bool throwOnProtocolInfo = false)
         {
             lock (Sync)
             {
                 Calls.Clear();
                 _status = status;
+                _lastWait = default;
+                _throwOnProtocolInfo = throwOnProtocolInfo;
             }
         }
 
@@ -258,6 +336,39 @@ namespace SharedMemoryStore.UnitTests
             lock (Sync)
             {
                 return Calls.Count(call => call == methodName);
+            }
+        }
+
+        public static StoreWaitOptions LastWait
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    return _lastWait;
+                }
+            }
+        }
+
+        public static void RecordWait(StoreWaitOptions waitOptions)
+        {
+            lock (Sync)
+            {
+                _lastWait = waitOptions;
+            }
+        }
+
+        public static void ThrowIfProtocolInfoRequested()
+        {
+            bool shouldThrow;
+            lock (Sync)
+            {
+                shouldThrow = _throwOnProtocolInfo;
+            }
+
+            if (shouldThrow)
+            {
+                throw new InvalidOperationException("Injected protocol-info getter failure.");
             }
         }
 

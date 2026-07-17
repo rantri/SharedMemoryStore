@@ -1,202 +1,162 @@
-# Errors and Statuses
+# Statuses and failure handling
 
-SharedMemoryStore reports expected operational outcomes as status values. The
-complete status source is the
-[error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md).
-Reservation-specific diagnostics and outcomes are covered by
-[diagnostics-and-errors.md](../specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md),
-and wait outcomes are covered by
-[contention-configuration-contract.md](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md).
+SharedMemoryStore reports expected outcomes as stable numeric status values.
+Ordinary contention, capacity, cancellation, duplicate keys, missing keys, and
+lifecycle races are not exceptions and do not poison the shared store.
 
-Expected pressure, lookup, validation, contention, and lifecycle cases should be
-handled by checking `StoreOpenStatus` or `StoreStatus`, not by catching
-exceptions.
+The .NET, C ABI, C++, and Python surfaces use the same numeric assignments.
+Language wrappers may use different casing, but must not translate one status
+into another.
 
-## Open Statuses
+The assignments and fail-closed rules are normative in the
+[public API](../specs/010-lock-free-only-multilang/contracts/public-api.md) and
+[protocol conformance](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md)
+contracts.
 
-| Status | Meaning | Safe action |
-|--------|---------|-------------|
-| `Success` | The named store was created or opened. | Continue. |
-| `AlreadyExists` | `OpenMode.CreateNew` found an existing mapping. | Choose another name or use `OpenExisting`/`CreateOrOpen`. |
-| `NotFound` | `OpenMode.OpenExisting` could not find the mapping. | Start the producer/owner first or use `CreateOrOpen`. |
-| `InvalidOptions` | Options are empty, out of range, or otherwise invalid. | Call `SharedMemoryStoreOptions.Validate` and fix configuration. |
-| `IncompatibleLayout` | Existing mapping differs by size, maxima, or layout version. | Use matching options, migrate, or choose a new name. |
-| `UnsupportedPlatform` | Platform does not support the requested named shared-memory behavior. | Follow [Portability](portability.md) and platform support guidance. |
-| `InsufficientCapacity` | `TotalBytes` cannot contain the requested layout. | Recalculate with `CalculateRequiredBytes`. |
-| `AccessDenied` | The process lacks mapping access. | Review process identity and OS permissions. |
-| `MappingFailed` | The runtime failed to create or open the memory mapping. | Capture OS, runtime, options, and failure context for support. |
-| `StoreBusy` | The selected wait policy expired before the operation ordered. Legacy uses a shared lock; lock-free v2 exhausts its local retry/revalidation/helping budget. | Retry according to caller policy or use a longer wait. |
-| `OperationCanceled` | Cancellation was observed before the operation ordering point. | Honor caller cancellation. |
+## Open statuses
 
-## Operation Statuses
+| Code | Status | Meaning | Typical response |
+|---:|---|---|---|
+| 0 | `Success` | The handle opened and owns an active participant record. | Use the store. |
+| 1 | `AlreadyExists` | `CreateNew` found an existing physical store. | Open it deliberately or choose another name. |
+| 2 | `NotFound` | `OpenExisting` found no physical store. | Create it or fix the public name/scope. |
+| 3 | `InvalidOptions` | A name, capacity, mode, or recovery option is invalid. | Correct caller input. |
+| 4 | `IncompatibleLayout` | Existing bytes or requested dimensions do not match canonical SMS2. | Stop; use matching options or replace the deployment. |
+| 5 | `UnsupportedPlatform` | The host lacks a required mapping, atomic, lock, or owner-evidence capability. | Move to a qualified host or disable the workflow. |
+| 6 | `InsufficientCapacity` | `TotalBytes` cannot contain the requested layout. | Use `Create`/`calculate_required_bytes`. |
+| 7 | `AccessDenied` | OS permissions prevent resource access. | Fix identity, scope, directory, or container permissions. |
+| 8 | `MappingFailed` | The OS mapping could not be created or attached. | Inspect platform error evidence and resource health. |
+| 9 | `StoreBusy` | Cold lifecycle coordination or participant claim exceeded the wait budget. | Retry according to caller policy. |
+| 10 | `OperationCanceled` | Cancellation won before the handle became active. | Treat as caller cancellation. |
+| 11 | `ParticipantTableFull` | No participant record can be safely claimed. | Close unused handles or recreate with more records. |
 
-| Status | Meaning | Typical cause |
-|--------|---------|---------------|
-| `Success` | Operation completed. | Expected path. |
-| `DuplicateKey` | Key maps to a published or pending-removal value, or to `Reserved(ExplicitReservation)`. | Producer attempted to overwrite a public same-key lifecycle. Tentative `Initializing` and `Reserved(AtomicPublication)` alone do not qualify. |
-| `NotFound` | Key is absent or no longer published. | Reader looked up a missing, pending, removed, or recovered key. |
-| `InvalidKey` | Key is empty or otherwise invalid. | Caller supplied empty key bytes. |
-| `KeyTooLarge` | Key exceeds `MaxKeyBytes`. | Configuration or encoding mismatch. |
-| `ValueTooLarge` | Payload exceeds `MaxValueBytes`. | Capacity is too small for the payload. |
-| `DescriptorTooLarge` | Descriptor exceeds `MaxDescriptorBytes`. | Metadata is too large for configured capacity. |
-| `StoreFull` | No reusable value slot is available. | Published, pending-removal, explicit-reservation, tentative initialization/atomic-publication, cleanup, or retired lifecycles occupy all physical slots. |
-| `LeaseTableFull` | Two exact, structurally valid lease-control collects confirm that no reusable lease record is available. | Too many concurrent readers or leaked leases. |
-| `InvalidLease` | Lease token does not match an active record. | Default token, stale token, or recovered/reclaimed record. |
-| `LeaseAlreadyReleased` | Lease was already released. | Repeated release or dispose after release. |
-| `RemovePending` | The key is logically absent, but an active lease or incomplete bounded post-removal work delays physical reclamation. | Release readers or let later remove, release, or allocation-pressure helping finish reclamation. |
-| `UnsupportedPlatform` | Operation is unsupported on this platform. | Platform or owner-liveness capability mismatch. |
-| `StoreDisposed` | Store handle has been disposed. | Operation used a closed handle or raced with disposal. |
-| `CorruptStore` | Unsafe shared-memory state was detected. | Inconsistent metadata or external mutation. |
-| `AccessDenied` | Process lacks required access. | OS permissions or mapping access issue. |
-| `UnknownFailure` | Unexpected runtime failure occurred. | Capture diagnostics and reproduction details. |
-| `InvalidReservation` | Reservation token does not match a pending slot generation, or the tentative claim was legally canceled before explicit reservation ordered. | Default, stale, committed, aborted, disposed, or recovered token; or exact-generation cancellation before ordering. |
-| `ReservationIncomplete` | Commit was attempted before exact announced length was advanced. | Producer has not written all bytes. |
-| `ReservationAlreadyCompleted` | Reservation already committed, aborted, disposed, or recovered. | Repeated completion path. |
-| `ReservationWriteOutOfRange` | Advance would move outside announced payload length. | Producer wrote too many bytes or used wrong count. |
-| `StoreBusy` | The operation did not order within the wait policy. Legacy may be waiting for its shared lock; lock-free v2 exhausted bounded local retry/revalidation/helping. | Contention under `NoWait` or bounded timeout. |
-| `OperationCanceled` | Cancellation was observed before the operation ordering point. | Caller canceled the operation. |
+### Why `IncompatibleLayout` fails closed
 
-In lock-free v2, each lifecycle records a publication intent. `TryReserve`
-orders at `Initializing -> Reserved(ExplicitReservation)`, which becomes a
-duplicate-key witness. `TryPublish` and `TryPublishSegments` use
-`AtomicPublication`; their internal `Initializing` and `Reserved` states are
-tentative and the outer operation orders only at `Reserved -> Published`.
-Tentative states are helpable and consume physical capacity, but they do not
-alone justify `DuplicateKey`; bounded revalidation may instead return
-`StoreBusy`. After an initial absent-key lookup, a raced operation may instead
-return `StoreFull` at candidate claim before final duplicate arbitration;
-duplicate status does not take precedence over genuine physical exhaustion in
-that race. A missed allocation scan alone is not enough: v2 returns `StoreFull`
-only after two same-order, structurally valid, all-non-Free control snapshots
-match exactly. `Initializing`/`Reserved` require a structurally valid configured
-participant token; `Free`/`Published`/`RemoveRequested`/`Aborting`/`Reclaiming`/
-`Retired` require participant zero, every generation is nonzero and bounded, and
-`Retired` is terminal. An invalid state/generation/owner shape returns
-`CorruptStore`, even when two malformed words compare equal. A free or changing
-slot, or contention for that handle's private proof buffer, follows the caller's
-wait policy and can return `StoreBusy` instead. Normal recovery preserves a
-lifecycle owned by an exact live Active participant. The current-process
-reservation override is supported only after process-wide publication and
-writable-view quiescence.
+An opener validates magic, layout and resource identities, feature masks,
+header length, total bytes, capacities, section offsets and lengths, record
+strides, store control, and observed states before projecting mapped data.
 
-## Common Symptoms
+A noncurrent, unknown, truncated, zero, or malformed mapping is never treated
+as an empty current store. The opener returns `IncompatibleLayout` without
+reading key, descriptor, or payload bytes and without creating a parallel
+mapping for the same public name.
 
-Duplicate key:
+## Operation statuses
 
-```csharp
-var first = store.TryPublish(key, [1]);
-var second = store.TryPublish(key, [2]);
-```
+| Code | Status | Meaning | Retry guidance |
+|---:|---|---|---|
+| 0 | `Success` | The documented ordering and cleanup work completed. | None. |
+| 1 | `DuplicateKey` | The exact key is published, pending removal, or reserved. | Retry only after that lifecycle ends. |
+| 2 | `NotFound` | No published value matches the exact key. | Publish it or treat it as absent. |
+| 3 | `KeyTooLarge` | Key length exceeds the configured maximum. | Fix caller input or recreate with a larger maximum. |
+| 4 | `ValueTooLarge` | Value length exceeds the configured maximum. | Split externally or recreate with a larger maximum. |
+| 5 | `DescriptorTooLarge` | Descriptor length exceeds the configured maximum. | Reduce it or recreate. |
+| 6 | `StoreFull` | No reusable slot generation is available. | Finish removals/releases or increase capacity. |
+| 7 | `LeaseTableFull` | No reusable lease record is available. | Release leases or increase lease capacity. |
+| 8 | `InvalidLease` | The token is malformed or does not match an active incarnation. | Do not retry that token. |
+| 9 | `LeaseAlreadyReleased` | The exact lease lifetime already ended. | Stop using its views. |
+| 10 | `RemovePending` | The key is logically absent; physical reclamation is still protected or bounded. | Release readers or let later helpers finish reclamation. |
+| 11 | `UnsupportedPlatform` | The requested operation or owner classification is unavailable. | Do not assume an owner stale. |
+| 12 | `StoreDisposed` | The process-local handle is closed or closing. | Open a new handle if needed. |
+| 13 | `CorruptStore` | Revalidated shared state is structurally impossible or unsafe. | Stop using the store and preserve evidence. |
+| 14 | `AccessDenied` | OS access failed during the operation. | Fix permissions; do not reinterpret as contention. |
+| 15 | `UnknownFailure` | An unexpected runtime failure was contained. | Capture diagnostics and platform evidence. |
+| 16 | `InvalidReservation` | The token does not match a pending slot generation. | Do not use its view. |
+| 17 | `ReservationIncomplete` | Commit was attempted before exact announced progress. | Finish writing/advancing or abort. |
+| 18 | `ReservationAlreadyCompleted` | Commit, abort, recovery, disposal, or close already ended the token. | Stop using its view. |
+| 19 | `ReservationWriteOutOfRange` | Requested progress exceeds the announced payload. | Fix producer accounting. |
+| 20 | `InvalidKey` | The key is empty or otherwise invalid. | Fix caller input. |
+| 21 | `StoreBusy` | Bounded local retry, revalidation, helping, scan, or backoff did not order. | Retry according to caller policy. |
+| 22 | `OperationCanceled` | Cancellation won before the operation's ordering point. | Treat as caller cancellation. |
 
-With candidate capacity available, expected statuses are `Success`, then
-`DuplicateKey`. If every physical slot is already occupied, the second
-concurrent operation may return `StoreFull` after its initial absent lookup and
-before final duplicate arbitration.
-Remove the key first, free capacity, or use a new key.
+## Capacity is not corruption
 
-Missing key:
+`StoreFull`, `LeaseTableFull`, and `ParticipantTableFull` report bounded
+capacity. They never latch the store corrupt. A full slot table may contain
+published values, pending reservations, generations protected by leases,
+reclaiming records, or deliberately retired generations. Use diagnostics to
+distinguish them.
 
-```csharp
-var status = store.TryAcquire([99], out var lease);
-```
+`StoreBusy` is also nonterminal. Lock-free system-wide progress does not promise
+that every caller finishes within a no-wait or finite budget.
 
-Expected status: `NotFound`. Check producer success, key bytes, removal, and
-pending reservation state.
+## Duplicate, remove, and reuse races
 
-Full store:
+Key absence and physical reuse are different facts:
 
-```csharp
-// Configure SlotCount = 1, publish one value, then publish another key.
-```
+- `RemovePending` proves the key is logically absent.
+- Existing leases may continue reading their exact generation.
+- New acquires return `NotFound` after logical removal.
+- A new publish of that key may still see `DuplicateKey` until directory and
+  slot reclamation safely complete.
 
-Expected status for the second publish: `StoreFull`. Inspect
-`FreeSlotCount`, `PendingRemovalCount`, and `ActiveReservationCount`.
+This is an expected lifecycle race. Do not delete files, rewrite mapped state,
+or classify it as corruption.
 
-Lease pressure:
+## Token failures
 
-```csharp
-var status = store.TryAcquire(key, out var lease);
-```
+Lease and reservation tokens carry exact-incarnation evidence. The store checks
+the store identity, participant incarnation, record index/incarnation, slot
+index/generation, and relevant lengths before accessing a view or mutating
+shared state.
 
-Expected status under lease-record pressure: `LeaseTableFull`. Increase
-`LeaseRecordCount` or release leases sooner. An exhausted scan alone is not
-enough: the lock-free profile confirms two identical, structurally valid,
-all-non-Free snapshots. Movement or another operation using the handle-local
-proof buffer follows the wait policy and may return `StoreBusy`; malformed lease
-controls fail `CorruptStore`.
+`InvalidLease`, `InvalidReservation`, `LeaseAlreadyReleased`, and
+`ReservationAlreadyCompleted` protect later reused generations. Once a token
+ends, all direct and derived views from that token are invalid for application
+use.
 
-Invalid release:
+## Recovery outcomes
 
-```csharp
-ValueLease lease = default;
-var status = lease.Release();
-```
+Recovery reports record-level classifications in addition to its operation
+status:
 
-Expected status: `InvalidLease`.
+- recovered: the exact stale incarnation was reclaimed;
+- active: a current or live owner must be retained;
+- unsupported: the host could not prove liveness safely;
+- failed/inconsistent: state was unsafe to mutate; and
+- changing: the record changed during classification and was not reclaimed.
 
-Reservation incomplete:
+Unsupported or ambiguous evidence is conservative. Never treat it as stale.
+Recovery disabled in the store options returns `UnsupportedPlatform` with an
+empty report when no scan is performed.
 
-```csharp
-var reserve = store.TryReserve(key, 4, default, out var reservation);
-var commit = reservation.Commit();
-```
+## Cancellation ordering
 
-Expected commit status: `ReservationIncomplete`. Finish with `Advance(4)` or
-abort the reservation.
+Cancellation affects only work that has not crossed its documented ordering
+point. For example, publication visible to readers is not rolled back because a
+token is signaled during bounded post-publication cleanup. The call returns the
+status that describes the shared result.
 
-Reservation out of range:
+C++ and Python cancellation handles are process-local and must remain alive
+until every call borrowing them returns. C# `CancellationToken` follows the
+same synchronous-call lifetime rule through `StoreWaitOptions`.
 
-```csharp
-var status = reservation.Advance(reservation.RemainingBytes + 1);
-```
+## Responding to `CorruptStore`
 
-Expected status: `ReservationWriteOutOfRange`. Advance only the exact bytes
-written into the current span.
+Corruption is latched only after an impossible observation is revalidated. Once
+latched, operations fail closed rather than guessing at payload ownership.
 
-Disposal race:
+Recommended response:
 
-Public store methods and token methods racing with disposal complete normally
-when they entered first, or return `StoreDisposed`, an invalid token outcome, an
-already-completed token outcome, or an empty span projection. Callers should not
-see internal mapped-memory, mutex, or object-disposal exceptions from documented
-public boundaries.
+1. stop new work and keep the physical resources for investigation;
+2. capture protocol identity, diagnostics, process identities, host/container
+   namespace, permissions, and recent crash/recovery events;
+3. do not patch mapped bytes in place;
+4. restore values from an application-owned authoritative source into a fresh
+   SMS2 store; and
+5. investigate unsupported architectures, malicious writers, unsafe external
+   mapping access, or implementation defects.
 
-Unsupported platform:
+## Deployment replacement
 
-Opening or recovery on unsupported platforms returns `UnsupportedPlatform` or
-unsupported recovery counts. See [Portability](portability.md) and
-[SUPPORT.md](../SUPPORT.md).
+An incompatible existing store is not a readable migration source. Stop work,
+drain tokens, close every handle, remove or replace the physical store, create a
+fresh SMS2 store with matching capacities, and republish authoritative values.
+Use another public name for side-by-side operation.
 
-Version mismatch:
+## Related guides
 
-Opening an existing mapping with incompatible layout size, maxima, or major
-layout version returns `IncompatibleLayout`. See
-[Portability](portability.md) and
-[shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md).
-
-Corruption signal:
-
-`CorruptStore` means a process proved unsafe persistent shared state. Layout v2
-irreversibly latches that condition in the mapped store control, so subsequent
-operations in every attached process fail before a new projection or mutation;
-a later open reports `IncompatibleLayout`. Already borrowed spans cannot be
-revoked. Stop access, capture options, operation, status, platform, package
-version, and any diagnostics captured before the latch, then follow
-[SUPPORT.md](../SUPPORT.md). Invalid caller input and ordinary concurrency,
-capacity, cancellation, and token-history outcomes do not set the corruption
-latch.
-
-## Diagnostics To Inspect
-
-Use [Diagnostics](diagnostics.md) to inspect:
-
-- `LastFailureStatus`.
-- `GetFailureCount(StoreStatus.SomeStatus)`.
-- `CapacityPressureCount`.
-- `FreeSlotCount`, `PendingRemovalCount`, and `ActiveReservationCount`.
-- lease and reservation recovery counts.
-- key-index tombstone and probe fields.
-
-These signals help distinguish validation mistakes, live capacity pressure,
-lease leaks, reservation leaks, key churn, unsupported platform behavior, and
-unsafe shared state.
+- [Usage](usage.md)
+- [Diagnostics](diagnostics.md)
+- [Portability](portability.md)
+- [Release migration](releases.md)

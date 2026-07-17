@@ -16,11 +16,9 @@ public sealed class PublishIntegrationTests
             maxDescriptorBytes: descriptor.Length));
 
         Assert.Equal(StoreStatus.Success, store.TryPublish([1, 2, 3], value, descriptor));
-        var published = SharedMemoryLayoutReader.ReadFirstPublished(store);
-        Assert.Equal(value.Length, published.ValueLength);
-        Assert.Equal(descriptor.Length, published.DescriptorLength);
-
         Assert.Equal(StoreStatus.Success, store.TryAcquire([1, 2, 3], out var lease));
+        Assert.Equal(value.Length, lease.ValueLength);
+        Assert.Equal(descriptor.Length, lease.DescriptorLength);
         Assert.True(value.AsSpan().SequenceEqual(lease.ValueSpan));
         Assert.True(descriptor.AsSpan().SequenceEqual(lease.DescriptorSpan));
         lease.Dispose();

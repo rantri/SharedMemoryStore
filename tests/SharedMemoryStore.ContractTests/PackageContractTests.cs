@@ -31,7 +31,6 @@ public sealed class PackageContractTests
         Assert.Contains("linux", project, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows", project, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("docker", project, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("same-host Docker support", project, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

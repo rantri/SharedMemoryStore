@@ -117,7 +117,7 @@ public sealed class MappedAtomicLitmusIntegrationTests
         }
 
         var name = $"sms-non-x64-rejection-{Guid.NewGuid():N}";
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 2,
             maxValueBytes: 16,

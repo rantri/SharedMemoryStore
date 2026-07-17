@@ -342,7 +342,7 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
         OpenMode openMode,
         int participantRecordCount)
     {
-        return SharedMemoryStoreOptions.CreateLockFree(
+        return SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 64,

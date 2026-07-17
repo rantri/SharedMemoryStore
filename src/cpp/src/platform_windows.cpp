@@ -1,4 +1,5 @@
 #include "internal.hpp"
+#include "operation_budget.hpp"
 
 #if defined(_WIN32)
 
@@ -6,6 +7,8 @@
 #  define NOMINMAX
 #endif
 #include <windows.h>
+
+#include <algorithm>
 
 namespace sms::detail {
 namespace {
@@ -56,20 +59,42 @@ public:
     }
     sms_status acquire(const Wait& wait) noexcept override {
         if (!mutex_) return SMS_STATUS_STORE_DISPOSED;
-        DWORD timeout = INFINITE;
-        if (!wait.infinite()) {
-            timeout = wait.milliseconds >= static_cast<std::int64_t>(INFINITE - 1)
-                ? INFINITE - 1
-                : static_cast<DWORD>(wait.milliseconds);
+        if (!wait.valid()) return SMS_STATUS_UNKNOWN_FAILURE;
+        const auto started = std::chrono::steady_clock::now();
+        for (;;) {
+            if (wait.cancellation != nullptr &&
+                wait.cancellation->is_canceled()) {
+                return SMS_STATUS_OPERATION_CANCELED;
+            }
+            DWORD timeout = 0;
+            if (wait.infinite()) {
+                timeout = 10;
+            } else {
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - started).count();
+                if (elapsed >= wait.milliseconds && wait.milliseconds != 0) {
+                    return SMS_STATUS_STORE_BUSY;
+                }
+                const auto remaining = std::max<std::int64_t>(
+                    0, wait.milliseconds - elapsed);
+                timeout = static_cast<DWORD>(std::min<std::int64_t>(10, remaining));
+            }
+            const auto result = WaitForSingleObject(mutex_, timeout);
+            if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) {
+                held_ = true;
+                return SMS_STATUS_SUCCESS;
+            }
+            if (result != WAIT_TIMEOUT) {
+                const auto error = GetLastError();
+                return error == ERROR_ACCESS_DENIED
+                    ? SMS_STATUS_ACCESS_DENIED
+                    : SMS_STATUS_UNKNOWN_FAILURE;
+            }
+            if (!wait.infinite() && wait.milliseconds == 0) {
+                return SMS_STATUS_STORE_BUSY;
+            }
         }
-        const auto result = WaitForSingleObject(mutex_, timeout);
-        if (result == WAIT_OBJECT_0 || result == WAIT_ABANDONED) {
-            held_ = true;
-            return SMS_STATUS_SUCCESS;
-        }
-        if (result == WAIT_TIMEOUT) return SMS_STATUS_STORE_BUSY;
-        const auto error = GetLastError();
-        return error == ERROR_ACCESS_DENIED ? SMS_STATUS_ACCESS_DENIED : SMS_STATUS_UNKNOWN_FAILURE;
     }
     void release() noexcept override {
         if (held_ && mutex_) {
@@ -84,9 +109,49 @@ private:
 
 } // namespace
 
-PlatformOpenResult platform_open(const ResourceName& resource, const Options& options, const Wait&) noexcept {
+PlatformOpenResult platform_open(
+    const ResourceName& resource,
+    const Options& options,
+    const Wait& wait) noexcept {
     PlatformOpenResult result{};
+    const auto mutex = CreateMutexW(
+        nullptr, FALSE, resource.windows_lock_name.c_str());
+    if (!mutex) {
+        result.status = map_windows_open_error(GetLastError());
+        return result;
+    }
+    std::unique_ptr<WindowsLock> cold_lock;
+    try {
+        cold_lock = std::make_unique<WindowsLock>(mutex);
+    } catch (...) {
+        CloseHandle(mutex);
+        result.status = SMS_OPEN_MAPPING_FAILED;
+        return result;
+    }
+    const auto lock_status = cold_lock->acquire(wait);
+    if (lock_status != SMS_STATUS_SUCCESS) {
+        switch (lock_status) {
+        case SMS_STATUS_STORE_BUSY:
+            result.status = SMS_OPEN_STORE_BUSY;
+            break;
+        case SMS_STATUS_OPERATION_CANCELED:
+            result.status = SMS_OPEN_OPERATION_CANCELED;
+            break;
+        case SMS_STATUS_ACCESS_DENIED:
+            result.status = SMS_OPEN_ACCESS_DENIED;
+            break;
+        case SMS_STATUS_UNSUPPORTED_PLATFORM:
+            result.status = SMS_OPEN_UNSUPPORTED_PLATFORM;
+            break;
+        default:
+            result.status = SMS_OPEN_MAPPING_FAILED;
+            break;
+        }
+        return result;
+    }
+
     HANDLE mapping{};
+    bool physical_creator{};
     if (options.open_mode == SMS_OPEN_MODE_OPEN_EXISTING) {
         mapping = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, resource.windows_region_name.c_str());
         if (!mapping) {
@@ -103,18 +168,17 @@ PlatformOpenResult platform_open(const ResourceName& resource, const Options& op
             result.status = map_windows_open_error(GetLastError());
             return result;
         }
-        if (options.open_mode == SMS_OPEN_MODE_CREATE_NEW && GetLastError() == ERROR_ALREADY_EXISTS) {
+        const auto already_exists = GetLastError() == ERROR_ALREADY_EXISTS;
+        if (options.open_mode == SMS_OPEN_MODE_CREATE_NEW && already_exists) {
             CloseHandle(mapping);
             result.status = SMS_OPEN_ALREADY_EXISTS;
             return result;
         }
+        physical_creator = !already_exists;
     }
 
-    // Map the existing section's actual extent. Requesting the caller-computed
-    // layout-v1.2 length here can fail before Store::initialize_or_validate can
-    // inspect an SMS2 header when the v1 request is larger than the v2 region.
-    // A zero byte count is the Windows API's header-first/full-section form;
-    // the store validates identity and dimensions before projecting layout data.
+    // A zero byte count projects the existing section's actual extent. Header
+    // validation, not the caller's requested dimensions, decides compatibility.
     auto* data = static_cast<std::uint8_t*>(MapViewOfFile(
         mapping, FILE_MAP_ALL_ACCESS, 0, 0, 0));
     if (!data) {
@@ -124,16 +188,31 @@ PlatformOpenResult platform_open(const ResourceName& resource, const Options& op
         return result;
     }
 
-    const auto mutex = CreateMutexW(nullptr, FALSE, resource.windows_lock_name.c_str());
-    if (!mutex) {
+    MEMORY_BASIC_INFORMATION view{};
+    if (VirtualQuery(data, &view, sizeof(view)) == 0 || view.RegionSize == 0 ||
+        view.RegionSize > static_cast<SIZE_T>(std::numeric_limits<std::int64_t>::max())) {
         const auto error = GetLastError();
         UnmapViewOfFile(data);
         CloseHandle(mapping);
-        result.status = map_windows_open_error(error);
+        result.status = error == ERROR_SUCCESS
+            ? SMS_OPEN_MAPPING_FAILED
+            : map_windows_open_error(error);
         return result;
     }
-    result.region = std::make_unique<WindowsRegion>(mapping, data, options.total_bytes);
-    result.lock = std::make_unique<WindowsLock>(mutex);
+    const auto actual_size = physical_creator
+        ? options.total_bytes
+        : static_cast<std::int64_t>(view.RegionSize);
+    try {
+        result.region = std::make_unique<WindowsRegion>(
+            mapping, data, actual_size);
+    } catch (...) {
+        UnmapViewOfFile(data);
+        CloseHandle(mapping);
+        result.status = SMS_OPEN_MAPPING_FAILED;
+        return result;
+    }
+    result.cold_lock = std::move(cold_lock);
+    result.physical_creator = physical_creator;
     result.status = SMS_OPEN_SUCCESS;
     return result;
 }

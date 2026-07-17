@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using SharedMemoryStore.Engines;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 
@@ -453,7 +452,7 @@ public sealed class LockFreeCrashRecoveryIntegrationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,

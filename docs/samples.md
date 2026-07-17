@@ -7,8 +7,8 @@ the sample ladder.
 
 Each sample README includes purpose and audience, concepts demonstrated,
 prerequisites, command, expected output shape, non-success statuses, cleanup,
-related documentation, and non-goals. The README contract is defined in
-[sample-contract.md](../specs/006-improve-docs-samples/contracts/sample-contract.md).
+related documentation, and non-goals. Current behavior and validation follow
+the [three-runtime quickstart](../specs/010-lock-free-only-multilang/quickstart.md).
 
 ## Prerequisites
 
@@ -32,8 +32,9 @@ of the success paths shown in sample output.
 | 3 | [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md) | You want direct reservation ingest, abort cleanup, segmented publish, and adapter examples. | `dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release` |
 | 4 | [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md) | You want an application-owned lifecycle and health wrapper without adding dependencies to the core package. | `dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release` |
 | 5 | [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md) | You want to validate same-host Docker containers sharing one store. | `pwsh ./scripts/validate-docker-shared-memory.ps1` |
-| 6 | [samples/CppBasicUsage/README.md](../samples/CppBasicUsage/README.md) | You want the native C++20 RAII create, publish, lease, and release path. | Build with `SMS_BUILD_SAMPLES=ON` or consume the installed CMake package. |
-| 7 | [samples/PythonBasicUsage/README.md](../samples/PythonBasicUsage/README.md) | You want context-managed Python access through an installed wheel and bundled native library. | `python samples/PythonBasicUsage/main.py` from the wheel environment. |
+| 6 | [samples/LockFreeBrokerKeys/README.md](../samples/LockFreeBrokerKeys/README.md) | You already own dispatch and want messages to carry shared-memory keys instead of payloads. | `dotnet run --project samples/LockFreeBrokerKeys/LockFreeBrokerKeys.csproj -c Release` |
+| 7 | [samples/CppBasicUsage/README.md](../samples/CppBasicUsage/README.md) | You want the native C++20 RAII create, publish, lease, and release path. | Build with `SMS_BUILD_SAMPLES=ON` or consume the installed CMake package. |
+| 8 | [samples/PythonBasicUsage/README.md](../samples/PythonBasicUsage/README.md) | You want context-managed Python access through an installed wheel and bundled native library. | `python samples/PythonBasicUsage/main.py` from the wheel environment. |
 
 ## Basic Usage
 
@@ -162,8 +163,8 @@ Build all samples through the solution:
 dotnet build SharedMemoryStore.slnx -c Release
 ```
 
-Run the full validation path from
-[quickstart.md](../specs/006-improve-docs-samples/quickstart.md) before
+Run the full validation path from the current
+[quickstart](../specs/010-lock-free-only-multilang/quickstart.md) before
 release:
 
 ```powershell

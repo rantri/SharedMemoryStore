@@ -27,7 +27,6 @@ public sealed class LeaseRecoveryIntegrationTests
         using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options(enableRecovery: false));
 
         Assert.Equal(StoreStatus.UnsupportedPlatform, store.TryRecoverLeases(new LeaseRecoveryOptions(true), out var report));
-        Assert.Equal(0, report.RecoveredLeaseCount);
-        Assert.True(report.UnsupportedLeaseCount > 0);
+        Assert.Equal(default, report);
     }
 }

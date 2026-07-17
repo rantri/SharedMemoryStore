@@ -4,7 +4,6 @@ using System.Reflection;
 using System.Text.Json;
 using SharedMemoryStore.Engines;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 
@@ -881,7 +880,7 @@ internal static class CheckpointCrashCommands
                 return false;
             }
 
-            var options = SharedMemoryStoreOptions.CreateLockFree(
+            var options = SharedMemoryStoreOptions.Create(
                 values[1],
                 slotCount,
                 maxValueBytes,

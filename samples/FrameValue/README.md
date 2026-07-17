@@ -76,5 +76,6 @@ cleanup.
 ## Scope Boundaries and Non-Goals
 
 The descriptor format is a sample convention, not a package schema. The core
-package does not parse frames, validate pixel formats, persist frame data, or
-provide current C++ or Python bindings.
+package does not parse frames, validate pixel formats, or persist frame data.
+C++ and Python can exchange the same opaque bytes through SMS2; this sample
+keeps its application-specific frame adapter in C#.

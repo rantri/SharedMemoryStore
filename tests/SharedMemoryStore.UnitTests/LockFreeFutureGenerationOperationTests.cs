@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 
@@ -110,7 +109,7 @@ public sealed class LockFreeFutureGenerationOperationTests
         out LockFreeKeyDirectory directory,
         out LockFreeSlotTable slots)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-future-operation-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 16,

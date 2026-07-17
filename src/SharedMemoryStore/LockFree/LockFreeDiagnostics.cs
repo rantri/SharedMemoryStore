@@ -36,11 +36,6 @@ internal sealed unsafe class LockFreeDiagnostics
         LockFreeStoreControl? storeControl = null)
     {
         ArgumentNullException.ThrowIfNull(region);
-        if (protocolInfo.Profile != StoreProfile.LockFree)
-        {
-            throw new ArgumentException("Layout-v2 diagnostics require the lock-free profile.", nameof(protocolInfo));
-        }
-
         _mappingBase = region.Pointer;
         _layout = layout;
         _protocolInfo = protocolInfo;
@@ -95,7 +90,6 @@ internal sealed unsafe class LockFreeDiagnostics
         };
 
         return _local.CreateSnapshot(
-            StoreProfile.LockFree,
             _protocolInfo,
             metrics);
     }
@@ -150,7 +144,6 @@ internal sealed unsafe class LockFreeDiagnostics
         }
 
         snapshot = _local.CreateSnapshot(
-            StoreProfile.LockFree,
             _protocolInfo,
             metrics);
         LockFreeCheckpoint.Reach(ref checkpoint, LockFreeCheckpointId.DiagnosticsAfterSnapshotAssembly);
@@ -457,12 +450,10 @@ internal sealed unsafe class LockFreeDiagnostics
             RetiredParticipantCount = retiredParticipants,
             IndexEntryCount = indexEntryCount,
             OccupiedIndexEntryCount = occupiedIndexEntryCount,
-            TombstoneIndexEntryCount = 0,
             EmptyIndexEntryCount = Math.Max(0, indexEntryCount - occupiedIndexEntryCount),
-            UsableIndexCapacity = freeSlots,
+            UsableIndexCapacity = Math.Max(0, indexEntryCount - occupiedIndexEntryCount),
             LastObservedProbeLength = lastOverflowScanLength,
             MaxObservedProbeLength = maxOverflowScanLength,
-            IndexCompactionCount = 0,
             PrimaryDirectoryOccupancy = primaryOccupancy,
             SpilledBucketCount = spilledBuckets,
             OverflowDirectoryOccupancy = overflowOccupancy,

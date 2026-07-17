@@ -1,5 +1,4 @@
 using SharedMemoryStore.Engines;
-using SharedMemoryStore.Layout;
 using System.Runtime.CompilerServices;
 
 namespace SharedMemoryStore;
@@ -19,11 +18,6 @@ public struct ValueReservation : IDisposable
     {
         _store = store;
         _handle = handle;
-    }
-
-    internal ValueReservation(MemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int payloadLength)
-        : this(store, store.CreateLegacyReservationHandle(slotIndex, lifecycleId, payloadLength))
-    {
     }
 
     /// <summary>Gets a value indicating whether this token still references a pending reservation.</summary>
@@ -55,14 +49,14 @@ public struct ValueReservation : IDisposable
     /// <summary>Advances the exact number of payload bytes written into the current writable view.</summary>
     public readonly StoreStatus Advance(int byteCount) => Advance(byteCount, StoreWaitOptions.Default);
 
-    /// <summary>Advances written bytes using the supplied profile-specific bounded wait policy.</summary>
+    /// <summary>Advances written bytes using the supplied bounded wait policy.</summary>
     public readonly StoreStatus Advance(int byteCount, StoreWaitOptions waitOptions) =>
         _store?.AdvanceReservation(_handle, byteCount, waitOptions) ?? StoreStatus.InvalidReservation;
 
     /// <summary>Commits the reservation after exactly the announced payload length has been advanced.</summary>
     public readonly StoreStatus Commit() => Commit(StoreWaitOptions.Default);
 
-    /// <summary>Commits the reservation using the supplied profile-specific bounded wait policy.</summary>
+    /// <summary>Commits the reservation using the supplied bounded wait policy.</summary>
     public readonly StoreStatus Commit(StoreWaitOptions waitOptions) =>
         _store?.CommitReservation(_handle, waitOptions) ?? StoreStatus.InvalidReservation;
 
@@ -70,10 +64,10 @@ public struct ValueReservation : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public readonly StoreStatus Abort() => Abort(StoreWaitOptions.Default);
 
-    /// <summary>Aborts the reservation using the supplied profile-specific bounded wait policy.</summary>
+    /// <summary>Aborts the reservation using the supplied bounded wait policy.</summary>
     [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     public readonly StoreStatus Abort(StoreWaitOptions waitOptions) =>
-        _store?.AbortReservation(_handle, countAbort: true, waitOptions) ?? StoreStatus.InvalidReservation;
+        _store?.AbortReservation(_handle, waitOptions) ?? StoreStatus.InvalidReservation;
 
     /// <summary>Best-effort abort of a still-current reservation.</summary>
     public readonly void Dispose()
@@ -83,10 +77,6 @@ public struct ValueReservation : IDisposable
             _ = Abort();
         }
     }
-
-    internal readonly int SlotIndexForTesting => MemoryStore.DecodeLegacySlotIndex(_handle.SlotBinding);
-
-    internal readonly SlotLifecycleId LifecycleIdForTesting => MemoryStore.DecodeLegacyLifecycle(_handle);
 
     internal readonly ReservationHandle HandleForEngine => _handle;
 }

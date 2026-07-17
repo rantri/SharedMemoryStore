@@ -1,0 +1,16 @@
+{
+  "offline_only": true,
+  "state": "reserved",
+  "protocol": {
+    "layout_major": 2,
+    "layout_minor": 0,
+    "resource_protocol": 2,
+    "required_features": 7,
+    "optional_features": 0
+  },
+  "fixture": {
+    "byte_length": 1368,
+    "store_id_hex": "0102030405060708",
+    "representative_only": true
+  }
+}

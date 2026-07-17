@@ -1,196 +1,214 @@
 # Packaging
 
-SharedMemoryStore ships independently versioned NuGet, CMake, and Python
-artifacts. They interoperate through layout `1.2` and resource naming `1`;
-matching package versions are not required. Managed `2.0.0` additionally
-supports explicit C# layout `2.0` and resource protocol `2`, while the current
-native and Python distributions reject it. The managed runtime package is built
-from
-[`src/SharedMemoryStore/SharedMemoryStore.csproj`](../src/SharedMemoryStore/SharedMemoryStore.csproj)
-and targets `net10.0`. Runtime dependencies are limited to the .NET BCL.
+SharedMemoryStore ships three independently versioned distributions. They are
+not nested inside one another, but they implement one mapped SMS2 protocol.
 
-## Managed NuGet Metadata
+| Ecosystem | Package | Version | Native ABI | Creates/reads |
+|---|---|---:|---:|---|
+| NuGet | `SharedMemoryStore` | `3.0.0` | n/a | SMS2 `2.0` |
+| CMake | `SharedMemoryStore` | `1.0.0` | provides C ABI `2.0` | SMS2 `2.0` |
+| Python wheel | `shared-memory-store` | `1.0.0` | requires C ABI `2.0` | SMS2 `2.0` |
 
-| Field | Value |
-|-------|-------|
+Resource protocol `2`, required features `7`, optional features `0`, and the
+qualified Windows/Linux x64 targets are declared in
+[`protocol/compatibility.json`](../protocol/compatibility.json).
+
+## NuGet package
+
+The managed project is
+[`src/SharedMemoryStore/SharedMemoryStore.csproj`](../src/SharedMemoryStore/SharedMemoryStore.csproj).
+It targets `net10.0` and has no runtime `PackageReference`; the implementation
+uses the .NET base class library.
+
+Key package metadata:
+
+| Property | Value |
+|---|---|
 | `PackageId` | `SharedMemoryStore` |
-| `Version` | `2.0.0` |
-| `TargetFramework` | `net10.0` |
-| `Description` | `A bounded named shared-memory key-value store for opaque binary values.` |
-| `PackageTags` | `shared-memory;memory-mapped-file;zero-copy;linux;windows;docker;library` |
+| `Version` | `3.0.0` |
+| `GenerateDocumentationFile` | `true` |
 | `PackageLicenseExpression` | `MIT` |
-| `PackageProjectUrl` | `https://github.com/rantri/SharedMemoryStore` |
 | `PackageReadmeFile` | `README.md` |
-| `PackageReleaseNotes` | `NuGet SharedMemoryStore 2.0.0 adds an explicitly selected C# layout 2.0 lock-free key-value profile and resource protocol 2, including zero-copy reservation publication, shared read leases, generation-fenced removal/reuse, participant records, explicit recovery, and additive diagnostics. The legacy profile remains the default and preserves mapped layout 1.2, resource naming 1, existing status numbers, and Linux, Windows, and same-host Docker support. Layout 1.2 and 2.0 mappings are distinct: upgrade and rollback require drain, close, recreate, and application-owned republish; there is no in-place conversion or mixed-layout writer mode. Independently versioned C++ and Python 0.1.0 distributions remain layout 1.2-only and fail closed on layout 2.0.` |
-| `RepositoryType` | `git` |
-| `RepositoryUrl` | `https://github.com/rantri/SharedMemoryStore` |
-| `SymbolPackageFormat` | `snupkg` |
+| Symbols | portable PDB in `.snupkg` |
 
-The package project packs the root [README.md](../README.md) at the package
-root so NuGet consumers see the same package purpose, status, first-use
-workflow, support path, security path, and contract links as repository
-visitors.
-
-## Native CMake Distribution
-
-The root CMake project is version `0.1.0`, requires CMake 3.20 or newer and a
-C++20 compiler, and builds `shared_memory_store` as a shared library. Optional
-tests, samples, and static library targets are controlled by
-`SMS_BUILD_TESTS`, `SMS_BUILD_SAMPLES`, and `SMS_BUILD_STATIC`.
-
-Installation exports `SharedMemoryStore::SharedMemoryStore` and these package
-identities:
-
-- native package `0.1.0`.
-- C ABI `1.0`.
-- mapped layout `1.2`.
-- resource naming `1`.
-
-The installed development artifact includes the C header
-`shared_memory_store/c_api.h` and C++ header
-`shared_memory_store/store.hpp`. The C ABI uses fixed-width integers,
-versioned structures, caller-owned byte ranges, and opaque store, lease, and
-reservation handles. The C++ header adds move-only RAII wrappers.
-
-Build and validate the install plus clean `find_package` consumer with:
+Build and inspect locally:
 
 ```powershell
-pwsh ./scripts/validate-native.ps1 -Configuration Release
+dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
 ```
 
-## Python Wheel Distribution
+The package contains the managed assembly, XML documentation, symbols in the
+symbol package, license metadata, and repository README. It does not contain the
+C++ or Python distributions.
 
-The root [`pyproject.toml`](../pyproject.toml) defines
-`shared-memory-store` `0.1.0` for Python 3.10 or newer. `scikit-build-core` is a
-build dependency only. A platform wheel contains the Python modules and the
-native shared library directly beside them; installing a completed wheel does
-not require a compiler or third-party Python runtime package.
+The project `PackageReleaseNotes` state the single-protocol break, SMS2
+identity, participant capacity, lock-free lifecycle, diagnostics, native/Python
+versions, and required drain-close-recreate-republish deployment replacement.
 
-The loader uses standard-library `ctypes`, loads only
-`shared_memory_store.dll` or `libshared_memory_store.so` from the package, and
-validates C ABI major version, layout `1.2`, resource naming `1`, and canonical
-record sizes. It deliberately does not search the current directory, `PATH`,
-or a system library path.
+## CMake package
 
-Build a wheel and inspect it through a clean environment:
+The root project is `SharedMemoryStore` version `1.0.0`, requires CMake 3.20+
+and C++20, and builds the platform native library. Public headers include:
+
+- `shared_memory_store/c_api.h`: fixed-width C ABI `2.0`;
+- `shared_memory_store/store.hpp`: move-only C++ RAII API; and
+- protocol/status declarations required by consumers.
+
+Configure, test, install, and consume:
+
+```powershell
+cmake -S . -B artifacts/native -DSMS_BUILD_TESTS=ON -DSMS_BUILD_SAMPLES=ON -DSMS_INSTALL=ON
+cmake --build artifacts/native --config Release
+ctest --test-dir artifacts/native -C Release --output-on-failure
+cmake --install artifacts/native --config Release --prefix artifacts/native-install
+```
+
+Consumer CMake:
+
+```cmake
+find_package(SharedMemoryStore 1.0 CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE SharedMemoryStore::shared_memory_store)
+```
+
+The install exports the shared target, headers, config/version files, and the
+platform library with ABI/SOVERSION `2`. Optional static output does not change
+the C ABI or mapped protocol.
+
+A clean consumer must build from a directory outside the source tree using only
+the install prefix. This catches undeclared include paths, source-tree runtime
+loading, and missing transitive link requirements.
+
+## Python wheel
+
+[`pyproject.toml`](../pyproject.toml) defines `shared-memory-store` version
+`1.0.0` for Python 3.10+. `scikit-build-core` builds the native library and
+places it beside the Python modules:
+
+```text
+shared_memory_store/
+  __init__.py
+  _native.py
+  store.py
+  shared_memory_store.dll       # Windows wheel
+  libshared_memory_store.so     # Linux wheel
+```
+
+The Python runtime surface uses only the standard library and `ctypes` after
+installation. Build dependencies are not runtime dependencies.
+
+Build and test a clean wheel:
 
 ```powershell
 python -m pip install build
-python -m build --wheel
+python -m build --wheel --sdist
 python -m venv artifacts/python-consumer
 artifacts/python-consumer/Scripts/python -m pip install (Get-ChildItem dist/*.whl | Select-Object -First 1)
 artifacts/python-consumer/Scripts/python samples/PythonBasicUsage/main.py
 ```
 
-Use `bin/python` on Linux. Source distributions include the root CMake project,
-native sources and headers, Python sources, compatibility metadata, README, and
-license so their wheel build has the complete native input.
+Use `artifacts/python-consumer/bin/python` on Linux.
 
-The reproducible repository gate builds and inspects both the wheel and source
-distribution, rebuilds a wheel from the source archive, and runs the installed
-sample from an unrelated directory:
+The loader searches only the installed package directory for the expected
+platform library, loads it with platform-appropriate safe flags, and verifies C
+ABI major `2` before exposing a store. It does not search the current directory,
+`PATH`, arbitrary system directories, or the repository source tree.
+
+The source distribution includes every CMake input, native source/header,
+Python module, protocol compatibility declaration, license, and README needed to
+rebuild the same wheel in isolation.
+
+## Compatibility metadata
+
+`protocol/compatibility.json` schema `3` separates distribution versions from
+the one shared protocol:
+
+```text
+shared_protocol.layout.version = 2.0
+shared_protocol.layout.magic = SMS2
+shared_protocol.layout.resource_protocol = 2
+shared_protocol.layout.required_features_mask = 7
+shared_protocol.noncurrent_mapping_policy = reject-before-payload-access
+```
+
+Each distribution declares `creates_layouts: ["2.0"]` and
+`reads_layouts: ["2.0"]`. The CMake entry declares C ABI `2.0`; the Python entry
+declares required C ABI `2.0`.
+
+Matching package versions are not required for interoperability. Matching
+protocol identity, capacities, public resource name, platform namespace, and
+application byte schema are required.
+
+## Clean-consumer gates
+
+Managed:
+
+```powershell
+pwsh ./scripts/validate-package-consumption.ps1 -Configuration Release
+```
+
+This packs NuGet `3.0.0`, creates an isolated console project and package cache,
+installs only the produced package, builds the documented lifecycle, checks
+protocol identity and participant exhaustion, and runs it.
+
+Native:
+
+```powershell
+pwsh ./scripts/validate-native.ps1 -Configuration Release
+```
+
+The native gate configures from clean state, builds/tests, installs, and builds
+an external `find_package` consumer.
+
+Python:
 
 ```powershell
 pwsh ./scripts/validate-python.ps1 -Configuration Release
 ```
 
-## Compatibility Identities
+The Python gate rebuilds wheel and sdist, installs into a clean environment,
+clears source-tree import paths, validates adjacent ABI loading, tests wrong or
+missing ABI rejection, and runs the installed sample.
 
-| Distribution | Version | ABI requirement | Creates/reads | Resource naming |
-|--------------|---------|-----------------|---------------|-----------------|
-| NuGet `SharedMemoryStore` | `2.0.0` | Not applicable | layouts `1.2`, `2.0` | `1`, `2` |
-| CMake `SharedMemoryStore` | `0.1.0` | provides C ABI `1.0` | layout `1.2` | `1` |
-| Python `shared-memory-store` | `0.1.0` | requires C ABI `1.0` | layout `1.2` | `1` |
+## Release validation
 
-The authoritative machine-readable declaration is
-[`protocol/compatibility.json`](../protocol/compatibility.json). Release
-evidence for a target OS and ordered runtime pair must still be recorded; a
-metadata entry alone is not proof that a validation run completed.
+A release is ready only when:
 
-## Build and Pack the Managed Package
+- package metadata and public documentation agree on versions;
+- managed, native, Python, and nine ordered-pair interoperability suites pass on
+  qualified Windows/Linux x64 hosts;
+- the protocol manifest and compatibility declaration agree with all three
+  implementations;
+- every clean consumer runs without source-tree dependencies;
+- symbols and native/Python binary inputs are complete; and
+- release notes state breaking impact and deployment replacement steps.
 
-```powershell
-dotnet restore
-dotnet build SharedMemoryStore.slnx -c Release
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
-```
+The NuGet publishing workflow may publish the managed package independently.
+CMake installation artifacts and Python wheels have their own publication and
+signing policy; their presence in this repository does not imply registry
+publication.
 
-Packing produces both `SharedMemoryStore.<version>.nupkg` and the portable-symbol
-package `SharedMemoryStore.<version>.snupkg`. NuGet.org publishes the symbol
-package to its symbol server alongside the primary package.
+## Versioning rules
 
-## Automated Publication
+- A language API change advances that distribution's package version.
+- A C ABI break advances the ABI major and native/Python package metadata.
+- A mapped byte, state, hash, or memory-order incompatibility requires a new
+  layout identity.
+- A platform resource-name or cleanup incompatibility requires a new resource
+  protocol.
+- Optional additive behavior must not change the meaning of required SMS2
+  fields.
 
-The managed jobs in [CI](../.github/workflows/ci.yml) validate Linux and Windows
-on pull requests and pushes to `main`. The manually triggered
-[release workflow](../.github/workflows/release.yml) performs the full release
-validation, including Docker, verifies that the version is unused, creates the
-package and symbols, publishes them to NuGet.org with trusted publishing, and
-creates the matching GitHub release and `v<version>` tag.
+## Deployment replacement
 
-That workflow publishes the managed NuGet artifact. The repository currently
-defines native install artifacts and Python wheel builds, but registry
-publication for a native archive or Python package is not implied until a
-separate release path and its credentials are reviewed.
+Packages do not convert a noncurrent mapping. Drain readers and writers, close
+all handles, remove or replace the physical resources, create a fresh SMS2
+store, and republish from application-owned authoritative data. Side-by-side
+cutover uses another public store name.
 
-The one-time trusted-publishing policy and the exact release procedure are
-documented in [Release preparation](releases.md).
+## Related files
 
-## Clean Consumer Validation
-
-```powershell
-scripts/validate-package-consumption.ps1
-```
-
-The clean consumer validation packs the local project, creates a clean
-`net10.0` console application, installs `SharedMemoryStore` from the local
-package source, and exercises the documented first-use path plus advanced
-package-surface checks: publish/acquire/release/remove, direct reservation
-ingest, segmented publish, recovery status paths, and post-disposal status.
-It is expected to run with `pwsh` on Linux and Windows.
-
-This command is a maintainer validation path, not a requirement for ordinary
-package users.
-
-The corresponding native clean consumer is part of
-`scripts/validate-native.ps1`. Python clean consumption means installing the
-built wheel into a fresh virtual environment, confirming the adjacent native
-artifact exists, and running tests or the sample from a directory that cannot
-import repository sources.
-
-## Package README Alignment
-
-The package-facing README is the repository [README.md](../README.md). Keep it
-aligned with:
-
-- [Getting started](getting-started.md) for first-use package commands.
-- [Samples](samples.md) for runnable sample commands.
-- [Support](../SUPPORT.md) and [Security](../SECURITY.md) for reporting paths.
-- [Release preparation](releases.md) for release readiness.
-- [CHANGELOG.md](../CHANGELOG.md) for package history and compatibility impact.
-
-## Release Notes Alignment
-
-`PackageReleaseNotes`, [CHANGELOG.md](../CHANGELOG.md), and
-[Release preparation](releases.md) must agree on:
-
-- package version.
-- distribution and registry being released.
-- C ABI, layout, and resource-naming compatibility identities.
-- compatibility impact.
-- public API or behavior changes.
-- documentation-only changes.
-- known limitations.
-- validated platform scope.
-- migration notes for breaking changes.
-
-Documentation-only changes are patch-level for an already published
-distribution unless they change a public behavior, ABI, layout, lifecycle,
-support, security, or compatibility promise.
-
-## License and Source Metadata
-
-The package license expression is `MIT` and must match the
-[LICENSE](../LICENSE). The project declares `RepositoryType` as `git`. Add a
-public repository URL only when maintainers have finalized the hosted repository
-URL for publication.
+- [README](../README.md)
+- [Release notes](releases.md)
+- [Architecture](architecture.md)
+- [Portability](portability.md)
+- [Protocol overview](../protocol/README.md)

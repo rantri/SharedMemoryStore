@@ -19,7 +19,7 @@ internal static class ParticipantOrphanCommands
             return 64;
         }
 
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             arguments[1],
             slotCount,
             maxValueBytes,

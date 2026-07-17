@@ -1,229 +1,88 @@
-using System.Globalization;
+using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
-using SharedMemoryStore.IntegrationTests.TestSupport;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
+using SharedMemoryStore.LayoutV2;
 using Store = SharedMemoryStore.MemoryStore;
 
 namespace SharedMemoryStore.IntegrationTests;
 
-public sealed class LockFreeProfileOpenIntegrationTests
+public sealed class SingleProtocolOpenIntegrationTests
 {
-    [Fact]
-    [Trait("Category", "Integration")]
-    public void LinuxLegacyOpenRejectsBackingFileTruncatedBelowTheFixedHeader()
-    {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
-        string name = $"sms-v1-truncated-header-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions create = CreateOptions(
-            StoreProfile.Legacy,
-            name,
-            OpenMode.CreateNew,
-            participantRecordCount: 2);
-        SharedMemoryStoreOptions open = CreateOptions(
-            StoreProfile.Legacy,
-            name,
-            OpenMode.OpenExisting,
-            participantRecordCount: 2);
-        PlatformResourceName resource = PlatformResourceName.Create(name);
-        using Store owner = IntegrationStoreFactory.Create(create);
-
-        TruncateLinuxRegion(resource.LinuxRegionPath, Marshal.SizeOf<StoreHeader>() - 1L);
-
-        StoreOpenStatus status = Store.TryCreateOrOpen(open, out Store? rejected);
-
-        rejected?.Dispose();
-        Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
-        Assert.Null(rejected);
-    }
+    private const uint RetiredSms1Magic = 0x3153_4d53;
+    private const uint CanonicalSms2Magic = 0x3253_4d53;
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void LinuxLegacyOpenRejectsValidHeaderWhosePayloadExtentWasTruncated()
+    public void OrdinaryCreateReportsTheCanonicalFiveFieldIdentity()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!IsSupportedHost())
         {
             return;
         }
 
-        string name = $"sms-v1-truncated-payload-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions create = CreateOptions(
-            StoreProfile.Legacy,
-            name,
+        SharedMemoryStoreOptions options = CreateOptions(
+            $"sms-single-protocol-{Guid.NewGuid():N}",
             OpenMode.CreateNew,
             participantRecordCount: 2);
-        SharedMemoryStoreOptions open = CreateOptions(
-            StoreProfile.Legacy,
-            name,
-            OpenMode.OpenExisting,
+
+        StoreOpenStatus status = Store.TryCreateOrOpen(options, out Store? store);
+
+        try
+        {
+            Assert.Equal(StoreOpenStatus.Success, status);
+            Assert.NotNull(store);
+            AssertCanonicalProtocol(store!);
+        }
+        finally
+        {
+            store?.Dispose();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public void CreateNewHasOnePhysicalCreatorAndLeavesTheExistingStoreUntouched()
+    {
+        if (!IsSupportedHost())
+        {
+            return;
+        }
+
+        byte[] key = [0xa1, 0x00, 0xb2];
+        byte[] value = [0x10, 0x20, 0x30];
+        SharedMemoryStoreOptions options = CreateOptions(
+            $"sms-physical-creator-{Guid.NewGuid():N}",
+            OpenMode.CreateNew,
             participantRecordCount: 2);
-        PlatformResourceName resource = PlatformResourceName.Create(name);
-        using Store owner = IntegrationStoreFactory.Create(create);
-        Assert.True(create.TotalBytes > Marshal.SizeOf<StoreHeader>());
+        using Store owner = CreateStore(options);
+        Assert.Equal(StoreStatus.Success, owner.TryPublish(key, value));
 
-        TruncateLinuxRegion(resource.LinuxRegionPath, create.TotalBytes - 1);
-
-        StoreOpenStatus status = Store.TryCreateOrOpen(open, out Store? rejected);
-
-        rejected?.Dispose();
-        Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
-        Assert.Null(rejected);
-    }
-
-    [Theory]
-    [InlineData(OpenMode.OpenExisting)]
-    [InlineData(OpenMode.CreateOrOpen)]
-    [Trait("Category", "Integration")]
-    public void ExistingLegacyHeaderIsRejectedBeforeOversizedLockFreeViewProjection(OpenMode openMode)
-    {
-        if (!IsSupportedLockFreeHost())
-        {
-            return;
-        }
-
-        var name = $"sms-v1-to-v2-header-first-{Guid.NewGuid():N}";
-        var legacyOptions = SharedMemoryStoreOptions.Create(
-            name,
-            slotCount: 2,
-            maxValueBytes: 16,
-            maxDescriptorBytes: 4,
-            maxKeyBytes: 4,
-            leaseRecordCount: 2,
-            openMode: OpenMode.CreateNew);
-        var oversizedLockFreeOptions = SharedMemoryStoreOptions.CreateLockFree(
-            name,
-            slotCount: 128,
-            maxValueBytes: 32 * 1024,
-            maxDescriptorBytes: 256,
-            maxKeyBytes: 128,
-            leaseRecordCount: 256,
-            participantRecordCount: 8,
-            openMode: openMode);
-
-        using var legacy = IntegrationStoreFactory.Create(legacyOptions);
-        Assert.Equal(StoreStatus.Success, legacy.TryPublish([0xA1], [0x5A]));
-
-        var status = Store.TryCreateOrOpen(oversizedLockFreeOptions, out var incompatible);
-
-        incompatible?.Dispose();
-        Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
-        Assert.Null(incompatible);
-        Assert.Equal(StoreProfile.Legacy, legacy.Profile);
-        Assert.Equal(1, legacy.ProtocolInfo.LayoutMajorVersion);
-        AssertPublishedValue(legacy, [0xA1], [0x5A]);
-    }
-
-    [Theory]
-    [InlineData(OpenMode.OpenExisting)]
-    [InlineData(OpenMode.CreateOrOpen)]
-    [Trait("Category", "Integration")]
-    public void ExistingLockFreeHeaderIsRejectedBeforeOversizedLegacyViewProjection(OpenMode openMode)
-    {
-        if (!IsSupportedLockFreeHost())
-        {
-            return;
-        }
-
-        var name = $"sms-v2-to-v1-header-first-{Guid.NewGuid():N}";
-        var lockFreeOptions = SharedMemoryStoreOptions.CreateLockFree(
-            name,
-            slotCount: 2,
-            maxValueBytes: 16,
-            maxDescriptorBytes: 4,
-            maxKeyBytes: 4,
-            leaseRecordCount: 2,
-            participantRecordCount: 2,
-            openMode: OpenMode.CreateNew);
-        var oversizedLegacyOptions = SharedMemoryStoreOptions.Create(
-            name,
-            slotCount: 128,
-            maxValueBytes: 32 * 1024,
-            maxDescriptorBytes: 256,
-            maxKeyBytes: 128,
-            leaseRecordCount: 256,
-            openMode: openMode);
-
-        using var lockFree = IntegrationStoreFactory.Create(lockFreeOptions);
-        Assert.Equal(StoreStatus.Success, lockFree.TryPublish([0xA2], [0x5B]));
-
-        var status = Store.TryCreateOrOpen(oversizedLegacyOptions, out var incompatible);
-
-        incompatible?.Dispose();
-        Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
-        Assert.Null(incompatible);
-        AssertLockFreeProtocol(lockFree);
-        AssertPublishedValue(lockFree, [0xA2], [0x5B]);
-    }
-
-    [Theory]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy)]
-    [Trait("Category", "Integration")]
-    public void OppositeProfileCreateNewReportsAlreadyExists(
-        StoreProfile existingProfile,
-        StoreProfile requestedProfile)
-    {
-        if (!IsSupportedLockFreeHost())
-        {
-            return;
-        }
-
-        var name = $"sms-mixed-create-new-{Guid.NewGuid():N}";
-        var existingOptions = CreateOptions(existingProfile, name, OpenMode.CreateNew, participantRecordCount: 2);
-        var requestedOptions = CreateOptions(requestedProfile, name, OpenMode.CreateNew, participantRecordCount: 2);
-
-        using var existing = IntegrationStoreFactory.Create(existingOptions);
-        Assert.Equal(StoreStatus.Success, existing.TryPublish([0xA3], [0x5C]));
-
-        var status = Store.TryCreateOrOpen(requestedOptions, out var duplicate);
+        StoreOpenStatus duplicateStatus = Store.TryCreateOrOpen(options, out Store? duplicate);
 
         duplicate?.Dispose();
-        Assert.Equal(StoreOpenStatus.AlreadyExists, status);
+        Assert.Equal(StoreOpenStatus.AlreadyExists, duplicateStatus);
         Assert.Null(duplicate);
-        AssertPublishedValue(existing, [0xA3], [0x5C]);
+        AssertPublishedValue(owner, key, value);
     }
 
     [Theory]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [InlineData(OpenMode.CreateNew, StoreOpenStatus.AlreadyExists)]
+    [InlineData(OpenMode.OpenExisting, StoreOpenStatus.IncompatibleLayout)]
+    [InlineData(OpenMode.CreateOrOpen, StoreOpenStatus.StoreBusy)]
     [Trait("Category", "Integration")]
-    public void ExistingZeroHeaderIsNeverInitializedByAnOpener(
-        StoreProfile physicalSizingProfile,
-        StoreProfile requestedProfile,
-        OpenMode requestedMode)
+    public void ExistingZeroHeaderIsNeverInitializationAuthority(
+        OpenMode openMode,
+        StoreOpenStatus expectedStatus)
     {
-        if (!IsSupportedLockFreeHost())
+        if (!IsSupportedHost())
         {
             return;
         }
 
-        string name = $"sms-zero-header-ownership-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions rawCreate = CreateOptions(
-            physicalSizingProfile,
-            name,
-            OpenMode.CreateNew,
-            participantRecordCount: 2);
-        SharedMemoryStoreOptions requested = CreateOptions(
-            requestedProfile,
-            name,
-            requestedMode,
-            participantRecordCount: 2);
-        PlatformResourceName resource = PlatformResourceName.Create(name);
-
+        string name = $"sms-zero-header-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions rawCreate = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
+        SharedMemoryStoreOptions requested = CreateOptions(name, openMode, participantRecordCount: 2);
         Assert.Equal(
             StoreOpenStatus.Success,
             SharedStorePlatform.TryOpenRegion(
@@ -232,13 +91,10 @@ public sealed class LockFreeProfileOpenIntegrationTests
                 out MemoryMappedStoreRegion? rawRegion));
         Assert.NotNull(rawRegion);
 
-        try
+        using (rawRegion)
         {
             byte[] prefixBefore = ReadPrefix(rawRegion!, 512);
             Assert.All(prefixBefore, static value => Assert.Equal(0, value));
-            string[] ownersBefore = OperatingSystem.IsLinux()
-                ? ReadOwnerLines(resource.LinuxOwnersPath)
-                : [];
 
             StoreOpenStatus status = Store.TryCreateOrOpen(
                 requested,
@@ -246,138 +102,58 @@ public sealed class LockFreeProfileOpenIntegrationTests
                 out Store? rejected);
 
             rejected?.Dispose();
-            StoreOpenStatus expected = requestedMode switch
-            {
-                OpenMode.CreateNew => StoreOpenStatus.AlreadyExists,
-                OpenMode.CreateOrOpen => StoreOpenStatus.StoreBusy,
-                _ => StoreOpenStatus.IncompatibleLayout
-            };
-            Assert.Equal(expected, status);
+            Assert.Equal(expectedStatus, status);
             Assert.Null(rejected);
             Assert.Equal(prefixBefore, ReadPrefix(rawRegion!, prefixBefore.Length));
-            if (OperatingSystem.IsLinux())
-            {
-                Assert.Equal(
-                    ownersBefore.OrderBy(static line => line, StringComparer.Ordinal),
-                    ReadOwnerLines(resource.LinuxOwnersPath).OrderBy(static line => line, StringComparer.Ordinal));
-            }
         }
-        finally
-        {
-            rawRegion!.Dispose();
-        }
-
-        SharedMemoryStoreOptions missing = CreateOptions(
-            requestedProfile,
-            name,
-            OpenMode.OpenExisting,
-            participantRecordCount: 2);
-        Assert.Equal(StoreOpenStatus.NotFound, Store.TryCreateOrOpen(missing, out Store? absent));
-        Assert.Null(absent);
     }
 
-    [Theory]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.Legacy, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.Legacy, OpenMode.CreateOrOpen)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateNew)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.OpenExisting)]
-    [InlineData(StoreProfile.LockFree, StoreProfile.LockFree, OpenMode.CreateOrOpen)]
+    [Fact]
     [Trait("Category", "Integration")]
-    public void ColdGateIsAcquiredBeforeAnyPhysicalMappingProbe(
-        StoreProfile creatorProfile,
-        StoreProfile contenderProfile,
-        OpenMode contenderMode)
+    public void RetiredSms1HeaderIsRejectedBeforePayloadProjectionOrMutation()
     {
-        if (!IsSupportedLockFreeHost())
+        if (!IsSupportedHost())
         {
             return;
         }
 
-        string name = $"sms-cold-gate-before-map-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions creator = CreateOptions(
-            creatorProfile,
-            name,
-            OpenMode.CreateNew,
-            participantRecordCount: 2);
-        SharedMemoryStoreOptions contender = CreateOptions(
-            contenderProfile,
-            name,
-            contenderMode,
-            participantRecordCount: 2);
-        long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        Assert.Equal(
-            StoreOpenStatus.Success,
-            SharedStorePlatform.TryBeginOpen(
-                creator,
-                StoreWaitOptions.Default,
-                started,
-                out SharedStoreOpenScope? heldScope));
-        Assert.NotNull(heldScope);
+        AssertSyntheticHeaderRejected(
+            RetiredSms1Magic,
+            requiredFeatures: 0,
+            $"sms-retired-header-{Guid.NewGuid():N}");
+    }
 
-        using (heldScope)
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(1UL)]
+    [InlineData(3UL)]
+    [InlineData(15UL)]
+    [Trait("Category", "Integration")]
+    public void MissingOrUnknownRequiredFeaturesAreRejectedBeforePayloadProjection(ulong requiredFeatures)
+    {
+        if (!IsSupportedHost())
         {
-            (StoreOpenStatus Status, Store? Store) result = default;
-            Exception? contenderFailure = null;
-            using var contenderFinished = new ManualResetEventSlim(initialState: false);
-            var contenderThread = new Thread(() =>
-                {
-                    try
-                    {
-                        StoreOpenStatus status = Store.TryCreateOrOpen(
-                            contender,
-                            StoreWaitOptions.NoWait,
-                            out Store? opened);
-                        result = (status, opened);
-                    }
-                    catch (Exception exception)
-                    {
-                        contenderFailure = exception;
-                    }
-                    finally
-                    {
-                        contenderFinished.Set();
-                    }
-                })
-            {
-                IsBackground = true,
-                Name = "SharedMemoryStore cold gate-before-map contender"
-            };
-            contenderThread.Start();
-            Assert.True(contenderFinished.Wait(TimeSpan.FromSeconds(5)));
-            Assert.Null(contenderFailure);
-
-            result.Store?.Dispose();
-            Assert.Equal(StoreOpenStatus.StoreBusy, result.Status);
-            Assert.Null(result.Store);
-            if (OperatingSystem.IsLinux())
-            {
-                Assert.Single(ReadOwnerLines(PlatformResourceName.Create(name).LinuxOwnersPath));
-            }
+            return;
         }
 
-        using Store recreated = IntegrationStoreFactory.Create(creator);
-        Assert.Equal(creatorProfile, recreated.Profile);
+        AssertSyntheticHeaderRejected(
+            CanonicalSms2Magic,
+            requiredFeatures,
+            $"sms-feature-mask-{requiredFeatures}-{Guid.NewGuid():N}");
     }
 
     [Fact]
     [Trait("Category", "Integration")]
     public void ParticipantCapacityIsPerHandleAndAClosedRecordCanBeReused()
     {
-        if (!IsSupportedLockFreeHost())
+        if (!IsSupportedHost())
         {
             return;
         }
 
-        var name = $"sms-participant-reuse-{Guid.NewGuid():N}";
-        var createOptions = CreateOptions(StoreProfile.LockFree, name, OpenMode.CreateNew, participantRecordCount: 2);
-        var openOptions = CreateOptions(StoreProfile.LockFree, name, OpenMode.OpenExisting, participantRecordCount: 2);
+        string name = $"sms-participant-reuse-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions create = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
+        SharedMemoryStoreOptions open = CreateOptions(name, OpenMode.OpenExisting, participantRecordCount: 2);
         Store? anchor = null;
         Store? second = null;
         Store? rejected = null;
@@ -385,13 +161,13 @@ public sealed class LockFreeProfileOpenIntegrationTests
 
         try
         {
-            var anchorStatus = Store.TryCreateOrOpen(createOptions, out anchor);
-            var secondStatus = Store.TryCreateOrOpen(openOptions, out second);
-            var exhaustedStatus = Store.TryCreateOrOpen(openOptions, out rejected);
+            StoreOpenStatus anchorStatus = Store.TryCreateOrOpen(create, out anchor);
+            StoreOpenStatus secondStatus = Store.TryCreateOrOpen(open, out second);
+            StoreOpenStatus exhaustedStatus = Store.TryCreateOrOpen(open, out rejected);
 
             second?.Dispose();
             second = null;
-            var replacementStatus = Store.TryCreateOrOpen(openOptions, out replacement);
+            StoreOpenStatus replacementStatus = Store.TryCreateOrOpen(open, out replacement);
 
             Assert.Equal(StoreOpenStatus.Success, anchorStatus);
             Assert.NotNull(anchor);
@@ -400,8 +176,8 @@ public sealed class LockFreeProfileOpenIntegrationTests
             Assert.Null(rejected);
             Assert.Equal(StoreOpenStatus.Success, replacementStatus);
             Assert.NotNull(replacement);
-            AssertLockFreeProtocol(anchor!);
-            AssertLockFreeProtocol(replacement!);
+            AssertCanonicalProtocol(anchor!);
+            AssertCanonicalProtocol(replacement!);
         }
         finally
         {
@@ -414,89 +190,152 @@ public sealed class LockFreeProfileOpenIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void ClosingFinalParticipantAllowsASecondLockFreeCreateNewLifecycle()
+    public void OpenExistingCanReopenWhileTheCanonicalMappingRemainsLive()
     {
-        if (!IsSupportedLockFreeHost())
+        if (!IsSupportedHost())
         {
             return;
         }
 
-        var name = $"sms-participant-final-close-{Guid.NewGuid():N}";
-        var options = CreateOptions(StoreProfile.LockFree, name, OpenMode.CreateNew, participantRecordCount: 1);
+        string name = $"sms-reopen-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions create = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 3);
+        SharedMemoryStoreOptions open = CreateOptions(name, OpenMode.OpenExisting, participantRecordCount: 3);
+        using Store anchor = CreateStore(create);
 
-        using (var first = IntegrationStoreFactory.Create(options))
+        using (Store second = CreateStore(open))
         {
-            AssertLockFreeProtocol(first);
+            AssertCanonicalProtocol(second);
         }
 
-        using var recreated = IntegrationStoreFactory.Create(options);
-        AssertLockFreeProtocol(recreated);
+        using Store reopened = CreateStore(open);
+        AssertCanonicalProtocol(anchor);
+        AssertCanonicalProtocol(reopened);
+    }
+
+    [Theory]
+    [InlineData(OpenMode.CreateNew)]
+    [InlineData(OpenMode.OpenExisting)]
+    [InlineData(OpenMode.CreateOrOpen)]
+    [Trait("Category", "Integration")]
+    public void ColdGateIsAcquiredBeforeAnyPhysicalMappingProbe(OpenMode contenderMode)
+    {
+        if (!IsSupportedHost())
+        {
+            return;
+        }
+
+        string name = $"sms-cold-gate-before-map-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions creator = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
+        SharedMemoryStoreOptions contender = CreateOptions(name, contenderMode, participantRecordCount: 2);
+        long started = Stopwatch.GetTimestamp();
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            SharedStorePlatform.TryBeginOpen(
+                creator,
+                StoreWaitOptions.Default,
+                started,
+                out SharedStoreOpenScope? heldScope));
+        Assert.NotNull(heldScope);
+
+        using (heldScope)
+        {
+            (StoreOpenStatus Status, Store? Store) result = default;
+            Exception? failure = null;
+            using var finished = new ManualResetEventSlim(initialState: false);
+            var contenderThread = new Thread(() =>
+            {
+                try
+                {
+                    StoreOpenStatus status = Store.TryCreateOrOpen(
+                        contender,
+                        StoreWaitOptions.NoWait,
+                        out Store? opened);
+                    result = (status, opened);
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                }
+                finally
+                {
+                    finished.Set();
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "SharedMemoryStore cold gate-before-map contender"
+            };
+            contenderThread.Start();
+            Assert.True(finished.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Null(failure);
+
+            result.Store?.Dispose();
+            Assert.Equal(StoreOpenStatus.StoreBusy, result.Status);
+            Assert.Null(result.Store);
+        }
     }
 
     [Fact]
     [Trait("Category", "Integration")]
-    public void LinuxLockFreeHandlesKeepV1CompatibleOwnerLinesDuringIncompatibleLegacyOpen()
+    public void LinuxOpenRejectsActualMappedCapacityBelowTheFixedSms2Header()
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
         {
             return;
         }
 
-        var name = $"sms-v2-owner-sidecar-{Guid.NewGuid():N}";
-        var resourceName = PlatformResourceName.Create(name);
-        var createOptions = CreateOptions(StoreProfile.LockFree, name, OpenMode.CreateNew, participantRecordCount: 2);
-        var openOptions = CreateOptions(StoreProfile.LockFree, name, OpenMode.OpenExisting, participantRecordCount: 2);
-        var legacyOptions = SharedMemoryStoreOptions.Create(
-            name,
-            slotCount: 128,
-            maxValueBytes: 32 * 1024,
-            maxDescriptorBytes: 256,
-            maxKeyBytes: 128,
-            leaseRecordCount: 256,
-            openMode: OpenMode.OpenExisting);
+        string name = $"sms-truncated-header-{Guid.NewGuid():N}";
+        SharedMemoryStoreOptions rawCreate = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
+        SharedMemoryStoreOptions open = CreateOptions(name, OpenMode.OpenExisting, participantRecordCount: 2);
+        PlatformResourceName resource = PlatformResourceName.Create(name);
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            SharedStorePlatform.TryOpenRegion(
+                rawCreate,
+                StoreWaitOptions.Default,
+                out MemoryMappedStoreRegion? rawRegion));
+        Assert.NotNull(rawRegion);
 
-        using var first = IntegrationStoreFactory.Create(createOptions);
-        var secondStatus = Store.TryCreateOrOpen(openOptions, out var second);
-        Assert.Equal(StoreOpenStatus.Success, secondStatus);
-        Assert.NotNull(second);
-
-        try
+        using (rawRegion)
         {
-            var ownerLinesBefore = ReadOwnerLines(resourceName.LinuxOwnersPath);
-            Assert.Equal(2, ownerLinesBefore.Length);
-            Assert.All(ownerLinesBefore, AssertV1CompatibleCurrentProcessOwnerLine);
+            WriteSyntheticHeader(rawRegion!, CanonicalSms2Magic, requiredFeatures: 7);
+            TruncateLinuxRegion(resource.LinuxRegionPath, 511);
 
-            var incompatibleStatus = Store.TryCreateOrOpen(legacyOptions, out var incompatible);
-            incompatible?.Dispose();
+            StoreOpenStatus status = Store.TryCreateOrOpen(open, out Store? rejected);
 
-            Assert.Equal(StoreOpenStatus.IncompatibleLayout, incompatibleStatus);
-            Assert.Null(incompatible);
-            Assert.True(File.Exists(resourceName.LinuxRegionPath));
-            Assert.Equal(
-                ownerLinesBefore.OrderBy(static line => line, StringComparer.Ordinal),
-                ReadOwnerLines(resourceName.LinuxOwnersPath).OrderBy(static line => line, StringComparer.Ordinal));
-
-            second!.Dispose();
-            second = null;
-            var ownerLinesAfterClose = ReadOwnerLines(resourceName.LinuxOwnersPath);
-            Assert.Single(ownerLinesAfterClose);
-            AssertV1CompatibleCurrentProcessOwnerLine(ownerLinesAfterClose[0]);
-            AssertLockFreeProtocol(first);
-        }
-        finally
-        {
-            second?.Dispose();
+            rejected?.Dispose();
+            Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
+            Assert.Null(rejected);
         }
     }
 
-    private static bool IsSupportedLockFreeHost()
+    private static void AssertSyntheticHeaderRejected(uint magic, ulong requiredFeatures, string name)
     {
-        return (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
-            && RuntimeInformation.ProcessArchitecture == Architecture.X64;
+        SharedMemoryStoreOptions rawCreate = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
+        SharedMemoryStoreOptions open = CreateOptions(name, OpenMode.OpenExisting, participantRecordCount: 2);
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            SharedStorePlatform.TryOpenRegion(
+                rawCreate,
+                StoreWaitOptions.Default,
+                out MemoryMappedStoreRegion? rawRegion));
+        Assert.NotNull(rawRegion);
+
+        using (rawRegion)
+        {
+            WriteSyntheticHeader(rawRegion!, magic, requiredFeatures);
+            byte[] before = ReadPrefix(rawRegion!, 528);
+
+            StoreOpenStatus status = Store.TryCreateOrOpen(open, out Store? rejected);
+
+            rejected?.Dispose();
+            Assert.Equal(StoreOpenStatus.IncompatibleLayout, status);
+            Assert.Null(rejected);
+            Assert.Equal(before, ReadPrefix(rawRegion!, before.Length));
+        }
     }
 
     private static SharedMemoryStoreOptions CreateOptions(
-        StoreProfile profile,
         string name,
         OpenMode openMode,
         int participantRecordCount)
@@ -507,33 +346,40 @@ public sealed class LockFreeProfileOpenIntegrationTests
         const int maxKeyBytes = 8;
         const int leaseRecordCount = 8;
 
-        return profile == StoreProfile.LockFree
-            ? SharedMemoryStoreOptions.CreateLockFree(
-                name,
+        return new SharedMemoryStoreOptions
+        {
+            Name = name,
+            OpenMode = openMode,
+            SlotCount = slotCount,
+            MaxValueBytes = maxValueBytes,
+            MaxDescriptorBytes = maxDescriptorBytes,
+            MaxKeyBytes = maxKeyBytes,
+            LeaseRecordCount = leaseRecordCount,
+            ParticipantRecordCount = participantRecordCount,
+            TotalBytes = StoreLayoutV2.CalculateRequiredBytes(
                 slotCount,
                 maxValueBytes,
                 maxDescriptorBytes,
                 maxKeyBytes,
                 leaseRecordCount,
-                participantRecordCount,
-                openMode)
-            : SharedMemoryStoreOptions.Create(
-                name,
-                slotCount,
-                maxValueBytes,
-                maxDescriptorBytes,
-                maxKeyBytes,
-                leaseRecordCount,
-                openMode);
+                participantRecordCount)
+        };
     }
 
-    private static void AssertLockFreeProtocol(Store store)
+    private static Store CreateStore(SharedMemoryStoreOptions options)
     {
-        Assert.Equal(StoreProfile.LockFree, store.Profile);
-        Assert.Equal(StoreProfile.LockFree, store.ProtocolInfo.Profile);
+        StoreOpenStatus status = Store.TryCreateOrOpen(options, out Store? store);
+        Assert.Equal(StoreOpenStatus.Success, status);
+        return Assert.IsType<Store>(store);
+    }
+
+    private static void AssertCanonicalProtocol(Store store)
+    {
         Assert.Equal(2, store.ProtocolInfo.LayoutMajorVersion);
         Assert.Equal(0, store.ProtocolInfo.LayoutMinorVersion);
         Assert.Equal(2, store.ProtocolInfo.ResourceProtocolVersion);
+        Assert.Equal(7UL, store.ProtocolInfo.RequiredFeatures);
+        Assert.Equal(0UL, store.ProtocolInfo.OptionalFeatures);
     }
 
     private static void AssertPublishedValue(Store store, byte[] key, byte[] expectedValue)
@@ -549,25 +395,29 @@ public sealed class LockFreeProfileOpenIntegrationTests
         }
     }
 
-    private static string[] ReadOwnerLines(string path)
-    {
-        Assert.True(File.Exists(path));
-        return File.ReadAllLines(path)
-            .Select(static line => line.Trim())
-            .Where(static line => line.Length != 0)
-            .ToArray();
-    }
+    private static bool IsSupportedHost() =>
+        (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
+        && RuntimeInformation.ProcessArchitecture == Architecture.X64;
 
-    private static void AssertV1CompatibleCurrentProcessOwnerLine(string ownerLine)
+    private static unsafe void WriteSyntheticHeader(
+        MemoryMappedStoreRegion region,
+        uint magic,
+        ulong requiredFeatures)
     {
-        var parts = ownerLine.Split(':', 3);
-        Assert.Equal(3, parts.Length);
-        Assert.True(int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var processId));
-        Assert.Equal(Environment.ProcessId, processId);
-        Assert.True(
-            parts[1].StartsWith("proc-", StringComparison.Ordinal)
-            || parts[1].StartsWith("utc-", StringComparison.Ordinal));
-        Assert.True(Guid.TryParseExact(parts[2], "N", out _));
+        Assert.True(region.Capacity >= 528);
+        Span<byte> bytes = new(region.Pointer, 528);
+        bytes.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes[0..4], magic);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[4..6], 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes[6..8], 0);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[8..12], 512);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[12..16], 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[16..24], requiredFeatures);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[24..32], 0);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes[32..40], region.Capacity);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes[40..48], 1);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes[48..56], 2);
+        bytes[512..528].Fill(0xa5);
     }
 
     private static void TruncateLinuxRegion(string path, long length)

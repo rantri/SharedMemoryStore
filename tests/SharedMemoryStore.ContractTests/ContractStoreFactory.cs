@@ -10,25 +10,19 @@ internal static class ContractStoreFactory
         int maxDescriptorBytes = 16,
         int maxKeyBytes = 16,
         int leaseRecordCount = 3,
+        int participantRecordCount = 64,
         bool enableRecovery = true)
     {
-        return new SharedMemoryStoreOptions
-        {
-            Name = $"sms-{Guid.NewGuid():N}",
-            OpenMode = OpenMode.CreateOrOpen,
-            SlotCount = slotCount,
-            MaxValueBytes = maxValueBytes,
-            MaxDescriptorBytes = maxDescriptorBytes,
-            MaxKeyBytes = maxKeyBytes,
-            LeaseRecordCount = leaseRecordCount,
-            EnableLeaseRecovery = enableRecovery,
-            TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(
-                slotCount,
-                maxValueBytes,
-                maxDescriptorBytes,
-                maxKeyBytes,
-                leaseRecordCount)
-        };
+        return SharedMemoryStoreOptions.Create(
+            $"sms-{Guid.NewGuid():N}",
+            slotCount,
+            maxValueBytes,
+            maxDescriptorBytes,
+            maxKeyBytes,
+            leaseRecordCount,
+            participantRecordCount,
+            OpenMode.CreateOrOpen,
+            enableRecovery);
     }
 
     public static Store Create(SharedMemoryStoreOptions options)

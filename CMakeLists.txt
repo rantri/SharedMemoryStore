@@ -2,9 +2,26 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
     SharedMemoryStore
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Cross-process shared memory value store"
     LANGUAGES CXX)
+
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "SharedMemoryStore SMS2 requires a 64-bit process.")
+endif()
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _sms_system_processor)
+if(NOT _sms_system_processor MATCHES "^(amd64|x86_64|x64)$")
+    message(
+        FATAL_ERROR
+            "SharedMemoryStore SMS2 requires x86-64; detected '${CMAKE_SYSTEM_PROCESSOR}'.")
+endif()
+unset(_sms_system_processor)
+include(TestBigEndian)
+test_big_endian(_sms_is_big_endian)
+if(_sms_is_big_endian)
+    message(FATAL_ERROR "SharedMemoryStore SMS2 requires little-endian x86-64.")
+endif()
+unset(_sms_is_big_endian)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)

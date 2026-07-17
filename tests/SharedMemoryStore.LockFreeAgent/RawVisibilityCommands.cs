@@ -449,7 +449,7 @@ internal static class RawVisibilityCommands
             }
 
             parsed = new Arguments(
-                SharedMemoryStoreOptions.CreateLockFree(
+                SharedMemoryStoreOptions.Create(
                     arguments[1],
                     slotCount,
                     maxValueBytes,

@@ -203,7 +203,7 @@ internal static class ChurnCommands
             return false;
         }
 
-        options = SharedMemoryStoreOptions.CreateLockFree(
+        options = SharedMemoryStoreOptions.Create(
             arguments[1],
             slotCount,
             maxValueBytes,
@@ -472,7 +472,7 @@ internal static class LeaseCommands
                 return false;
             }
 
-            parsed = new StoreArguments(SharedMemoryStoreOptions.CreateLockFree(
+            parsed = new StoreArguments(SharedMemoryStoreOptions.Create(
                 arguments[1],
                 slotCount,
                 maxValueBytes,

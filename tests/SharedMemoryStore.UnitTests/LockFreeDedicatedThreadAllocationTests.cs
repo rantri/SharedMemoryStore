@@ -130,7 +130,7 @@ public sealed class LockFreeDedicatedThreadAllocationTests
 
     private static MemoryStore CreateStore(int slotCount, int leaseCount)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-dedicated-allocation-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 8,

@@ -64,7 +64,7 @@ function Invoke-Compose {
 
     try {
         Invoke-CommandChecked "docker" $upArgs "docker compose up"
-        $containerId = (& docker @composeArgs "ps" "--quiet" $ExitCodeFrom | Select-Object -Last 1).Trim()
+        $containerId = (& docker @composeArgs "ps" "--all" "--quiet" $ExitCodeFrom | Select-Object -Last 1).Trim()
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
             throw "Could not resolve the '$ExitCodeFrom' Compose container for project '$projectName'."
         }
@@ -75,13 +75,56 @@ function Invoke-Compose {
         }
 
         & docker @composeArgs "logs" "--no-color" @Services
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not collect complete Compose logs for project '$projectName'."
+        }
         $containerExitCode = [int](($waitOutput | Select-Object -Last 1).Trim())
         if ($containerExitCode -ne 0) {
             throw "Compose service '$ExitCodeFrom' failed with exit code $containerExitCode."
         }
+
+        # A verifier can legitimately finish while keepers are still running
+        # and abrupt-owner helpers have exited. It must not hide a dependency
+        # that crashed, never started, or remained in a transitional state.
+        foreach ($service in $Services) {
+            $serviceContainerId = (& docker @composeArgs "ps" "--all" "--quiet" $service |
+                Select-Object -Last 1).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($serviceContainerId)) {
+                throw "Compose service '$service' has no inspectable container in project '$projectName'."
+            }
+            $state = (& docker inspect --format '{{.State.Status}}|{{.State.ExitCode}}' $serviceContainerId |
+                Select-Object -Last 1).Trim()
+            if ($LASTEXITCODE -ne 0 -or $state -notmatch '^(?<status>[^|]+)\|(?<exit>-?\d+)$') {
+                throw "Compose service '$service' has no parseable terminal/running state in project '$projectName'."
+            }
+            $status = $Matches.status
+            $exitCode = [int]$Matches.exit
+            if ($status -eq 'running') {
+                continue
+            }
+            if ($status -ne 'exited' -or $exitCode -ne 0) {
+                throw "Compose service '$service' ended in status '$status' with exit code $exitCode."
+            }
+        }
     }
     finally {
-        & docker compose -p $projectName -f $ComposeFile down --volumes
+        $downOutput = & docker compose -p $projectName -f $ComposeFile down --volumes --remove-orphans 2>&1
+        $downExitCode = $LASTEXITCODE
+        $remainingContainers = @(& docker ps --all --quiet --filter "label=com.docker.compose.project=$projectName")
+        $containerQueryExitCode = $LASTEXITCODE
+        $remainingVolumes = @(& docker volume ls --quiet --filter "label=com.docker.compose.project=$projectName")
+        $volumeQueryExitCode = $LASTEXITCODE
+        $remainingNetworks = @(& docker network ls --quiet --filter "label=com.docker.compose.project=$projectName")
+        $networkQueryExitCode = $LASTEXITCODE
+        if ($downExitCode -ne 0 `
+            -or $containerQueryExitCode -ne 0 `
+            -or $volumeQueryExitCode -ne 0 `
+            -or $networkQueryExitCode -ne 0 `
+            -or $remainingContainers.Count -ne 0 `
+            -or $remainingVolumes.Count -ne 0 `
+            -or $remainingNetworks.Count -ne 0) {
+            throw "Compose cleanup was incomplete for project '$projectName': downExit=$downExitCode; containers=$($remainingContainers.Count); volumes=$($remainingVolumes.Count); networks=$($remainingNetworks.Count); output=$($downOutput -join ' ')."
+        }
     }
 }
 
@@ -110,7 +153,7 @@ function Invoke-DockerCleanConsumerValidation {
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="SharedMemoryStore" Version="2.0.0" />
+    <PackageReference Include="SharedMemoryStore" Version="3.0.0" />
   </ItemGroup>
 </Project>
 '@

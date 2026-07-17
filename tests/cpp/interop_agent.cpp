@@ -1,25 +1,54 @@
 #include <shared_memory_store/store.hpp>
 
+#include "checkpoint.hpp"
+#include "internal.hpp"
+#include "interop_checkpoint_catalog.hpp"
+#include "interop_faults.hpp"
+
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#if defined(_WIN32)
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#elif defined(__linux__)
+#  include <cerrno>
+#  include <fcntl.h>
+#  include <sys/mman.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#  if !defined(F_OFD_SETLK)
+#    define F_OFD_SETLK 37
+#  endif
+#endif
 
 namespace {
 
@@ -28,13 +57,15 @@ namespace json {
 struct value {
     using array = std::vector<value>;
     using object = std::map<std::string, value, std::less<>>;
-    using storage = std::variant<std::nullptr_t, bool, std::int64_t, double, std::string, array, object>;
+    using storage = std::variant<std::nullptr_t, bool, std::int64_t, std::uint64_t,
+                                 double, std::string, array, object>;
 
     value() : data(nullptr) {}
     value(std::nullptr_t) : data(nullptr) {}
     value(bool input) : data(input) {}
     value(int input) : data(static_cast<std::int64_t>(input)) {}
     value(std::int64_t input) : data(input) {}
+    value(std::uint64_t input) : data(input) {}
     value(double input) : data(input) {}
     value(const char* input) : data(std::string(input)) {}
     value(std::string input) : data(std::move(input)) {}
@@ -205,8 +236,17 @@ private:
         if (!floating) {
             std::int64_t result{};
             const auto parsed = std::from_chars(token.data(), token.data() + token.size(), result);
-            if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size()) fail("JSON integer is out of range.");
-            return result;
+            if (parsed.ec == std::errc{} && parsed.ptr == token.data() + token.size()) return result;
+            if (!token.empty() && token.front() != '-') {
+                std::uint64_t unsigned_result{};
+                const auto unsigned_parsed = std::from_chars(
+                    token.data(), token.data() + token.size(), unsigned_result);
+                if (unsigned_parsed.ec == std::errc{} &&
+                    unsigned_parsed.ptr == token.data() + token.size()) {
+                    return unsigned_result;
+                }
+            }
+            fail("JSON integer is out of range.");
         }
         std::string owned(token);
         char* end{};
@@ -285,6 +325,7 @@ void append_json(std::string& output, const value& input) {
         if constexpr (std::is_same_v<type, std::nullptr_t>) output += "null";
         else if constexpr (std::is_same_v<type, bool>) output += current ? "true" : "false";
         else if constexpr (std::is_same_v<type, std::int64_t>) output += std::to_string(current);
+        else if constexpr (std::is_same_v<type, std::uint64_t>) output += std::to_string(current);
         else if constexpr (std::is_same_v<type, double>) output += std::to_string(current);
         else if constexpr (std::is_same_v<type, std::string>) append_escaped(output, current);
         else if constexpr (std::is_same_v<type, value::array>) {
@@ -380,6 +421,28 @@ std::int64_t integer_argument(const json::value::object& object, std::string_vie
     throw protocol_error("invalid_arguments", "The '" + std::string(key) + "' argument must be an integer.");
 }
 
+std::uint64_t uint64_argument(
+    const json::value::object& object,
+    std::string_view key) {
+    const auto* input = find(object, key);
+    if (!input || std::holds_alternative<std::nullptr_t>(input->data)) {
+        throw protocol_error(
+            "invalid_arguments",
+            "The '" + std::string(key) + "' argument is required.");
+    }
+    if (const auto* result = std::get_if<std::uint64_t>(&input->data)) {
+        return *result;
+    }
+    if (const auto* result = std::get_if<std::int64_t>(&input->data);
+        result && *result >= 0) {
+        return static_cast<std::uint64_t>(*result);
+    }
+    throw protocol_error(
+        "invalid_arguments",
+        "The '" + std::string(key) +
+            "' argument must be an unsigned 64-bit integer.");
+}
+
 std::int32_t int32_argument(const json::value::object& object, std::string_view key,
                             std::int32_t default_value) {
     const auto result = integer_argument(object, key, default_value);
@@ -460,6 +523,27 @@ std::string encode_base64(std::span<const std::byte> input) {
     return result;
 }
 
+std::uint64_t fnv1a64(std::span<const std::byte> input) noexcept {
+    constexpr std::uint64_t offset_basis = 14'695'981'039'346'656'037ULL;
+    constexpr std::uint64_t prime = 1'099'511'628'211ULL;
+    auto checksum = offset_basis;
+    for (const auto current : input) {
+        checksum ^= std::to_integer<std::uint8_t>(current);
+        checksum *= prime;
+    }
+    return checksum;
+}
+
+std::string lowercase_hex64(std::uint64_t value) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string result(16, '0');
+    for (std::size_t index = 0; index < result.size(); ++index) {
+        result[result.size() - 1U - index] = digits[value & 0x0fU];
+        value >>= 4U;
+    }
+    return result;
+}
+
 std::vector<std::byte> bytes_argument(const json::value::object& object, std::string_view key,
                                       bool required_field = false) {
     const auto* input = find(object, key);
@@ -512,6 +596,7 @@ const char* open_status_name(shared_memory_store::open_status input) noexcept {
     case mapping_failed: return "MappingFailed";
     case store_busy: return "StoreBusy";
     case operation_canceled: return "OperationCanceled";
+    case participant_table_full: return "ParticipantTableFull";
     }
     return "UnknownOpenStatus";
 }
@@ -548,6 +633,26 @@ const char* status_name(shared_memory_store::status input) noexcept {
 
 json::value status_json(std::int32_t code, const char* name) {
     return json::value::object{{"code", code}, {"name", name}};
+}
+
+json::value::object protocol_identity(const shared_memory_store::protocol_info& value) {
+    return {
+        {"layoutMajorVersion", value.layout_major},
+        {"layoutMinorVersion", value.layout_minor},
+        {"resourceProtocolVersion", value.resource_protocol},
+        {"requiredFeatures", static_cast<std::int64_t>(value.required_features)},
+        {"optionalFeatures", static_cast<std::int64_t>(value.optional_features)},
+    };
+}
+
+json::value::object canonical_protocol_identity() {
+    return protocol_identity({
+        SMS_LAYOUT_MAJOR_VERSION,
+        SMS_LAYOUT_MINOR_VERSION,
+        SMS_RESOURCE_PROTOCOL_VERSION,
+        SMS_REQUIRED_FEATURES,
+        SMS_OPTIONAL_FEATURES,
+    });
 }
 
 json::value response(std::string id, std::int32_t code, const char* name, json::value result = nullptr) {
@@ -587,8 +692,273 @@ struct reservation_entry {
     shared_memory_store::value_reservation reservation;
 };
 
+struct checkpoint_spec {
+    const sms::interop_test::checkpoint_entry* checkpoint{};
+    std::int32_t occurrence{1};
+    std::string operation;
+    shared_memory_store::store_options options;
+    std::vector<std::byte> key;
+    std::vector<std::byte> value;
+    std::vector<std::byte> descriptor;
+    bool crash{};
+};
+
+struct checkpoint_completion {
+    shared_memory_store::status status{
+        shared_memory_store::status::unknown_failure};
+    shared_memory_store::open_status open_status{
+        shared_memory_store::open_status::mapping_failed};
+};
+
+class checkpoint_operation final
+    : public sms::test_detail::CheckpointObserver,
+      public std::enable_shared_from_this<checkpoint_operation> {
+public:
+    static std::shared_ptr<checkpoint_operation> start(checkpoint_spec spec) {
+        auto result = std::shared_ptr<checkpoint_operation>(
+            new checkpoint_operation(std::move(spec)));
+        result->worker_ = std::thread([self = result] { self->run(); });
+        return result;
+    }
+
+    ~checkpoint_operation() {
+        if (!worker_.joinable()) return;
+        (void)cancellation_.signal();
+        {
+            std::lock_guard lock(gate_);
+            resumed_ = true;
+        }
+        resumed_gate_.notify_all();
+        worker_.detach();
+    }
+
+    checkpoint_operation(const checkpoint_operation&) = delete;
+    checkpoint_operation& operator=(const checkpoint_operation&) = delete;
+
+    [[nodiscard]] bool wait_until_paused(std::chrono::milliseconds timeout) {
+        std::unique_lock lock(gate_);
+        return paused_gate_.wait_for(lock, timeout, [this] {
+            return paused_ || completed_;
+        }) && paused_;
+    }
+
+    [[nodiscard]] checkpoint_completion complete(
+        bool cancel,
+        std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
+        if (cancel) (void)cancellation_.signal();
+        {
+            std::lock_guard lock(gate_);
+            resumed_ = true;
+        }
+        resumed_gate_.notify_all();
+
+        checkpoint_completion result{};
+        bool completed{};
+        {
+            std::unique_lock lock(gate_);
+            completed = completed_gate_.wait_for(lock, timeout, [this] {
+                return completed_;
+            });
+            if (completed) result = completion_;
+        }
+        if (worker_.joinable()) {
+            if (completed) worker_.join();
+            else worker_.detach();
+        }
+        if (!completed) {
+            result.status = shared_memory_store::status::store_busy;
+            result.open_status = shared_memory_store::open_status::success;
+        }
+        return result;
+    }
+
+    [[nodiscard]] const sms::interop_test::checkpoint_entry* reached() const {
+        std::lock_guard lock(gate_);
+        return reached_;
+    }
+
+    [[nodiscard]] const std::string& operation() const noexcept {
+        return spec_.operation;
+    }
+
+    void reach(sms::test_detail::CheckpointId checkpoint) noexcept override {
+        if (static_cast<std::int32_t>(checkpoint) != spec_.checkpoint->id) return;
+        std::unique_lock lock(gate_);
+        if (++observed_occurrences_ != spec_.occurrence) return;
+        reached_ = spec_.checkpoint;
+        if (spec_.crash) {
+            // A crash checkpoint is an abrupt process boundary, not a pause
+            // handshake. Exit before notifying the command loop so it can
+            // never emit a success response for an operation that crashed.
+            lock.unlock();
+            std::_Exit(sms::interop_test::abrupt_exit_code);
+        }
+        paused_ = true;
+        paused_gate_.notify_all();
+        resumed_gate_.wait(lock, [this] { return resumed_; });
+    }
+
+private:
+    explicit checkpoint_operation(checkpoint_spec spec)
+        : spec_(std::move(spec)) {}
+
+    void run() noexcept {
+        checkpoint_completion completed{};
+        try {
+            sms::test_detail::ScopedCheckpointObserver observer(*this);
+            completed = execute();
+        } catch (...) {
+            completed = {};
+        }
+        {
+            std::lock_guard lock(gate_);
+            completion_ = completed;
+            completed_ = true;
+        }
+        paused_gate_.notify_all();
+        completed_gate_.notify_all();
+    }
+
+    [[nodiscard]] checkpoint_completion execute() {
+        using namespace shared_memory_store;
+        memory_store store;
+        const auto wait = wait_options::infinite(cancellation_.token());
+        const auto opened = memory_store::try_create_or_open(
+            spec_.options, store, wait);
+        if (opened != open_status::success) {
+            return {status::unknown_failure, opened};
+        }
+
+        status result = status::unknown_failure;
+        if (spec_.operation == "noop") {
+            result = status::success;
+        } else if (spec_.operation == "publish") {
+            result = store.try_publish(
+                spec_.key, spec_.value, spec_.descriptor, wait);
+        } else if (spec_.operation == "reserve" ||
+                   spec_.operation == "abort") {
+            result = reserve_and_abort(store, wait);
+        } else if (spec_.operation == "commit") {
+            result = reserve_and_commit(store, wait);
+        } else if (spec_.operation == "acquire" ||
+                   spec_.operation == "release") {
+            result = acquire_and_release(store, wait);
+        } else if (spec_.operation == "remove") {
+            result = store.try_remove(spec_.key, wait);
+        } else if (spec_.operation == "diagnostics") {
+            diagnostics_snapshot snapshot;
+            result = store.try_get_diagnostics(snapshot, wait);
+        } else if (spec_.operation == "recoverLeases") {
+            result = recover_lease(store, wait);
+        } else if (spec_.operation == "recoverReservations") {
+            result = recover_reservation(store, wait);
+        }
+        store.close();
+        return {result, opened};
+    }
+
+    [[nodiscard]] shared_memory_store::status reserve_and_abort(
+        shared_memory_store::memory_store& store,
+        shared_memory_store::wait_options wait) {
+        shared_memory_store::value_reservation reservation;
+        auto result = store.try_reserve(
+            spec_.key,
+            static_cast<std::int32_t>(spec_.value.size()),
+            spec_.descriptor,
+            reservation,
+            wait);
+        return result == shared_memory_store::status::success
+            ? reservation.abort(wait)
+            : result;
+    }
+
+    [[nodiscard]] shared_memory_store::status reserve_and_commit(
+        shared_memory_store::memory_store& store,
+        shared_memory_store::wait_options wait) {
+        shared_memory_store::value_reservation reservation;
+        auto result = store.try_reserve(
+            spec_.key,
+            static_cast<std::int32_t>(spec_.value.size()),
+            spec_.descriptor,
+            reservation,
+            wait);
+        if (result != shared_memory_store::status::success) return result;
+        if (!spec_.value.empty()) {
+            auto destination = reservation.buffer(
+                static_cast<std::int32_t>(spec_.value.size()));
+            if (destination.size() != spec_.value.size()) {
+                return shared_memory_store::status::invalid_reservation;
+            }
+            std::copy(spec_.value.begin(), spec_.value.end(), destination.begin());
+        }
+        result = reservation.advance(
+            static_cast<std::int32_t>(spec_.value.size()), wait);
+        return result == shared_memory_store::status::success
+            ? reservation.commit(wait)
+            : result;
+    }
+
+    [[nodiscard]] shared_memory_store::status acquire_and_release(
+        shared_memory_store::memory_store& store,
+        shared_memory_store::wait_options wait) {
+        shared_memory_store::value_lease lease;
+        auto result = store.try_acquire(spec_.key, lease, wait);
+        if (result != shared_memory_store::status::success) return result;
+        // Projection checkpoints are real mapped-view validation boundaries.
+        (void)lease.descriptor();
+        (void)lease.value();
+        return lease.release(wait);
+    }
+
+    [[nodiscard]] shared_memory_store::status recover_lease(
+        shared_memory_store::memory_store& store,
+        shared_memory_store::wait_options wait) {
+        shared_memory_store::value_lease lease;
+        auto result = store.try_acquire(spec_.key, lease, wait);
+        if (result != shared_memory_store::status::success) return result;
+        shared_memory_store::recovery_report report{};
+        return store.try_recover_leases(true, report, wait);
+    }
+
+    [[nodiscard]] shared_memory_store::status recover_reservation(
+        shared_memory_store::memory_store& store,
+        shared_memory_store::wait_options wait) {
+        shared_memory_store::value_reservation reservation;
+        auto result = store.try_reserve(
+            spec_.key,
+            static_cast<std::int32_t>(spec_.value.size()),
+            spec_.descriptor,
+            reservation,
+            wait);
+        if (result != shared_memory_store::status::success) return result;
+        shared_memory_store::recovery_report report{};
+        return store.try_recover_reservations(true, report, wait);
+    }
+
+    checkpoint_spec spec_;
+    shared_memory_store::cancellation_source cancellation_;
+    mutable std::mutex gate_;
+    std::condition_variable paused_gate_;
+    std::condition_variable resumed_gate_;
+    std::condition_variable completed_gate_;
+    std::thread worker_;
+    const sms::interop_test::checkpoint_entry* reached_{};
+    checkpoint_completion completion_{};
+    std::int32_t observed_occurrences_{};
+    bool paused_{};
+    bool resumed_{};
+    bool completed_{};
+};
+
 class agent {
 public:
+    ~agent() {
+        if (checkpoint_operation_) {
+            (void)checkpoint_operation_->complete(
+                true, std::chrono::seconds(2));
+        }
+    }
+
     json::value handle(const json::value& request) {
         const auto& root = json::object_value(request, "The request");
         const auto id = required_request_string(root, "id");
@@ -600,8 +970,12 @@ public:
             : empty_arguments;
 
         if (command == "ping") {
+            auto identity = canonical_protocol_identity();
+            identity.emplace("checkpointCatalogVersion", 1);
+            identity.emplace("protocolVersion", 2);
+            identity.emplace("runtime", "cpp");
             return response(id, shared_memory_store::status::success,
-                            json::value::object{{"protocolVersion", 1}, {"runtime", "cpp"}});
+                            std::move(identity));
         }
         if (command == "open" || command == "create" || command == "open/create")
             return open(id, arguments, command);
@@ -610,6 +984,7 @@ public:
         if (command == "publishSegments" || command == "publishSegmented") return publish_segments(id, arguments);
         if (command == "acquire") return acquire(id, arguments);
         if (command == "read") return read(id, arguments);
+        if (command == "checksum") return checksum(id, arguments);
         if (command == "release") return release(id, arguments);
         if (command == "remove") return remove(id, arguments);
         if (command == "reserve") return reserve(id, arguments);
@@ -620,6 +995,16 @@ public:
         if (command == "recoverLeases") return recover(id, arguments, false);
         if (command == "recoverReservations") return recover(id, arguments, true);
         if (command == "diagnostics") return diagnostics(id, arguments);
+        if (command == "checkpointCatalog") return checkpoint_catalog(id);
+        if (command == "pauseAtCheckpoint" || command == "crashAtCheckpoint")
+            return begin_checkpoint(
+                id, arguments, command == "crashAtCheckpoint");
+        if (command == "resumeCheckpoint" || command == "cancelCheckpoint")
+            return complete_checkpoint(
+                id, command == "cancelCheckpoint");
+        if (command == "injectRawFault") return inject_fault(id, arguments);
+        if (command == "holdColdLock") return hold_cold_lock(id, arguments);
+        if (command == "releaseColdLock") return release_cold_lock(id);
         if (command == "crash") {
             const auto exit_code = int32_argument(arguments, "exitCode", 97);
             std::_Exit(exit_code);
@@ -671,6 +1056,7 @@ private:
                      std::string_view command) {
         const auto handle_id = required_string(arguments, "storeId");
         stores_.erase(handle_id);
+        store_options_.erase(handle_id);
 
         shared_memory_store::store_options options;
         options.name = required_string(arguments, "name");
@@ -680,13 +1066,15 @@ private:
         options.max_descriptor_bytes = required_int32(arguments, "maxDescriptorBytes");
         options.max_key_bytes = required_int32(arguments, "maxKeyBytes");
         options.lease_record_count = required_int32(arguments, "leaseRecordCount");
+        options.participant_record_count = required_int32(arguments, "participantRecordCount");
         options.enable_lease_recovery = bool_argument(arguments, "enableLeaseRecovery", false);
         const auto* total_bytes = find(arguments, "totalBytes");
         if (!total_bytes || std::holds_alternative<std::nullptr_t>(total_bytes->data)) {
             try {
                 options.total_bytes = shared_memory_store::store_options::calculate_required_bytes(
                     options.slot_count, options.max_value_bytes, options.max_descriptor_bytes,
-                    options.max_key_bytes, options.lease_record_count);
+                    options.max_key_bytes, options.lease_record_count,
+                    options.participant_record_count);
             } catch (const std::exception&) {
                 return response(request_id, shared_memory_store::open_status::invalid_options,
                                 json::value::object{{"storeId", handle_id}, {"totalBytes", 0}});
@@ -697,16 +1085,21 @@ private:
 
         shared_memory_store::memory_store opened;
         const auto result = shared_memory_store::memory_store::try_create_or_open(options, opened, wait_argument(arguments));
-        if (result == shared_memory_store::open_status::success)
+        json::value::object output{{"storeId", handle_id}, {"totalBytes", options.total_bytes}};
+        if (result == shared_memory_store::open_status::success) {
+            output.emplace("participantRecordCount", options.participant_record_count);
+            output.emplace("protocolInfo", protocol_identity(opened.protocol()));
             stores_.emplace(handle_id, std::move(opened));
-        return response(request_id, result,
-                        json::value::object{{"storeId", handle_id}, {"totalBytes", options.total_bytes}});
+            store_options_.emplace(handle_id, options);
+        }
+        return response(request_id, result, std::move(output));
     }
 
     json::value close(const std::string& request_id, const json::value::object& arguments) {
         const auto handle_id = required_string(arguments, "storeId");
         const auto iterator = stores_.find(handle_id);
         if (iterator != stores_.end()) stores_.erase(iterator);
+        store_options_.erase(handle_id);
         return response(request_id, shared_memory_store::status::success,
                         json::value::object{{"closed", true}, {"storeId", handle_id}});
     }
@@ -769,6 +1162,28 @@ private:
                         json::value::object{{"descriptor", encode_base64(entry.lease.descriptor())},
                                             {"leaseId", lease_id},
                                             {"value", encode_base64(entry.lease.value())}});
+    }
+
+    json::value checksum(
+        const std::string& request_id,
+        const json::value::object& arguments) {
+        const auto lease_id = required_string(arguments, "leaseId");
+        const auto iterator = leases_.find(lease_id);
+        if (iterator == leases_.end() || !iterator->second.lease.valid()) {
+            return response(
+                request_id, shared_memory_store::status::invalid_lease);
+        }
+        const auto value = iterator->second.lease.value();
+        const auto descriptor = iterator->second.lease.descriptor();
+        return response(
+            request_id,
+            shared_memory_store::status::success,
+            json::value::object{
+                {"descriptorChecksum", lowercase_hex64(fnv1a64(descriptor))},
+                {"descriptorLength", static_cast<std::int64_t>(descriptor.size())},
+                {"leaseId", lease_id},
+                {"valueChecksum", lowercase_hex64(fnv1a64(value))},
+                {"valueLength", static_cast<std::int64_t>(value.size())}});
     }
 
     json::value release(const std::string& request_id, const json::value::object& arguments) {
@@ -899,6 +1314,298 @@ private:
         return response(request_id, result, std::move(output));
     }
 
+    static json::value checkpoint_catalog(const std::string& request_id) {
+        json::value::array entries;
+        entries.reserve(sms::interop_test::checkpoints.size());
+        for (const auto& checkpoint : sms::interop_test::checkpoints) {
+            entries.emplace_back(json::value::object{
+                {"crash", std::string(checkpoint.crash)},
+                {"description", std::string(checkpoint.description)},
+                {"family", std::string(checkpoint.family)},
+                {"id", checkpoint.id},
+                {"isPublicOrderingPoint", checkpoint.is_public_ordering_point},
+                {"name", std::string(checkpoint.name)},
+                {"pause", std::string(checkpoint.pause)},
+                {"position", std::string(checkpoint.position)},
+                {"race", std::string(checkpoint.race)},
+            });
+        }
+        return response(
+            request_id,
+            shared_memory_store::status::success,
+            json::value::object{
+                {"checkpointCatalogVersion",
+                 sms::interop_test::checkpoint_catalog_version},
+                {"checkpoints", std::move(entries)},
+            });
+    }
+
+    static shared_memory_store::store_options checkpoint_options(
+        const json::value::object& arguments) {
+        shared_memory_store::store_options options{};
+        options.name = required_string(arguments, "name");
+        options.mode = open_mode_argument(arguments);
+        options.slot_count = required_int32(arguments, "slotCount");
+        options.max_value_bytes = required_int32(arguments, "maxValueBytes");
+        options.max_descriptor_bytes = required_int32(
+            arguments, "maxDescriptorBytes");
+        options.max_key_bytes = required_int32(arguments, "maxKeyBytes");
+        options.lease_record_count = required_int32(
+            arguments, "leaseRecordCount");
+        options.participant_record_count = required_int32(
+            arguments, "participantRecordCount");
+        options.enable_lease_recovery = bool_argument(
+            arguments, "enableLeaseRecovery", false);
+        const auto* total_bytes = find(arguments, "totalBytes");
+        options.total_bytes = !total_bytes ||
+                std::holds_alternative<std::nullptr_t>(total_bytes->data)
+            ? shared_memory_store::store_options::calculate_required_bytes(
+                options.slot_count,
+                options.max_value_bytes,
+                options.max_descriptor_bytes,
+                options.max_key_bytes,
+                options.lease_record_count,
+                options.participant_record_count)
+            : integer_argument(arguments, "totalBytes", 0);
+        return options;
+    }
+
+    static json::value::object checkpoint_result(
+        const sms::interop_test::checkpoint_entry& checkpoint,
+        const std::string* operation) {
+        return {
+            {"checkpointId", checkpoint.id},
+            {"checkpointName", std::string(checkpoint.name)},
+            {"family", std::string(checkpoint.family)},
+            {"operation", operation == nullptr
+                ? json::value(nullptr)
+                : json::value(*operation)},
+            {"position", std::string(checkpoint.position)},
+            {"processId", sms::detail::current_process_id()},
+        };
+    }
+
+    json::value begin_checkpoint(
+        const std::string& request_id,
+        const json::value::object& arguments,
+        bool crash) {
+        if (checkpoint_operation_) {
+            return failure(
+                request_id,
+                -3,
+                "CheckpointAlreadyArmed",
+                "checkpoint_already_armed",
+                "One native checkpoint operation is already paused.");
+        }
+
+        const auto checkpoint_id = required_int32(arguments, "checkpointId");
+        const auto* checkpoint = sms::interop_test::find_checkpoint(checkpoint_id);
+        if (checkpoint == nullptr) {
+            throw protocol_error(
+                "invalid_arguments",
+                "Unknown checkpointId: " + std::to_string(checkpoint_id) + '.');
+        }
+        const auto occurrence_value = integer_argument(arguments, "occurrence", 1);
+        if (occurrence_value < 1 ||
+            occurrence_value > std::numeric_limits<std::int32_t>::max()) {
+            throw protocol_error(
+                "invalid_arguments",
+                "The 'occurrence' argument must be an integer greater than zero.");
+        }
+
+        checkpoint_spec spec{};
+        spec.checkpoint = checkpoint;
+        spec.occurrence = static_cast<std::int32_t>(occurrence_value);
+        spec.operation = required_string(arguments, "operation");
+        spec.options = checkpoint_options(arguments);
+        spec.key = bytes_argument(arguments, "key");
+        spec.value = bytes_argument(arguments, "value");
+        spec.descriptor = bytes_argument(arguments, "descriptor");
+        spec.crash = crash;
+        auto operation = checkpoint_operation::start(std::move(spec));
+        checkpoint_operation_ = operation;
+        if (!operation->wait_until_paused(std::chrono::seconds(10))) {
+            const auto completion = operation->complete(true);
+            checkpoint_operation_.reset();
+            return failure(
+                request_id,
+                -4,
+                "CheckpointNotReached",
+                "checkpoint_not_reached",
+                "Checkpoint " + std::string(checkpoint->name) +
+                    " was not reached; open=" +
+                    open_status_name(completion.open_status) +
+                    ", operation=" + status_name(completion.status) + '.');
+        }
+
+        const auto* reached = operation->reached();
+        if (reached == nullptr) {
+            throw std::runtime_error(
+                "The checkpoint gate signaled without an entry.");
+        }
+        return response(
+            request_id,
+            shared_memory_store::status::success,
+            checkpoint_result(*reached, &operation->operation()));
+    }
+
+    json::value complete_checkpoint(
+        const std::string& request_id,
+        bool cancel) {
+        auto operation = checkpoint_operation_;
+        if (!operation) {
+            return failure(
+                request_id,
+                -5,
+                "CheckpointNotArmed",
+                "checkpoint_not_armed",
+                "No native checkpoint operation is currently paused.");
+        }
+        checkpoint_operation_.reset();
+        const auto* reached = operation->reached();
+        if (reached == nullptr) {
+            throw std::runtime_error("The paused checkpoint has no entry.");
+        }
+        const auto completion = operation->complete(cancel);
+        return response(
+            request_id,
+            completion.status,
+            json::value::object{
+                {"canceled", cancel},
+                {"checkpoint", checkpoint_result(*reached, nullptr)},
+                {"openStatus", json::value::object{
+                    {"code", static_cast<std::int32_t>(completion.open_status)},
+                    {"name", open_status_name(completion.open_status)},
+                }},
+            });
+    }
+
+    json::value inject_fault(
+        const std::string& request_id,
+        const json::value::object& arguments) {
+        const auto store_id = required_string(arguments, "storeId");
+        const auto iterator = store_options_.find(store_id);
+        if (iterator == store_options_.end()) {
+            throw protocol_error(
+                "invalid_arguments", "The store handle '" + store_id + "' is unknown.");
+        }
+        const auto target = required_string(arguments, "target");
+        sms::interop_test::raw_fault_request request{};
+        if (target == "layoutMajorVersion") {
+            const auto replacement = required_int32(
+                arguments, "replacementLayoutMajorVersion");
+            if (replacement < 0 ||
+                replacement > std::numeric_limits<std::uint16_t>::max()) {
+                throw protocol_error(
+                    "invalid_arguments",
+                    "The 'replacementLayoutMajorVersion' argument is outside the UInt16 range.");
+            }
+            request.kind = sms::interop_test::raw_fault_kind::layout_major_version;
+            request.replacement_layout_major_version =
+                static_cast<std::uint16_t>(replacement);
+        } else if (target == "requiredFeatures") {
+            request.kind = sms::interop_test::raw_fault_kind::required_features;
+            request.replacement_required_features = uint64_argument(
+                arguments, "replacementRequiredFeatures");
+        } else if (target == "directoryMutation") {
+            request.kind = sms::interop_test::raw_fault_kind::directory_mutation;
+        } else if (target == "participantProcessId") {
+            request.kind = sms::interop_test::raw_fault_kind::participant_process_id;
+            request.target_process_id = required_int32(arguments, "targetProcessId");
+            request.replacement_process_id = required_int32(
+                arguments, "replacementProcessId");
+        } else if (target == "participantNamespace") {
+            request.kind = sms::interop_test::raw_fault_kind::participant_namespace;
+            request.target_process_id = required_int32(arguments, "targetProcessId");
+            request.replacement_pid_namespace_id = uint64_argument(
+                arguments, "replacementPidNamespaceId");
+        } else if (target == "headerNamespace") {
+            request.kind = sms::interop_test::raw_fault_kind::header_namespace;
+            request.replacement_pid_namespace_id = uint64_argument(
+                arguments, "replacementPidNamespaceId");
+        } else {
+            throw protocol_error(
+                "invalid_arguments", "Unknown raw fault target '" + target + "'.");
+        }
+
+        try {
+            const auto result = sms::interop_test::inject_raw_fault(
+                iterator->second, request);
+            return response(
+                request_id,
+                shared_memory_store::status::success,
+                json::value::object{
+                    {"originalPidNamespaceId", result.original_pid_namespace_id},
+                    {"originalProcessId", result.original_process_id},
+                    {"originalRaw", result.original_raw},
+                    {"participantIndex", result.participant_index},
+                    {"replacementPidNamespaceId", result.replacement_pid_namespace_id},
+                    {"replacementProcessId", result.replacement_process_id},
+                    {"replacementRaw", result.replacement_raw},
+                    {"target", target},
+                });
+        } catch (const sms::interop_test::unsupported_primitive& exception) {
+            return response(
+                request_id,
+                shared_memory_store::status::unsupported_platform,
+                json::value::object{
+                    {"reason", std::string(exception.what())},
+                    {"supported", false},
+                    {"target", target},
+                });
+        } catch (const std::invalid_argument& exception) {
+            throw protocol_error("invalid_arguments", exception.what());
+        } catch (const std::exception& exception) {
+            return failure(
+                request_id, -9, "RawFaultFailed", "raw_fault_failed",
+                exception.what());
+        }
+    }
+
+    json::value hold_cold_lock(
+        const std::string& request_id,
+        const json::value::object& arguments) {
+        if (cold_lock_) {
+            return failure(
+                request_id, -6, "ColdLockAlreadyHeld", "cold_lock_already_held",
+                "This agent already holds a cold synchronization resource.");
+        }
+        const auto name = required_string(arguments, "name");
+        try {
+            cold_lock_ = sms::interop_test::cold_lock::acquire(name);
+            return response(
+                request_id,
+                shared_memory_store::status::success,
+                json::value::object{{"name", name}});
+        } catch (const sms::interop_test::unsupported_primitive& exception) {
+            return response(
+                request_id,
+                shared_memory_store::status::unsupported_platform,
+                json::value::object{
+                    {"name", name},
+                    {"reason", std::string(exception.what())},
+                    {"supported", false},
+                });
+        } catch (const std::exception& exception) {
+            return failure(
+                request_id, -7, "ColdLockFailed", "cold_lock_failed",
+                exception.what());
+        }
+    }
+
+    json::value release_cold_lock(const std::string& request_id) {
+        if (!cold_lock_) {
+            return failure(
+                request_id, -8, "ColdLockNotHeld", "cold_lock_not_held",
+                "This agent does not hold a cold synchronization resource.");
+        }
+        cold_lock_.reset();
+        return response(
+            request_id,
+            shared_memory_store::status::success,
+            json::value::object{{"released", true}});
+    }
+
     json::value diagnostics(const std::string& request_id, const json::value::object& arguments) {
         std::string store_id;
         auto& target = store(arguments, store_id);
@@ -914,31 +1621,60 @@ private:
                 {"abortedReservationCount", native.aborted_reservation_count},
                 {"activeLeaseCount", native.active_lease_count},
                 {"activeLeaseRecoveryCount", native.active_lease_recovery_count},
+                {"activeParticipantCount", native.active_participant_count},
                 {"activeReservationCount", native.active_reservation_count},
                 {"activeReservationRecoveryCount", native.active_reservation_recovery_count},
+                {"casRetryCount", native.cas_retry_count},
                 {"capacityPressureCount", native.capacity_pressure_count},
+                {"changingOwnerClassificationCount", native.changing_owner_classification_count},
+                {"claimingLeaseCount", native.claiming_lease_count},
+                {"closingParticipantCount", native.closing_participant_count},
+                {"contentionBudgetExhaustionCount", native.contention_budget_exhaustion_count},
+                {"currentOwnerClassificationCount", native.current_owner_classification_count},
                 {"emptyIndexEntryCount", native.empty_index_entry_count},
                 {"failedLeaseRecoveryCount", native.failed_lease_recovery_count},
                 {"failedReservationRecoveryCount", native.failed_reservation_recovery_count},
                 {"failureCounts", std::move(failures)},
+                {"freeLeaseCount", native.free_lease_count},
+                {"freeParticipantCount", native.free_participant_count},
                 {"freeSlotCount", native.free_slot_count},
-                {"indexCompactionCount", native.index_compaction_count},
+                {"helpedTransitionCount", native.helped_transition_count},
                 {"indexEntryCount", native.index_entry_count},
+                {"inconsistentOwnerClassificationCount", native.inconsistent_owner_classification_count},
+                {"initializingSlotCount", native.initializing_slot_count},
+                {"invalidTokenCount", native.invalid_token_count},
                 {"lastFailureStatus", native.last_failure_status},
                 {"lastObservedProbeLength", native.last_observed_probe_length},
+                {"liveOwnerClassificationCount", native.live_owner_classification_count},
                 {"maxObservedProbeLength", native.max_observed_probe_length},
+                {"maxObservedOverflowScanLength", native.max_observed_overflow_scan_length},
                 {"occupiedIndexEntryCount", native.occupied_index_entry_count},
+                {"overflowDirectoryOccupancy", native.overflow_directory_occupancy},
+                {"overflowScanCount", native.overflow_scan_count},
                 {"pendingRemovalCount", native.pending_removal_count},
+                {"participantRecordCount", native.participant_record_count},
+                {"primaryDirectoryOccupancy", native.primary_directory_occupancy},
+                {"protocolInfo", protocol_identity(target.protocol())},
                 {"publishedSlotCount", native.published_slot_count},
+                {"reclaimingParticipantCount", native.reclaiming_participant_count},
+                {"reclaimingSlotCount", native.reclaiming_slot_count},
                 {"recoveredLeaseCount", native.recovered_lease_count},
                 {"recoveredReservationCount", native.recovered_reservation_count},
+                {"recoveredTransitionCount", native.recovered_transition_count},
+                {"recoveringLeaseCount", native.recovering_lease_count},
+                {"recoveringParticipantCount", native.recovering_participant_count},
+                {"recoveryAttemptCount", native.recovery_attempt_count},
+                {"registeringParticipantCount", native.registering_participant_count},
+                {"reservedSlotCount", native.reserved_slot_count},
+                {"retiredLeaseCount", native.retired_lease_count},
+                {"retiredParticipantCount", native.retired_participant_count},
+                {"retiredSlotCount", native.retired_slot_count},
                 {"slotCount", native.slot_count},
-                {"tombstoneIndexEntryCount", native.tombstone_index_entry_count},
-                {"tombstonePressureRatio", native.index_entry_count == 0
-                    ? 0.0
-                    : static_cast<double>(native.tombstone_index_entry_count) /
-                      static_cast<double>(native.index_entry_count)},
+                {"spilledBucketCount", native.spilled_bucket_count},
+                {"staleOwnerClassificationCount", native.stale_owner_classification_count},
+                {"staleTokenCount", native.stale_token_count},
                 {"totalBytes", native.total_bytes},
+                {"unsupportedOwnerClassificationCount", native.unsupported_owner_classification_count},
                 {"unsupportedLeaseRecoveryCount", native.unsupported_lease_recovery_count},
                 {"unsupportedReservationRecoveryCount", native.unsupported_reservation_recovery_count},
                 {"usableIndexCapacity", native.usable_index_capacity}
@@ -948,8 +1684,11 @@ private:
     }
 
     std::unordered_map<std::string, shared_memory_store::memory_store> stores_;
+    std::unordered_map<std::string, shared_memory_store::store_options> store_options_;
     std::unordered_map<std::string, lease_entry> leases_;
     std::unordered_map<std::string, reservation_entry> reservations_;
+    std::shared_ptr<checkpoint_operation> checkpoint_operation_;
+    std::unique_ptr<sms::interop_test::cold_lock> cold_lock_;
 };
 
 } // namespace

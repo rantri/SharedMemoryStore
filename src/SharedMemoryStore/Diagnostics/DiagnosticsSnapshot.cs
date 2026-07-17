@@ -27,15 +27,12 @@ public readonly struct DiagnosticsSnapshot
         long capacityPressureCount,
         int indexEntryCount,
         int occupiedIndexEntryCount,
-        int tombstoneIndexEntryCount,
         int emptyIndexEntryCount,
         int usableIndexCapacity,
         int lastObservedProbeLength,
         int maxObservedProbeLength,
-        long indexCompactionCount,
         StoreStatus lastFailureStatus,
         ReadOnlySpan<long> failureCounts,
-        StoreProfile profile,
         StoreProtocolInfo protocolInfo,
         EngineMetrics engineMetrics)
     {
@@ -58,14 +55,11 @@ public readonly struct DiagnosticsSnapshot
         CapacityPressureCount = capacityPressureCount;
         IndexEntryCount = indexEntryCount;
         OccupiedIndexEntryCount = occupiedIndexEntryCount;
-        TombstoneIndexEntryCount = tombstoneIndexEntryCount;
         EmptyIndexEntryCount = emptyIndexEntryCount;
         UsableIndexCapacity = usableIndexCapacity;
         LastObservedProbeLength = lastObservedProbeLength;
         MaxObservedProbeLength = maxObservedProbeLength;
-        IndexCompactionCount = indexCompactionCount;
         LastFailureStatus = lastFailureStatus;
-        Profile = profile;
         ProtocolInfo = protocolInfo;
         InitializingSlotCount = engineMetrics.InitializingSlotCount;
         ReservedSlotCount = engineMetrics.ReservedSlotCount;
@@ -148,9 +142,6 @@ public readonly struct DiagnosticsSnapshot
     private readonly long _storeBusyFailures;
     private readonly long _operationCanceledFailures;
 
-    /// <summary>Gets the concurrency profile that produced this snapshot.</summary>
-    public StoreProfile Profile { get; }
-
     /// <summary>Gets the persisted layout and resource-protocol identity of the observed store.</summary>
     public StoreProtocolInfo ProtocolInfo { get; }
 
@@ -226,7 +217,7 @@ public readonly struct DiagnosticsSnapshot
     /// <summary>Gets the number of v2 lease records retired before incarnation reuse could wrap.</summary>
     public int RetiredLeaseCount { get; }
 
-    /// <summary>Gets the configured v2 participant-record capacity, or zero for legacy stores.</summary>
+    /// <summary>Gets the configured participant-record capacity.</summary>
     public int ParticipantRecordCount { get; }
 
     /// <summary>Gets the number of v2 participant records currently available to open handles.</summary>
@@ -266,14 +257,8 @@ public readonly struct DiagnosticsSnapshot
     /// <summary>Gets the number of occupied key-index entries.</summary>
     public int OccupiedIndexEntryCount { get; }
 
-    /// <summary>Gets the number of tombstone key-index entries.</summary>
-    public int TombstoneIndexEntryCount { get; }
-
     /// <summary>Gets the number of empty key-index entries.</summary>
     public int EmptyIndexEntryCount { get; }
-
-    /// <summary>Gets the ratio of tombstone entries to configured key-index entries.</summary>
-    public double TombstonePressureRatio => IndexEntryCount == 0 ? 0 : (double)TombstoneIndexEntryCount / IndexEntryCount;
 
     /// <summary>Gets the number of key-index entries usable for future inserts before pressure management.</summary>
     public int UsableIndexCapacity { get; }
@@ -283,9 +268,6 @@ public readonly struct DiagnosticsSnapshot
 
     /// <summary>Gets the maximum bounded key-index probe length observed by this handle.</summary>
     public int MaxObservedProbeLength { get; }
-
-    /// <summary>Gets the number of synchronous key-index compactions completed by this handle.</summary>
-    public long IndexCompactionCount { get; }
 
     /// <summary>Gets the number of non-empty v2 primary-directory lanes observed.</summary>
     public int PrimaryDirectoryOccupancy { get; }

@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using SharedMemoryStore.UnitTests.TestSupport;
@@ -158,7 +157,7 @@ public sealed class LockFreeAcquireCleanupTests
 
     private static MemoryStore CreateStore(ControlledLockFreeScheduler scheduler)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-acquire-cleanup-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 16,

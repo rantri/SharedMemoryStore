@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using SharedMemoryStore.UnitTests.TestSupport;
@@ -526,7 +525,7 @@ public sealed class LockFreeDirectoryReferenceRevalidationTests
         int slotCount,
         InvalidReferenceController controller)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-invalid-reference-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 16,
@@ -548,7 +547,7 @@ public sealed class LockFreeDirectoryReferenceRevalidationTests
         string name,
         int slotCount,
         OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 16,

@@ -116,8 +116,7 @@ public enum StoreStatus
     InvalidKey = 20,
 
     /// <summary>
-    /// The selected wait bound expired: legacy shared synchronization was busy, or a lock-free
-    /// operation exhausted its bounded local retry, revalidation, helping, or backoff budget.
+    /// The operation exhausted its bounded local retry, revalidation, helping, or backoff budget.
     /// </summary>
     StoreBusy = 21,
 

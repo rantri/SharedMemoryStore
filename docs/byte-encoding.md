@@ -8,10 +8,10 @@ Use this guide to choose canonical bytes before calling the core store API. The
 API accepts `ReadOnlySpan<byte>`, so hot paths should usually write into a
 caller-owned `Span<byte>` instead of allocating a new `byte[]`.
 
-Behavior claims on this page trace to the
-[public API contract](../specs/001-frame-memory-store/contracts/public-api.md)
-and the
-[shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md).
+Behavior claims on this page trace to the current
+[public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+and
+[protocol conformance contract](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md).
 
 ## Encoding Rules
 

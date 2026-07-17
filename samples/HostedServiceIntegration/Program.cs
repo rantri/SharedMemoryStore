@@ -7,6 +7,8 @@ var options = SharedMemoryStoreOptions.Create(
     maxDescriptorBytes: 16,
     maxKeyBytes: 16,
     leaseRecordCount: 4,
+    participantRecordCount: 4,
+    openMode: OpenMode.CreateNew,
     enableLeaseRecovery: true);
 
 var lifecycle = new StoreLifecycleAdapter(options);
@@ -72,7 +74,15 @@ internal sealed class StoreLifecycleAdapter : IDisposable
             return validation.Status;
         }
 
-        return MemoryStore.TryCreateOrOpen(_options, out _store);
+        var status = MemoryStore.TryCreateOrOpen(_options, out _store);
+        if (status == StoreOpenStatus.Success
+            && _store?.ProtocolInfo != new StoreProtocolInfo(2, 0, 2, 7, 0))
+        {
+            _store?.Dispose();
+            _store = null;
+            return StoreOpenStatus.IncompatibleLayout;
+        }
+        return status;
     }
 
     public StoreStatus PublishHealthValue(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)

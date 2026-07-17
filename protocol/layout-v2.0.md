@@ -1,17 +1,20 @@
 # Mapped Layout 2.0
 
-Layout 2.0 is the C# lock-free profile's language-neutral mapped format. All
+Layout 2.0 is the store's sole current, language-neutral mapped format. All
 multi-byte values are little-endian two's-complement integers. The supported
 runtime architecture is x86-64; every shared atomic word is an 8-byte-aligned
 signed `int64` accessed with acquire/release `Volatile` operations or
-sequentially consistent `Interlocked` read-modify-write operations.
+sequentially consistent full-word read-modify-write operations. C# uses
+`Volatile`/`Interlocked`; native C++ uses the equivalent qualified mapped-atomic
+adapter, and Python delegates mapped-state transitions to that native adapter.
 
 The magic integer is `0x32534d53`, whose little-endian bytes spell `SMS2`.
 The layout version is `2.0` and the shared-resource protocol is `2`.
 Required-feature bit 0 (value `0x1`) is
 `versioned_empty_spill_summary` and bit 1 (value `0x2`) is
 `publication_intent`; bit 2 (value `0x4`) is `pid_namespace_identity`.
-This pre-release v2 contract requires the exact mask `7`.
+This pre-release v2 contract requires the exact mask `7`. Creators write
+optional-feature mask `0`.
 Required-features-zero, bit-0-only, and mask-3 draft v2 binaries reject the current
 mapping, and the current binary rejects all older shapes, before payload
 projection.
@@ -55,6 +58,87 @@ mutation, and later openers reject a corrupt mapping as incompatible. Invalid
 caller-owned inputs and normal capacity, contention, cancellation, disposal,
 or concurrent-lifecycle outcomes must not set the latch. No OS synchronization
 or process-held lock participates in this mechanism.
+
+## StoreHeaderV2: 512 bytes
+
+The header itself is cache-line aligned. All reserved bytes are zero when the
+creator release-publishes `Ready`; current readers ignore reserved ordinary
+bytes but validate every declared field below before projecting another
+section.
+
+| Field | Type | Offset |
+|---|---:|---:|
+| `magic` | uint32 | 0 |
+| `layout_major_version` | uint16 | 4 |
+| `layout_minor_version` | uint16 | 6 |
+| `header_length` | int32 | 8 |
+| `resource_protocol_version` | int32 | 12 |
+| `required_features` | uint64 | 16 |
+| `optional_features` | uint64 | 24 |
+| `total_bytes` | int64 | 32 |
+| `store_id` | uint64 | 40 |
+| `control` | atomic uint64 | 48 |
+| `sequence` | atomic uint64 | 56 |
+| `slot_count` | int32 | 64 |
+| `lease_record_count` | int32 | 68 |
+| `participant_record_count` | int32 | 72 |
+| `max_key_bytes` | int32 | 76 |
+| `max_descriptor_bytes` | int32 | 80 |
+| `max_value_bytes` | int32 | 84 |
+| `participant_index_bits` | int32 | 88 |
+| `participant_generation_bits` | int32 | 92 |
+| `participant_offset` | int64 | 96 |
+| `participant_length` | int64 | 104 |
+| `participant_stride` | int32 | 112 |
+| `primary_lane_count` | int32 | 116 |
+| `primary_bucket_count` | int32 | 120 |
+| `primary_bucket_stride` | int32 | 124 |
+| `primary_directory_offset` | int64 | 128 |
+| `primary_directory_length` | int64 | 136 |
+| `overflow_directory_offset` | int64 | 144 |
+| `overflow_directory_length` | int64 | 152 |
+| `overflow_stride` | int32 | 160 |
+| `lease_stride` | int32 | 164 |
+| `lease_registry_offset` | int64 | 168 |
+| `lease_registry_length` | int64 | 176 |
+| `slot_metadata_stride` | int32 | 184 |
+| `key_stride` | int32 | 188 |
+| `slot_metadata_offset` | int64 | 192 |
+| `slot_metadata_length` | int64 | 200 |
+| `key_storage_offset` | int64 | 208 |
+| `key_storage_length` | int64 | 216 |
+| `descriptor_stride` | int32 | 224 |
+| `payload_stride` | int32 | 228 |
+| `descriptor_storage_offset` | int64 | 232 |
+| `descriptor_storage_length` | int64 | 240 |
+| `payload_storage_offset` | int64 | 248 |
+| `payload_storage_length` | int64 | 256 |
+| `pid_namespace_id` | uint64 | 264 |
+| `pid_namespace_mode` | atomic uint64 | 272 |
+| reserved | bytes | 280 |
+
+The opener recomputes all derived bit counts, strides, offsets, lengths, and
+`required_bytes` with checked arithmetic. Declared `total_bytes` must cover the
+computed end and must not exceed the actual mapped capacity used for
+projection. `store_id` is nonzero. Store control is one of Initializing=1,
+Ready=2, Corrupt=3, or Unsupported=4; PID-namespace mode is Enabled=1 or the
+irreversible Mixed=2 state once the header is Ready.
+
+## Shared atomic ordering
+
+| Operation | Required order |
+|---|---|
+| Observe a control, binding, mutation, location, operation, summary, or counter | acquire load |
+| Single-writer publication after immutable metadata/bytes are initialized | release store |
+| Claim, help, handoff, state advance, release, generation advance, or corruption latch | sequentially consistent full-word compare/exchange or RMW |
+| Failed compare/exchange | acquire or stronger |
+
+Every atomic address must be naturally 8-byte aligned and the native primitive
+must report always-lock-free on the qualified x86-64 target. `volatile`, a
+process-local mutex, or a named/file lock is not a mapped-memory-ordering
+substitute. No-wait, finite, infinite, and canceled operations share one
+operation-wide budget; retry loops check that budget and cancellation
+periodically instead of resetting a timeout at each sub-operation.
 
 ## Fixed records
 
@@ -300,6 +384,6 @@ structurally valid.
   scan, exact-clears a stable empty Present token to its versioned Empty form,
   or retains the helpable mutation on budget/uncertainty.
 
-The executable authority for these offsets and encodings is
-`LockFreeLayoutContractTests`; the machine-readable copy is
-[`fixtures/v2.0/manifest.json`](fixtures/v2.0/manifest.json).
+The executable authority for these offsets, encodings, vectors, and offline
+snapshots is [`fixtures/v2.0/manifest.json`](fixtures/v2.0/manifest.json).
+C#, native C++, and Python conformance tests consume that same authority.

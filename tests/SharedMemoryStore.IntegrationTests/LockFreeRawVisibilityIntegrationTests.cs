@@ -92,7 +92,7 @@ public sealed class LockFreeRawVisibilityIntegrationTests
 
     private static MemoryStore CreateStore(string name)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,

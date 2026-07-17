@@ -5,7 +5,7 @@
 This sample validates same-host Docker containers that are configured to share
 the resources required by SharedMemoryStore. It is for service owners and
 maintainers proving container deployment settings before relying on
-cross-container shared memory.
+cross-container SMS2 shared memory.
 
 ## Concepts Demonstrated
 

@@ -16,7 +16,7 @@ public sealed class PublicationHistoryTests
         }
 
         var recorder = new MonotonicHistoryRecorder();
-        using var store = CreateLockFreeStore(slotCount: 2, recorder);
+        using var store = CreateStore(slotCount: 2, recorder);
         var first = recorder.Invoke(1, 1, ReferenceCommand.Publish(1, "same", "left"));
         var second = recorder.Invoke(2, 2, ReferenceCommand.Publish(1, "same", "right"));
 
@@ -48,7 +48,7 @@ public sealed class PublicationHistoryTests
         }
 
         var recorder = new MonotonicHistoryRecorder();
-        using var store = CreateLockFreeStore(slotCount: 1, recorder);
+        using var store = CreateStore(slotCount: 1, recorder);
         var first = recorder.Invoke(1, 1, ReferenceCommand.Publish(1, "left-key", "left"));
         var second = recorder.Invoke(2, 2, ReferenceCommand.Publish(1, "right-key", "right"));
 
@@ -81,7 +81,7 @@ public sealed class PublicationHistoryTests
         var recorder = new MonotonicHistoryRecorder();
         using var pause = new ClaimPause();
         using var cancellation = new CancellationTokenSource();
-        using Store store = CreateLockFreeStore(slotCount: 1, recorder, pause.Observe);
+        using Store store = CreateStore(slotCount: 1, recorder, pause.Observe);
         PendingInvocation tentative = recorder.Invoke(
             1,
             1,
@@ -154,7 +154,7 @@ public sealed class PublicationHistoryTests
         }
 
         var recorder = new MonotonicHistoryRecorder();
-        using Store store = CreateLockFreeStore(slotCount: 2, recorder);
+        using Store store = CreateStore(slotCount: 2, recorder);
         Assert.Equal(StoreStatus.Success, store.TryPublish([0x41], [0x11]));
         Assert.Equal(StoreStatus.Success, store.TryPublish([0x42], [0x22]));
 
@@ -190,7 +190,7 @@ public sealed class PublicationHistoryTests
 
         var recorder = new MonotonicHistoryRecorder();
         using var pause = new StoreFullProofPause();
-        using Store store = CreateLockFreeStore(slotCount: 2, recorder, pause.Observe);
+        using Store store = CreateStore(slotCount: 2, recorder, pause.Observe);
         Assert.Equal(StoreStatus.Success, store.TryPublish([0x51], [0x11]));
         Assert.Equal(StoreStatus.Success, store.TryPublish([0x52], [0x22]));
 
@@ -230,12 +230,12 @@ public sealed class PublicationHistoryTests
         }
     }
 
-    private static Store CreateLockFreeStore(
+    private static Store CreateStore(
         int slotCount,
         MonotonicHistoryRecorder recorder,
         Action<LockFreeCheckpointEntry>? checkpointObserver = null)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-linearizable-publish-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 16,
@@ -302,9 +302,7 @@ public sealed class PublicationHistoryTests
 
     private static void AssertLockFree(Store store)
     {
-        Assert.Equal(StoreProfile.LockFree, store.Profile);
-        Assert.Equal(StoreProfile.LockFree, store.ProtocolInfo.Profile);
-        Assert.Equal(2, store.ProtocolInfo.LayoutMajorVersion);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), store.ProtocolInfo);
     }
 
     private static bool IsSupportedLockFreeHost() =>

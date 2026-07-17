@@ -6,7 +6,7 @@ This sample is for application owners who need service-style lifecycle and
 health behavior around the core package. It shows an application-owned wrapper
 that opens `MemoryStore`, validates options, publishes a health value, reads
 diagnostics, runs explicit recovery hooks, and disposes the store during
-shutdown.
+shutdown. The wrapper uses the only current mapped protocol, SMS2.
 
 ## Concepts Demonstrated
 
@@ -52,8 +52,8 @@ return `Success` on the validated platform.
 - `UnsupportedPlatform`: the current platform does not support the required
   named memory-mapped-file behavior or owner-liveness checks.
 - `InvalidOptions`: application configuration failed validation.
-- `StoreBusy` or `OperationCanceled`: startup, health, recovery, or shutdown
-  did not acquire shared synchronization under the selected policy.
+- `StoreBusy` or `OperationCanceled`: startup coordination or a bounded local
+  retry/help operation exhausted its policy.
 - `StoreDisposed`: a caller used the wrapper after shutdown.
 
 If startup fails, the program prints `start: <status>` and exits with a nonzero

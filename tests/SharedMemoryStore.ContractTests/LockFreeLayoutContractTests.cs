@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace SharedMemoryStore.ContractTests;
@@ -120,6 +122,560 @@ public sealed class LockFreeLayoutContractTests
 
         Assert.Equal(1, sizing.GetProperty("slot_count_min").GetInt32());
         Assert.Equal(MaximumLockFreeSlotCount, sizing.GetProperty("slot_count_max").GetInt32());
+    }
+
+    [Fact]
+    public void ManifestDeclaresSms2AsTheSoleCurrentProtocolAndPinsRequiredFeatures()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement protocol = document.RootElement.GetProperty("protocol");
+
+        Assert.Equal(new[] { "2.0" }, ReadJsonStrings(protocol, "creatable_layouts"));
+        Assert.Equal(new[] { "2.0" }, ReadJsonStrings(protocol, "readable_layouts"));
+        Assert.Equal(
+            "reject-before-payload-access",
+            protocol.GetProperty("noncurrent_mapping_policy").GetString());
+        Assert.False(protocol.TryGetProperty("retired_layouts", out _));
+        Assert.Equal("SMS2", protocol.GetProperty("magic_ascii").GetString());
+        Assert.Equal("32534d53", protocol.GetProperty("magic_integer_hex").GetString());
+        Assert.Equal("534d5332", protocol.GetProperty("little_endian_bytes_hex").GetString());
+        Assert.Equal("little", protocol.GetProperty("byte_order").GetString());
+        Assert.Equal("x86_64", protocol.GetProperty("required_architecture").GetString());
+        Assert.Equal(8, protocol.GetProperty("atomic_width").GetInt32());
+        Assert.Equal("sequentially-consistent", protocol.GetProperty("rmw_order").GetString());
+        Assert.Equal(7UL, protocol.GetProperty("required_features").GetUInt64());
+        Assert.Equal(0UL, protocol.GetProperty("optional_features").GetUInt64());
+        Assert.Equal(
+            new ulong[] { 0, 1, 3 },
+            protocol.GetProperty("incompatible_draft_required_feature_masks")
+                .EnumerateArray()
+                .Select(static item => item.GetUInt64())
+                .ToArray());
+
+        JsonElement bits = protocol.GetProperty("required_feature_bits");
+        AssertJsonIntegerMap(
+            bits,
+            new Dictionary<string, int>
+            {
+                ["versioned_empty_spill_summary"] = 1,
+                ["publication_intent"] = 2,
+                ["pid_namespace_identity"] = 4
+            });
+        Assert.Equal(
+            protocol.GetProperty("required_features").GetUInt64(),
+            bits.EnumerateObject().Aggregate(0UL, static (mask, bit) => mask | bit.Value.GetUInt64()));
+    }
+
+    [Fact]
+    public void ManifestPinsEverySms2RecordFieldOffset()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement records = document.RootElement.GetProperty("records");
+
+        AssertJsonRecord(
+            records,
+            "store_header",
+            512,
+            ("magic", 0),
+            ("layout_major_version", 4),
+            ("layout_minor_version", 6),
+            ("header_length", 8),
+            ("resource_protocol_version", 12),
+            ("required_features", 16),
+            ("optional_features", 24),
+            ("total_bytes", 32),
+            ("store_id", 40),
+            ("control", 48),
+            ("sequence", 56),
+            ("slot_count", 64),
+            ("lease_record_count", 68),
+            ("participant_record_count", 72),
+            ("max_key_bytes", 76),
+            ("max_descriptor_bytes", 80),
+            ("max_value_bytes", 84),
+            ("participant_index_bits", 88),
+            ("participant_generation_bits", 92),
+            ("participant_offset", 96),
+            ("participant_length", 104),
+            ("participant_stride", 112),
+            ("primary_lane_count", 116),
+            ("primary_bucket_count", 120),
+            ("primary_bucket_stride", 124),
+            ("primary_directory_offset", 128),
+            ("primary_directory_length", 136),
+            ("overflow_directory_offset", 144),
+            ("overflow_directory_length", 152),
+            ("overflow_stride", 160),
+            ("lease_stride", 164),
+            ("lease_registry_offset", 168),
+            ("lease_registry_length", 176),
+            ("slot_metadata_stride", 184),
+            ("key_stride", 188),
+            ("slot_metadata_offset", 192),
+            ("slot_metadata_length", 200),
+            ("key_storage_offset", 208),
+            ("key_storage_length", 216),
+            ("descriptor_stride", 224),
+            ("payload_stride", 228),
+            ("descriptor_storage_offset", 232),
+            ("descriptor_storage_length", 240),
+            ("payload_storage_offset", 248),
+            ("payload_storage_length", 256),
+            ("pid_namespace_id", 264),
+            ("pid_namespace_mode", 272));
+        Assert.Equal(64, records.GetProperty("store_header").GetProperty("alignment").GetInt32());
+
+        AssertJsonRecord(
+            records,
+            "participant",
+            64,
+            ("control", 0),
+            ("identity_kind", 8),
+            ("reserved", 12),
+            ("process_start_value", 16),
+            ("open_sequence", 24),
+            ("pid_namespace_id", 32));
+        AssertJsonRecord(
+            records,
+            "primary_directory_bucket",
+            128,
+            ("spill_summary", 0),
+            ("mutation", 8),
+            ("lanes", 16));
+        Assert.Equal(
+            8,
+            records.GetProperty("primary_directory_bucket").GetProperty("lane_count").GetInt32());
+        AssertJsonRecord(records, "overflow_binding", 8, ("binding", 0));
+        AssertJsonRecord(
+            records,
+            "lease",
+            64,
+            ("control", 0),
+            ("slot_binding", 8),
+            ("acquire_sequence", 16));
+        AssertJsonRecord(
+            records,
+            "value_slot",
+            128,
+            ("control", 0),
+            ("directory_binding", 8),
+            ("directory_location", 16),
+            ("directory_operation", 24),
+            ("key_hash", 32),
+            ("key_length", 40),
+            ("descriptor_length", 44),
+            ("value_length", 48),
+            ("publication_intent", 52),
+            ("bytes_advanced", 56),
+            ("commit_sequence", 64),
+            ("key_offset", 72),
+            ("descriptor_offset", 80),
+            ("payload_offset", 88));
+
+        Assert.Equal(
+            new[]
+            {
+                "lease", "overflow_binding", "participant", "primary_directory_bucket",
+                "store_header", "value_slot"
+            },
+            records.EnumerateObject().Select(static record => record.Name).Order().ToArray());
+    }
+
+    [Fact]
+    public void ManifestPublishesValidAndMalformedVectorsForEverySms2Codec()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement vectors = document.RootElement.GetProperty("codec_vectors");
+        string[] expectedFamilies =
+        [
+            "binding",
+            "directory_location",
+            "directory_operation",
+            "lease_control",
+            "participant_control",
+            "participant_token",
+            "slot_control",
+            "spill_summary"
+        ];
+
+        Assert.Equal(
+            expectedFamilies,
+            vectors.EnumerateObject().Select(static family => family.Name).Order().ToArray());
+        foreach (string family in expectedFamilies)
+        {
+            AssertJsonCodecVectors(vectors, family);
+        }
+    }
+
+    [Fact]
+    public void ManifestPublishesCheckedSizingLimitsAndExecutableLayoutVectors()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement sizing = document.RootElement.GetProperty("sizing");
+        JsonElement limits = sizing.GetProperty("limits");
+
+        AssertJsonLimit(limits, "slot_count", minimum: 1, maximum: MaximumLockFreeSlotCount);
+        AssertJsonLimit(limits, "lease_record_count", minimum: 1);
+        AssertJsonLimit(
+            limits,
+            "participant_record_count",
+            minimum: 1,
+            maximum: MaximumLockFreeSlotCount);
+        AssertJsonLimit(limits, "max_key_bytes", minimum: 1);
+        AssertJsonLimit(limits, "max_descriptor_bytes", minimum: 0);
+        AssertJsonLimit(limits, "max_value_bytes", minimum: 1);
+
+        string[] requiredExpectedFields =
+        [
+            "header_length",
+            "participant_index_bits",
+            "participant_generation_bits",
+            "participant_stride",
+            "participant_offset",
+            "participant_length",
+            "primary_lane_count",
+            "primary_bucket_count",
+            "primary_bucket_stride",
+            "primary_directory_offset",
+            "primary_directory_length",
+            "overflow_stride",
+            "overflow_directory_offset",
+            "overflow_directory_length",
+            "lease_stride",
+            "lease_registry_offset",
+            "lease_registry_length",
+            "slot_metadata_stride",
+            "slot_metadata_offset",
+            "slot_metadata_length",
+            "key_stride",
+            "key_storage_offset",
+            "key_storage_length",
+            "descriptor_stride",
+            "descriptor_storage_offset",
+            "descriptor_storage_length",
+            "payload_stride",
+            "payload_storage_offset",
+            "payload_storage_length",
+            "required_bytes"
+        ];
+
+        JsonElement[] validVectors = sizing.GetProperty("valid_vectors").EnumerateArray().ToArray();
+        Assert.NotEmpty(validVectors);
+        AssertUniqueJsonNames(validVectors);
+        foreach (JsonElement vector in validVectors)
+        {
+            JsonElement input = vector.GetProperty("input");
+            object layout = CreateLayoutFromJson(input);
+            JsonElement expected = vector.GetProperty("expected");
+
+            foreach (string field in requiredExpectedFields)
+            {
+                Assert.True(expected.TryGetProperty(field, out _), $"Sizing vector '{vector.GetProperty("name").GetString()}' is missing {field}.");
+            }
+
+            foreach (JsonProperty property in expected.EnumerateObject())
+            {
+                Assert.Equal(property.Value.GetInt64(), GetInt64(layout, property.Name));
+            }
+        }
+
+        JsonElement[] invalidVectors = sizing.GetProperty("invalid_vectors").EnumerateArray().ToArray();
+        Assert.NotEmpty(invalidVectors);
+        AssertUniqueJsonNames(invalidVectors);
+        Assert.Contains(invalidVectors, static vector => vector.GetProperty("error").GetString() == "invalid_argument");
+        Assert.Contains(invalidVectors, static vector => vector.GetProperty("error").GetString() == "arithmetic_overflow");
+        foreach (JsonElement vector in invalidVectors)
+        {
+            Exception thrown = Assert.ThrowsAny<Exception>(() => CreateLayoutFromJson(vector.GetProperty("input")));
+            Exception error = Unwrap(thrown);
+            switch (vector.GetProperty("error").GetString())
+            {
+                case "invalid_argument":
+                    Assert.IsAssignableFrom<ArgumentOutOfRangeException>(error);
+                    break;
+                case "arithmetic_overflow":
+                    Assert.IsAssignableFrom<OverflowException>(error);
+                    break;
+                default:
+                    throw new Xunit.Sdk.XunitException(
+                        $"Sizing vector '{vector.GetProperty("name").GetString()}' has an unknown error classification.");
+            }
+        }
+    }
+
+    [Fact]
+    public void ManifestPublishesFnvAndExactKeyCollisionVectors()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement root = document.RootElement;
+        JsonElement[] hashes = root.GetProperty("hash_vectors").EnumerateArray().ToArray();
+
+        Assert.NotEmpty(hashes);
+        AssertUniqueJsonNames(hashes);
+        foreach (JsonElement vector in hashes)
+        {
+            byte[] bytes = ReadLowerHex(vector, "bytes_hex");
+            Assert.Equal(bytes.Length != 0, vector.GetProperty("valid_store_key").GetBoolean());
+            string expectedHash = ReadFixedLowerHex(vector, "expected_hash_hex", 16);
+            Assert.Equal(Convert.ToUInt64(expectedHash, 16), Fnv1a64(bytes));
+        }
+
+        Assert.Contains(hashes, static vector => vector.GetProperty("bytes_hex").GetString() == string.Empty);
+        Assert.Contains(
+            hashes,
+            static vector => ReadLowerHex(vector, "bytes_hex").Contains((byte)0));
+
+        JsonElement[] exactKeys = root.GetProperty("exact_key_vectors").EnumerateArray().ToArray();
+        Assert.NotEmpty(exactKeys);
+        AssertUniqueJsonNames(exactKeys);
+        foreach (JsonElement vector in exactKeys)
+        {
+            byte[] left = ReadLowerHex(vector, "left_hex");
+            byte[] right = ReadLowerHex(vector, "right_hex");
+            _ = ReadFixedLowerHex(vector, "shared_hash_hex", 16);
+            Assert.Equal(left.AsSpan().SequenceEqual(right), vector.GetProperty("equal").GetBoolean());
+        }
+
+        Assert.Contains(exactKeys, static vector => vector.GetProperty("equal").GetBoolean());
+        Assert.Contains(
+            exactKeys,
+            static vector =>
+                !vector.GetProperty("equal").GetBoolean()
+                && !ReadLowerHex(vector, "left_hex").AsSpan().SequenceEqual(ReadLowerHex(vector, "right_hex")));
+    }
+
+    [Fact]
+    public void ManifestPublishesCrossPlatformResourceAndOwnershipArtifactVectors()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement names = document.RootElement.GetProperty("resource_name_vectors");
+        JsonElement[] windows = names.GetProperty("windows").EnumerateArray().ToArray();
+        JsonElement[] linux = names.GetProperty("linux").EnumerateArray().ToArray();
+        Assert.NotEmpty(windows);
+        Assert.NotEmpty(linux);
+        AssertUniqueJsonNames(windows);
+        AssertUniqueJsonNames(linux);
+
+        Type resourceNameType = RequireType("SharedMemoryStore.Interop.PlatformResourceName");
+        MethodInfo create = resourceNameType.GetMethod(
+                "Create",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new Xunit.Sdk.XunitException("PlatformResourceName.Create is absent.");
+
+        foreach (JsonElement vector in windows)
+        {
+            string publicName = vector.GetProperty("public_name").GetString()!;
+            object actual = create.Invoke(null, [publicName])!;
+            Assert.Equal(publicName, vector.GetProperty("region_name").GetString());
+            Assert.Equal(GetString(actual, "WindowsRegionName"), vector.GetProperty("region_name").GetString());
+            Assert.Equal(
+                GetString(actual, "WindowsSynchronizationName"),
+                vector.GetProperty("synchronization_name").GetString());
+        }
+
+        foreach (JsonElement vector in linux)
+        {
+            string publicName = vector.GetProperty("public_name").GetString()!;
+            object actual = create.Invoke(null, [publicName])!;
+            string fragment = GetString(actual, "ResourceFragment");
+            Assert.Equal(fragment, vector.GetProperty("fragment").GetString());
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(publicName)).AsSpan(0, 8)).ToLowerInvariant(),
+                vector.GetProperty("sha256_prefix_hex").GetString());
+
+            JsonElement files = vector.GetProperty("files");
+            Assert.Equal(Path.GetFileName(GetString(actual, "LinuxRegionPath")), files.GetProperty("region").GetString());
+            Assert.Equal(
+                Path.GetFileName(GetString(actual, "LinuxSynchronizationPath")),
+                files.GetProperty("synchronization").GetString());
+            Assert.Equal(Path.GetFileName(GetString(actual, "LinuxOwnersPath")), files.GetProperty("owners").GetString());
+            Assert.Equal(
+                Path.GetFileName(GetString(actual, "LinuxLifecycleLockPath")),
+                files.GetProperty("lifecycle").GetString());
+
+            string ownerToken = ReadFixedLowerHex(vector, "owner_token", 32);
+            string owners = files.GetProperty("owners").GetString()!;
+            Assert.Equal(owners + ".anchor." + ownerToken, vector.GetProperty("owner_anchor").GetString());
+            Assert.Equal(
+                owners + ".released." + ownerToken + ".ready",
+                vector.GetProperty("release_marker").GetString());
+        }
+    }
+
+    [Fact]
+    public void ManifestPinsOpenModesPublicStatusesAndAllSms2States()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        JsonElement root = document.RootElement;
+
+        AssertJsonIntegerMap(
+            root.GetProperty("open_modes"),
+            new Dictionary<string, int>
+            {
+                ["create_new"] = 0,
+                ["open_existing"] = 1,
+                ["create_or_open"] = 2
+            });
+
+        JsonElement statuses = root.GetProperty("statuses");
+        AssertJsonIntegerMap(
+            statuses.GetProperty("open"),
+            new Dictionary<string, int>
+            {
+                ["success"] = 0,
+                ["already_exists"] = 1,
+                ["not_found"] = 2,
+                ["invalid_options"] = 3,
+                ["incompatible_layout"] = 4,
+                ["unsupported_platform"] = 5,
+                ["insufficient_capacity"] = 6,
+                ["access_denied"] = 7,
+                ["mapping_failed"] = 8,
+                ["store_busy"] = 9,
+                ["operation_canceled"] = 10,
+                ["participant_table_full"] = 11
+            });
+        AssertJsonIntegerMap(
+            statuses.GetProperty("operation"),
+            new Dictionary<string, int>
+            {
+                ["success"] = 0,
+                ["duplicate_key"] = 1,
+                ["not_found"] = 2,
+                ["key_too_large"] = 3,
+                ["value_too_large"] = 4,
+                ["descriptor_too_large"] = 5,
+                ["store_full"] = 6,
+                ["lease_table_full"] = 7,
+                ["invalid_lease"] = 8,
+                ["lease_already_released"] = 9,
+                ["remove_pending"] = 10,
+                ["unsupported_platform"] = 11,
+                ["store_disposed"] = 12,
+                ["corrupt_store"] = 13,
+                ["access_denied"] = 14,
+                ["unknown_failure"] = 15,
+                ["invalid_reservation"] = 16,
+                ["reservation_incomplete"] = 17,
+                ["reservation_already_completed"] = 18,
+                ["reservation_write_out_of_range"] = 19,
+                ["invalid_key"] = 20,
+                ["store_busy"] = 21,
+                ["operation_canceled"] = 22
+            });
+
+        JsonElement states = root.GetProperty("states");
+        Assert.Equal(
+            new[]
+            {
+                "identity_kind", "lease", "participant", "pid_namespace_mode",
+                "publication_intent", "slot", "store"
+            },
+            states.EnumerateObject().Select(static state => state.Name).Order().ToArray());
+        AssertJsonIntegerMap(states.GetProperty("store"), new Dictionary<string, int>
+        {
+            ["initializing"] = 1,
+            ["ready"] = 2,
+            ["corrupt"] = 3,
+            ["unsupported"] = 4
+        });
+        AssertJsonIntegerMap(states.GetProperty("participant"), new Dictionary<string, int>
+        {
+            ["free"] = 0,
+            ["registering"] = 1,
+            ["active"] = 2,
+            ["closing"] = 3,
+            ["recovering"] = 4,
+            ["reclaiming"] = 5,
+            ["retired"] = 6
+        });
+        AssertJsonIntegerMap(states.GetProperty("slot"), new Dictionary<string, int>
+        {
+            ["free"] = 0,
+            ["initializing"] = 1,
+            ["reserved"] = 2,
+            ["published"] = 3,
+            ["remove_requested"] = 4,
+            ["aborting"] = 5,
+            ["reclaiming"] = 6,
+            ["retired"] = 7
+        });
+        AssertJsonIntegerMap(states.GetProperty("lease"), new Dictionary<string, int>
+        {
+            ["free"] = 0,
+            ["claiming"] = 1,
+            ["active"] = 2,
+            ["releasing"] = 3,
+            ["recovering"] = 4,
+            ["retired"] = 5
+        });
+        AssertJsonIntegerMap(states.GetProperty("publication_intent"), new Dictionary<string, int>
+        {
+            ["none"] = 0,
+            ["explicit_reservation"] = 1,
+            ["atomic_publication"] = 2
+        });
+        AssertJsonIntegerMap(states.GetProperty("identity_kind"), new Dictionary<string, int>
+        {
+            ["unknown"] = 0,
+            ["windows_process_creation_file_time"] = 1,
+            ["linux_proc_start_ticks"] = 2
+        });
+        AssertJsonIntegerMap(states.GetProperty("pid_namespace_mode"), new Dictionary<string, int>
+        {
+            ["recovery_enabled"] = 1,
+            ["mixed_or_unproven"] = 2
+        });
+    }
+
+    [Fact]
+    public void ManifestPublishesOfflineOnlySnapshotsForEveryRequiredLifecycleState()
+    {
+        using JsonDocument document = LoadV2Manifest();
+        string manifestDirectory = Path.GetDirectoryName(GetV2ManifestPath())!;
+        JsonElement[] fixtures = document.RootElement.GetProperty("offline_fixtures").EnumerateArray().ToArray();
+        string[] expectedStates =
+        [
+            "corrupt",
+            "empty",
+            "leased",
+            "pending-removal",
+            "published",
+            "reclaimed",
+            "recovering",
+            "reserved",
+            "spilled"
+        ];
+
+        Assert.Equal(
+            expectedStates,
+            fixtures.Select(static fixture => fixture.GetProperty("state").GetString()!).Order().ToArray());
+        AssertUniqueJsonNames(fixtures, "state");
+        foreach (JsonElement fixture in fixtures)
+        {
+            string state = fixture.GetProperty("state").GetString()!;
+            Assert.True(fixture.GetProperty("offline_only").GetBoolean());
+            string binaryPath = ResolveFixturePath(manifestDirectory, fixture.GetProperty("binary_path").GetString()!);
+            string snapshotPath = ResolveFixturePath(manifestDirectory, fixture.GetProperty("snapshot_path").GetString()!);
+            Assert.True(File.Exists(binaryPath), $"Offline binary fixture '{binaryPath}' is absent.");
+            Assert.True(File.Exists(snapshotPath), $"Offline snapshot fixture '{snapshotPath}' is absent.");
+
+            byte[] binary = File.ReadAllBytes(binaryPath);
+            byte[] snapshotBytes = File.ReadAllBytes(snapshotPath);
+            Assert.True(binary.Length >= 512, $"Offline binary fixture '{binaryPath}' is shorter than the SMS2 header.");
+            Assert.True(binary.AsSpan(0, 4).SequenceEqual(new byte[] { 0x53, 0x4d, 0x53, 0x32 }));
+            Assert.Equal(fixture.GetProperty("byte_length").GetInt64(), binary.LongLength);
+            Assert.Equal(
+                ReadFixedLowerHex(fixture, "binary_sha256_hex", 64),
+                Convert.ToHexString(SHA256.HashData(binary)).ToLowerInvariant());
+            Assert.Equal(
+                ReadFixedLowerHex(fixture, "snapshot_sha256_hex", 64),
+                Convert.ToHexString(SHA256.HashData(snapshotBytes)).ToLowerInvariant());
+
+            using JsonDocument snapshot = JsonDocument.Parse(snapshotBytes);
+            Assert.True(snapshot.RootElement.GetProperty("offline_only").GetBoolean());
+            Assert.Equal(state, snapshot.RootElement.GetProperty("state").GetString());
+        }
     }
 
     [Theory]
@@ -731,20 +1287,9 @@ public sealed class LockFreeLayoutContractTests
     }
 
     [Fact]
-    public void PublicProfileAwareSizingAndCreateHelperUseTheCanonicalV2Layout()
+    public void PublicSizingAndCreateHelperUseTheCanonicalV2Layout()
     {
-        Type profileType = RequireType("SharedMemoryStore.StoreProfile");
-        object lockFree = Enum.Parse(profileType, "LockFree");
-        MethodInfo calculate = typeof(SharedMemoryStoreOptions)
-            .GetMethods(BindingFlags.Static | BindingFlags.Public)
-            .SingleOrDefault(method =>
-                method.Name == nameof(SharedMemoryStoreOptions.CalculateRequiredBytes)
-                && method.GetParameters().Length == 7
-                && method.GetParameters()[0].ParameterType == profileType)
-            ?? throw new Xunit.Sdk.XunitException("The profile-aware CalculateRequiredBytes overload is absent.");
-
-        object?[] sizingArguments = [lockFree, 3, 17, 9, 7, 5, 64];
-        long publicBytes = Convert.ToInt64(calculate.Invoke(null, sizingArguments));
+        long publicBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(3, 17, 9, 7, 5, 64);
         long internalBytes = GetInt64(CreateLayout(
             slotCount: 3,
             leaseRecordCount: 5,
@@ -753,28 +1298,210 @@ public sealed class LockFreeLayoutContractTests
             maxDescriptorBytes: 9,
             maxValueBytes: 17), "RequiredBytes");
 
-        MethodInfo create = typeof(SharedMemoryStoreOptions)
-            .GetMethods(BindingFlags.Static | BindingFlags.Public)
-            .SingleOrDefault(method => method.Name == "CreateLockFree")
-            ?? throw new Xunit.Sdk.XunitException("SharedMemoryStoreOptions.CreateLockFree is absent.");
-        object options = create.Invoke(
-            null,
-            BindArguments(
-                create.GetParameters(),
-                new Dictionary<string, object>
-                {
-                    ["name"] = $"sms-layout-contract-{Guid.NewGuid():N}",
-                    ["slotCount"] = 3,
-                    ["maxValueBytes"] = 17,
-                    ["maxDescriptorBytes"] = 9,
-                    ["maxKeyBytes"] = 7,
-                    ["leaseRecordCount"] = 5,
-                    ["participantRecordCount"] = 64,
-                    ["participantCount"] = 64
-                }))!;
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
+            $"sms-layout-contract-{Guid.NewGuid():N}",
+            3,
+            17,
+            9,
+            7,
+            5,
+            64);
 
         Assert.Equal(internalBytes, publicBytes);
-        Assert.Equal(publicBytes, GetInt64(options, "TotalBytes"));
+        Assert.Equal(publicBytes, options.TotalBytes);
+    }
+
+    private static JsonDocument LoadV2Manifest() =>
+        JsonDocument.Parse(File.ReadAllText(GetV2ManifestPath()));
+
+    private static string GetV2ManifestPath()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "SharedMemoryStore.slnx")))
+        {
+            root = root.Parent;
+        }
+
+        Assert.NotNull(root);
+        return Path.Combine(root!.FullName, "protocol", "fixtures", "v2.0", "manifest.json");
+    }
+
+    private static string[] ReadJsonStrings(JsonElement parent, string propertyName) =>
+        parent.GetProperty(propertyName)
+            .EnumerateArray()
+            .Select(static item => item.GetString()!)
+            .ToArray();
+
+    private static void AssertJsonIntegerMap(
+        JsonElement actual,
+        IReadOnlyDictionary<string, int> expected)
+    {
+        Assert.Equal(
+            expected.Keys.Order().ToArray(),
+            actual.EnumerateObject().Select(static property => property.Name).Order().ToArray());
+        foreach ((string name, int value) in expected)
+        {
+            Assert.Equal(value, actual.GetProperty(name).GetInt32());
+        }
+    }
+
+    private static void AssertJsonRecord(
+        JsonElement records,
+        string recordName,
+        int expectedSize,
+        params (string Name, int Offset)[] expectedFields)
+    {
+        JsonElement record = records.GetProperty(recordName);
+        JsonElement fields = record.GetProperty("fields");
+        Assert.Equal(expectedSize, record.GetProperty("size").GetInt32());
+        Assert.Equal(
+            expectedFields.Select(static field => field.Name).Order().ToArray(),
+            fields.EnumerateObject().Select(static field => field.Name).Order().ToArray());
+        foreach ((string name, int offset) in expectedFields)
+        {
+            Assert.Equal(offset, fields.GetProperty(name).GetInt32());
+        }
+    }
+
+    private static void AssertJsonCodecVectors(JsonElement codecs, string family)
+    {
+        JsonElement[] vectors = codecs.GetProperty(family).EnumerateArray().ToArray();
+        Assert.NotEmpty(vectors);
+        AssertUniqueJsonNames(vectors);
+        Assert.Contains(vectors, static vector => vector.GetProperty("valid").GetBoolean());
+        Assert.Contains(vectors, static vector => !vector.GetProperty("valid").GetBoolean());
+
+        foreach (JsonElement vector in vectors)
+        {
+            _ = ReadFixedLowerHex(vector, "encoded_hex", 16);
+            if (vector.GetProperty("valid").GetBoolean())
+            {
+                JsonElement parts = vector.GetProperty("parts");
+                Assert.Equal(JsonValueKind.Object, parts.ValueKind);
+                Assert.NotEmpty(parts.EnumerateObject());
+            }
+            else
+            {
+                Assert.False(string.IsNullOrWhiteSpace(vector.GetProperty("reason").GetString()));
+            }
+        }
+    }
+
+    private static void AssertJsonLimit(
+        JsonElement limits,
+        string name,
+        int minimum,
+        int? maximum = null)
+    {
+        JsonElement limit = limits.GetProperty(name);
+        Assert.Equal(minimum, limit.GetProperty("min").GetInt32());
+        if (maximum.HasValue)
+        {
+            Assert.Equal(maximum.Value, limit.GetProperty("max").GetInt32());
+        }
+
+        Assert.Equal(
+            maximum.HasValue ? new[] { "max", "min" } : new[] { "min" },
+            limit.EnumerateObject().Select(static property => property.Name).Order().ToArray());
+    }
+
+    private static void AssertUniqueJsonNames(JsonElement[] values, string propertyName = "name")
+    {
+        string[] names = values.Select(value => value.GetProperty(propertyName).GetString()!).ToArray();
+        Assert.All(names, static name => Assert.False(string.IsNullOrWhiteSpace(name)));
+        Assert.Equal(names.Length, names.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    private static object CreateLayoutFromJson(JsonElement input)
+    {
+        string[] expectedInputFields =
+        [
+            "lease_record_count",
+            "max_descriptor_bytes",
+            "max_key_bytes",
+            "max_value_bytes",
+            "participant_record_count",
+            "slot_count"
+        ];
+        Assert.Equal(
+            expectedInputFields,
+            input.EnumerateObject().Select(static property => property.Name).Order().ToArray());
+        return CreateLayout(
+            slotCount: input.GetProperty("slot_count").GetInt32(),
+            leaseRecordCount: input.GetProperty("lease_record_count").GetInt32(),
+            participantCount: input.GetProperty("participant_record_count").GetInt32(),
+            maxKeyBytes: input.GetProperty("max_key_bytes").GetInt32(),
+            maxDescriptorBytes: input.GetProperty("max_descriptor_bytes").GetInt32(),
+            maxValueBytes: input.GetProperty("max_value_bytes").GetInt32());
+    }
+
+    private static byte[] ReadLowerHex(JsonElement parent, string propertyName)
+    {
+        string value = parent.GetProperty(propertyName).GetString()!;
+        Assert.Equal(value.ToLowerInvariant(), value);
+        Assert.Equal(0, value.Length % 2);
+        return Convert.FromHexString(value);
+    }
+
+    private static string ReadFixedLowerHex(JsonElement parent, string propertyName, int expectedLength)
+    {
+        string value = parent.GetProperty(propertyName).GetString()!;
+        Assert.Equal(expectedLength, value.Length);
+        Assert.Equal(value.ToLowerInvariant(), value);
+        _ = Convert.FromHexString(value);
+        return value;
+    }
+
+    private static ulong Fnv1a64(ReadOnlySpan<byte> bytes)
+    {
+        const ulong offsetBasis = 0xcbf2_9ce4_8422_2325;
+        const ulong prime = 0x0000_0100_0000_01b3;
+        ulong hash = offsetBasis;
+        foreach (byte value in bytes)
+        {
+            hash ^= value;
+            hash = unchecked(hash * prime);
+        }
+
+        return hash;
+    }
+
+    private static string GetString(object instance, params string[] candidateNames)
+    {
+        Type type = instance.GetType();
+        BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        foreach (string name in candidateNames)
+        {
+            string normalized = Normalize(name);
+            PropertyInfo? property = type.GetProperties(flags)
+                .SingleOrDefault(candidate => Normalize(candidate.Name) == normalized);
+            if (property is not null)
+            {
+                return Assert.IsType<string>(property.GetValue(instance));
+            }
+
+            FieldInfo? field = type.GetFields(flags)
+                .SingleOrDefault(candidate => Normalize(candidate.Name) == normalized);
+            if (field is not null)
+            {
+                return Assert.IsType<string>(field.GetValue(instance));
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            $"{type.FullName} is missing string member {string.Join("/", candidateNames)}.");
+    }
+
+    private static string ResolveFixturePath(string manifestDirectory, string relativePath)
+    {
+        Assert.False(Path.IsPathRooted(relativePath));
+        string root = Path.GetFullPath(manifestDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        string resolved = Path.GetFullPath(Path.Combine(manifestDirectory, relativePath));
+        Assert.True(
+            resolved.StartsWith(root, StringComparison.OrdinalIgnoreCase),
+            $"Fixture path '{relativePath}' escapes the v2.0 fixture directory.");
+        return resolved;
     }
 
     private static object CreateLayout(

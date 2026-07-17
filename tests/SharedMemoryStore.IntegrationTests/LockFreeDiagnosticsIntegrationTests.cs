@@ -69,7 +69,7 @@ public sealed class LockFreeDiagnosticsIntegrationTests
             for (var iteration = 0; iteration < 500; iteration++)
             {
                 Assert.Equal(StoreStatus.Success, observer.TryGetDiagnostics(out DiagnosticsSnapshot snapshot));
-                Assert.Equal(StoreProfile.LockFree, snapshot.Profile);
+                Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), snapshot.ProtocolInfo);
                 Assert.Equal(observer.ProtocolInfo, snapshot.ProtocolInfo);
                 Assert.Equal(32, snapshot.SlotCount);
                 Assert.Equal(4, snapshot.ParticipantRecordCount);
@@ -157,7 +157,7 @@ public sealed class LockFreeDiagnosticsIntegrationTests
             paused.Set();
             resume.Wait();
         });
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-diagnostics-telemetry-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 16,
@@ -198,7 +198,7 @@ public sealed class LockFreeDiagnosticsIntegrationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode mode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 32,
             maxValueBytes: 16,

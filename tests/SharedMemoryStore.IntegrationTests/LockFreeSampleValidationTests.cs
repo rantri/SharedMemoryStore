@@ -39,7 +39,6 @@ public sealed class LockFreeSampleValidationTests
         Assert.Equal(nameof(StoreStatus.RemovePending), fields["pendingRemove"]);
         Assert.Equal(nameof(StoreStatus.NotFound), fields["missing"]);
         Assert.Equal(nameof(StoreStatus.Success), fields["diagnostics"]);
-        Assert.Equal(nameof(StoreProfile.LockFree), fields["profile"]);
         Assert.Equal("2.0", fields["layout"]);
         Assert.Equal("0", fields["recoveredLeases"]);
         Assert.Equal("0", fields["recoveredReservations"]);

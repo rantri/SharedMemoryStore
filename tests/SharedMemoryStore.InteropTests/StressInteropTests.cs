@@ -50,6 +50,7 @@ public sealed class StressInteropTests
             maxDescriptorBytes = 16,
             maxKeyBytes = 16,
             leaseRecordCount = 16,
+            participantRecordCount = 4,
             enableLeaseRecovery = true
         };
 
@@ -63,6 +64,7 @@ public sealed class StressInteropTests
             options.maxDescriptorBytes,
             options.maxKeyBytes,
             options.leaseRecordCount,
+            options.participantRecordCount,
             options.enableLeaseRecovery
         }));
         AssertSuccess(await consumer.SendAsync("open", new
@@ -75,6 +77,7 @@ public sealed class StressInteropTests
             options.maxDescriptorBytes,
             options.maxKeyBytes,
             options.leaseRecordCount,
+            options.participantRecordCount,
             options.enableLeaseRecovery
         }));
 
@@ -121,7 +124,7 @@ public sealed class StressInteropTests
             return;
         }
 
-        var cycleCount = ReadBoundedCount("SMS_INTEROP_STRESS_LIFECYCLE_CYCLES", 10_000, 100_000);
+        var cycleCount = ReadBoundedCount("SMS_INTEROP_STRESS_LIFECYCLE_CYCLES", 10_000, 1_000_000);
         var definitions = new[]
         {
             AgentDefinition.Resolve("dotnet"),
@@ -151,6 +154,7 @@ public sealed class StressInteropTests
             maxDescriptorBytes = 8,
             maxKeyBytes = 8,
             leaseRecordCount = 16,
+            participantRecordCount = 4,
             enableLeaseRecovery = true
         };
 
@@ -167,6 +171,7 @@ public sealed class StressInteropTests
                 options.maxDescriptorBytes,
                 options.maxKeyBytes,
                 options.leaseRecordCount,
+                options.participantRecordCount,
                 options.enableLeaseRecovery
             }));
         }
@@ -290,19 +295,16 @@ public sealed class StressInteropTests
             return true;
         }
 
-        var agentScript = definition.Arguments.FirstOrDefault();
-        var testsDirectory = agentScript is null ? null : Directory.GetParent(Path.GetDirectoryName(agentScript)!);
-        var repository = testsDirectory?.Parent;
-        if (repository is null)
+        if (definition.Environment is null
+            || !definition.Environment.TryGetValue("PYTHONPATH", out string? packageRoot)
+            || string.IsNullOrWhiteSpace(packageRoot))
         {
             return false;
         }
 
         var libraryName = OperatingSystem.IsWindows() ? "shared_memory_store.dll" : "libshared_memory_store.so";
         return File.Exists(Path.Combine(
-            repository.FullName,
-            "src",
-            "python",
+            packageRoot,
             "shared_memory_store",
             libraryName));
     }

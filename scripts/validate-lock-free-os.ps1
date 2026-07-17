@@ -63,6 +63,7 @@ $pwsh = (Get-Command pwsh -ErrorAction Stop).Source
 $qualifiedArchitecture = $architecture -eq 'x64' -and $platform -in @('windows', 'linux')
 $integrationProject = 'tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj'
 $contractProject = 'tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj'
+$qualificationConfig = Join-Path $root 'specs/010-lock-free-only-multilang/qualification-config.json'
 
 function Get-StringSha256 {
     param([AllowEmptyString()][string]$Value)
@@ -736,35 +737,40 @@ function Assert-LinuxTinyStoreDimensions {
 function Assert-LinuxTinyPerformanceConfiguration {
     param([Parameter(Mandatory)]$Config)
 
-    $tiny = Get-RequiredPropertyValue $Config 'linuxTinyPerformance' 'qualification config'
+    $tiny = Get-RequiredPropertyValue $Config 'tinyPerformance' 'qualification config'
     $expectedProperties = @(
-        'mode', 'profiles', 'scenarios', 'processCounts', 'syncKeysPerWorker',
+        'mode', 'protocol', 'scenarios', 'processCounts', 'syncKeysPerWorker',
         'syncMaximumWorkerCount', 'syncCanonicalBucketCount', 'syncKeyCatalogSha256',
-        'syncKeyCanonicalBucketAssignments', 'minimumThroughputRatio',
-        'maximumUncontendedP99Ratio', 'maximumScaleP99Ratio',
-        'maximumP99Microseconds', 'maximumStallMicroseconds')
+        'syncKeyCanonicalBucketAssignments', 'minimumEightProcessOperationsPerSecond',
+        'maximumScaleP99Ratio', 'maximumEightProcessP99MicrosecondsByPlatform',
+        'maximumStallMicroseconds')
     $actualProperties = @($tiny.PSObject.Properties.Name)
     if (($actualProperties -join ',') -cne ($expectedProperties -join ',')) {
-        throw "qualification config linuxTinyPerformance properties must be exactly [$($expectedProperties -join ', ')]."
+        throw "qualification config tinyPerformance properties must be exactly [$($expectedProperties -join ', ')]."
     }
-    if ((Get-StrictString $tiny 'mode' 'qualification config linuxTinyPerformance') -cne 'sync') {
-        throw 'qualification config linuxTinyPerformance.mode must be sync.'
+    if ((Get-StrictString $tiny 'mode' 'qualification config tinyPerformance') -cne 'sync') {
+        throw 'qualification config tinyPerformance.mode must be sync.'
     }
-    Assert-ExactStringArray $tiny.profiles @('Legacy', 'LockFree') 'qualification config linuxTinyPerformance.profiles'
-    Assert-ExactStringArray $tiny.scenarios @('acquire-release', 'publish-remove') 'qualification config linuxTinyPerformance.scenarios'
-    $counts = @(Get-RequiredPropertyValue $tiny 'processCounts' 'qualification config linuxTinyPerformance')
+    if ((Get-StrictString $tiny 'protocol' 'qualification config tinyPerformance') -cne 'Sms2') {
+        throw 'qualification config tinyPerformance.protocol must be Sms2.'
+    }
+    Assert-ExactStringArray $tiny.scenarios @('acquire-release', 'publish-remove') 'qualification config tinyPerformance.scenarios'
+    $counts = @(Get-RequiredPropertyValue $tiny 'processCounts' 'qualification config tinyPerformance')
     if ($counts.Count -ne 2 `
         -or -not (Test-IsIntegerNumber $counts[0]) -or [int64]$counts[0] -ne 1 `
         -or -not (Test-IsIntegerNumber $counts[1]) -or [int64]$counts[1] -ne 8) {
-        throw 'qualification config linuxTinyPerformance.processCounts must be exactly [1, 8].'
+        throw 'qualification config tinyPerformance.processCounts must be exactly [1, 8].'
     }
-    [void](Assert-LinuxTinySyncTopology $tiny 'qualification config linuxTinyPerformance')
-    if ((Get-StrictDouble $tiny 'minimumThroughputRatio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
-        -or (Get-StrictDouble $tiny 'maximumUncontendedP99Ratio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
-        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config linuxTinyPerformance' 3 3) -ne 3 `
-        -or (Get-StrictDouble $tiny 'maximumP99Microseconds' 'qualification config linuxTinyPerformance' 10 10) -ne 10 `
-        -or (Get-StrictDouble $tiny 'maximumStallMicroseconds' 'qualification config linuxTinyPerformance' 10000 10000) -ne 10000) {
-        throw 'qualification config linuxTinyPerformance gates must remain LF1/Legacy1 p99<=1, LF8/Legacy8 throughput>=1, LF8/LF1 p99<=3, LF8 p99<=10us, and every LF raw stall<=10000us.'
+    [void](Assert-LinuxTinySyncTopology $tiny 'qualification config tinyPerformance')
+    $p99ByPlatform = Get-RequiredPropertyValue $tiny `
+        'maximumEightProcessP99MicrosecondsByPlatform' 'qualification config tinyPerformance'
+    if ((@($p99ByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
+        -or (Get-StrictDouble $p99ByPlatform 'windows-x64' 'qualification config tinyPerformance p99 limits' 25 25) -ne 25 `
+        -or (Get-StrictDouble $p99ByPlatform 'linux-x64' 'qualification config tinyPerformance p99 limits' 10 10) -ne 10 `
+        -or (Get-StrictDouble $tiny 'minimumEightProcessOperationsPerSecond' 'qualification config tinyPerformance' 100000 100000) -ne 100000 `
+        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3 `
+        -or (Get-StrictDouble $tiny 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000) -ne 10000) {
+        throw 'qualification config tinyPerformance gates must remain Sms2-only: 8-process throughput>=100000 ops/s, p99<=25us on Windows and <=10us on Linux, 8p/1p p99<=3, and every raw stall<=10000us.'
     }
     $release = Get-RequiredPropertyValue (Get-RequiredPropertyValue $Config 'tiers' 'qualification config') 'release' 'qualification config tiers'
     if ((Get-StrictInt64 $release 'performanceWarmupSeconds' 'qualification config release' 10 10) -ne 10 `
@@ -801,9 +807,9 @@ function Assert-LinuxTinyPerformanceReport {
         [Parameter(Mandatory)]$ReleaseConfig,
         [switch]$SkipEnvironmentBinding)
 
-    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 8 8) -ne 8 `
-        -or (Get-StrictInt64 $Report 'minimumCompatibleSchemaVersion' 'Linux tiny performance report' 8 8) -ne 8) {
-        throw 'Linux tiny performance report must be schema 8 with minimum-compatible schema 8.'
+    if ((Get-StrictInt64 $Report 'schemaVersion' 'Linux tiny performance report' 9 9) -ne 9 `
+        -or (Get-StrictInt64 $Report 'minimumCompatibleSchemaVersion' 'Linux tiny performance report' 9 9) -ne 9) {
+        throw 'Linux tiny performance report must be schema 9 with minimum-compatible schema 9.'
     }
     [void](Get-StrictString $Report 'schemaCompatibility' 'Linux tiny performance report')
     $environment = Get-RequiredPropertyValue $Report 'environment' 'Linux tiny performance report'
@@ -853,8 +859,9 @@ function Assert-LinuxTinyPerformanceReport {
     }
     [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
     Assert-LinuxTinyStoreDimensions $configuration 'Linux tiny performance configuration'
-    Assert-ExactStringArray $configuration.profiles @('Legacy', 'LockFree') 'Linux tiny performance report profiles'
-    Assert-ExactStringArray $configuration.countBoundProfiles @('LockFree') 'Linux tiny performance report count-bound profiles'
+    if ((Get-StrictString $configuration 'protocol' 'Linux tiny performance configuration') -cne 'Sms2') {
+        throw 'Linux tiny performance report must identify exactly the Sms2 protocol.'
+    }
     Assert-ExactStringArray $configuration.scenarios @('acquire-release', 'publish-remove') 'Linux tiny performance report scenarios'
     $scenarioCounts = Get-RequiredPropertyValue $configuration 'scenarioProcessCounts' 'Linux tiny performance configuration'
     if ((@($scenarioCounts.PSObject.Properties.Name) -join ',') -cne 'acquire-release,publish-remove') {
@@ -871,32 +878,31 @@ function Assert-LinuxTinyPerformanceReport {
 
     $runs = @($Report.runs)
     $summaries = @($Report.summary)
-    if ($runs.Count -ne 24 -or $summaries.Count -ne 8) {
-        throw "Linux tiny performance matrix must contain exactly 24 raw runs and 8 summaries; actual=$($runs.Count)/$($summaries.Count)."
+    if ($runs.Count -ne 12 -or $summaries.Count -ne 4) {
+        throw "Linux tiny performance matrix must contain exactly 12 Sms2 raw runs and 4 summaries; actual=$($runs.Count)/$($summaries.Count)."
     }
     $expectedRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $expectedSummaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($profile in @('Legacy', 'LockFree')) {
-        foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            foreach ($processCount in @(1, 8)) {
-                [void]$expectedSummaryKeys.Add("$profile|$scenario|$processCount")
-                foreach ($trial in 1..3) {
-                    [void]$expectedRunKeys.Add("$profile|$scenario|$processCount|$trial")
-                }
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        foreach ($processCount in @(1, 8)) {
+            [void]$expectedSummaryKeys.Add("Sms2|$scenario|$processCount")
+            foreach ($trial in 1..3) {
+                [void]$expectedRunKeys.Add("Sms2|$scenario|$processCount|$trial")
             }
         }
     }
     $actualRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($run in $runs) {
-        $context = "Linux tiny performance run $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
-        $profile = Get-StrictString $run 'profile' $context
+        $context = "Linux tiny performance run $($run.protocol)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
+        $protocol = Get-StrictString $run 'protocol' $context
+        if ($protocol -cne 'Sms2') { throw "$context does not identify the sole Sms2 protocol." }
         $scenario = Get-StrictString $run 'scenario' $context
         $processCount = Get-StrictInt64 $run 'processCount' $context 1 8
         if ($processCount -notin @(1, 8)) {
             throw "$context has an unsupported process count."
         }
         $trial = Get-StrictInt64 $run 'trial' $context 1 3
-        $key = "$profile|$scenario|$processCount|$trial"
+        $key = "$protocol|$scenario|$processCount|$trial"
         if (-not $expectedRunKeys.Contains($key) -or -not $actualRunKeys.Add($key)) {
             throw "$context is unexpected or duplicated."
         }
@@ -945,8 +951,8 @@ function Assert-LinuxTinyPerformanceReport {
         if ($p50 -gt $p95 -or $p95 -gt $p99 -or $p99 -gt $maximum) {
             throw "$context latency percentiles/maximum are not monotonic."
         }
-        if ($profile -ceq 'LockFree' -and $maximum -gt
-            (Get-StrictDouble $TinyConfig 'maximumStallMicroseconds' 'qualification config linuxTinyPerformance' 10000 10000)) {
+        if ($maximum -gt
+            (Get-StrictDouble $TinyConfig 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000)) {
             throw "$context exceeds the every-run 10000us maximum-stall gate: $maximum."
         }
         $assignedProcessors = @(Get-RequiredPropertyValue $run 'assignedProcessors' $context)
@@ -1018,19 +1024,20 @@ function Assert-LinuxTinyPerformanceReport {
     $actualSummaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $metrics = [Collections.Generic.List[object]]::new()
     foreach ($summary in $summaries) {
-        $context = "Linux tiny performance summary $($summary.profile)/$($summary.scenario)/$($summary.processCount)"
-        $profile = Get-StrictString $summary 'profile' $context
+        $context = "Linux tiny performance summary $($summary.protocol)/$($summary.scenario)/$($summary.processCount)"
+        $protocol = Get-StrictString $summary 'protocol' $context
+        if ($protocol -cne 'Sms2') { throw "$context does not identify the sole Sms2 protocol." }
         $scenario = Get-StrictString $summary 'scenario' $context
         $processCount = Get-StrictInt64 $summary 'processCount' $context 1 8
         if ($processCount -notin @(1, 8)) {
             throw "$context has an unsupported process count."
         }
-        $key = "$profile|$scenario|$processCount"
+        $key = "$protocol|$scenario|$processCount"
         if (-not $expectedSummaryKeys.Contains($key) -or -not $actualSummaryKeys.Add($key)) {
             throw "$context is unexpected or duplicated."
         }
         $matchingRuns = @($runs | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $processCount
+            [string]$_.protocol -ceq $protocol -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $processCount
         })
         if ($matchingRuns.Count -ne 3) {
             throw "$context does not summarize exactly three raw trials."
@@ -1066,7 +1073,7 @@ function Assert-LinuxTinyPerformanceReport {
             }
         }
         $metrics.Add([pscustomobject][ordered]@{
-            profile = $profile
+            protocol = $protocol
             scenario = $scenario
             processCount = $processCount
             medianApiCallsPerSecond = [double]$summary.medianApiCallsPerSecond
@@ -1078,48 +1085,38 @@ function Assert-LinuxTinyPerformanceReport {
         throw 'Linux tiny performance summary tuple set is incomplete.'
     }
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $legacyOne = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        $sms2One = @($summaries | Where-Object {
+            [string]$_.protocol -ceq 'Sms2' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
         })[0]
-        $lockFreeOne = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        $sms2Eight = @($summaries | Where-Object {
+            [string]$_.protocol -ceq 'Sms2' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
         })[0]
-        $legacyEight = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
-        })[0]
-        $lockFreeEight = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
-        })[0]
-        $legacyOneP99 = Get-StrictDouble $legacyOne 'medianP99Microseconds' "$scenario legacy/1p summary" 0 ([double]::MaxValue) -Positive
-        $lockFreeOneP99 = Get-StrictDouble $lockFreeOne 'medianP99Microseconds' "$scenario lock-free/1p summary" 0 ([double]::MaxValue) -Positive
-        $legacyEightRate = Get-StrictDouble $legacyEight 'medianApiCallsPerSecond' "$scenario legacy/8p summary" 0 ([double]::MaxValue) -Positive
-        $lockFreeEightRate = Get-StrictDouble $lockFreeEight 'medianApiCallsPerSecond' "$scenario lock-free/8p summary" 0 ([double]::MaxValue) -Positive
-        $lockFreeEightP99 = Get-StrictDouble $lockFreeEight 'medianP99Microseconds' "$scenario lock-free/8p summary" 0 ([double]::MaxValue) -Positive
-        $uncontendedP99Ratio = $lockFreeOneP99 / $legacyOneP99
-        $throughputRatio = $lockFreeEightRate / $legacyEightRate
-        $scaleP99Ratio = $lockFreeEightP99 / $lockFreeOneP99
-        if (-not [double]::IsFinite($uncontendedP99Ratio) `
-            -or $uncontendedP99Ratio -gt [double]$TinyConfig.maximumUncontendedP99Ratio `
-            -or -not [double]::IsFinite($throughputRatio) `
-            -or $throughputRatio -lt [double]$TinyConfig.minimumThroughputRatio `
-            -or -not [double]::IsFinite($scaleP99Ratio) `
+        $sms2OneP99 = Get-StrictDouble $sms2One 'medianP99Microseconds' "$scenario Sms2/1p summary" 0 ([double]::MaxValue) -Positive
+        $sms2EightRate = Get-StrictDouble $sms2Eight 'medianApiCallsPerSecond' "$scenario Sms2/8p summary" 0 ([double]::MaxValue) -Positive
+        $sms2EightP99 = Get-StrictDouble $sms2Eight 'medianP99Microseconds' "$scenario Sms2/8p summary" 0 ([double]::MaxValue) -Positive
+        $scaleP99Ratio = $sms2EightP99 / $sms2OneP99
+        $linuxP99Limit = Get-StrictDouble `
+            $TinyConfig.maximumEightProcessP99MicrosecondsByPlatform `
+            'linux-x64' 'qualification config tinyPerformance p99 limits' 10 10
+        if (-not [double]::IsFinite($scaleP99Ratio) `
             -or $scaleP99Ratio -gt [double]$TinyConfig.maximumScaleP99Ratio `
-            -or $lockFreeEightP99 -gt [double]$TinyConfig.maximumP99Microseconds) {
-            throw "Linux tiny performance '$scenario' gate failed: uncontendedP99Ratio=$uncontendedP99Ratio throughputRatio=$throughputRatio scaleP99Ratio=$scaleP99Ratio lockFreeEightP99Microseconds=$lockFreeEightP99."
+            -or $sms2EightRate -lt [double]$TinyConfig.minimumEightProcessOperationsPerSecond `
+            -or $sms2EightP99 -gt $linuxP99Limit) {
+            throw "Linux tiny performance '$scenario' absolute gate failed: Sms2EightOpsPerSecond=$sms2EightRate scaleP99Ratio=$scaleP99Ratio Sms2EightP99Microseconds=$sms2EightP99."
         }
     }
     return [pscustomobject][ordered]@{
-        schemaVersion = 2
-        runCount = 24
-        summaryCount = 8
+        schemaVersion = 3
+        protocol = 'Sms2'
+        runCount = 12
+        summaryCount = 4
         warmupSeconds = 10
         durationSeconds = 60
         trials = 3
         processCounts = @(1, 8)
-        minimumThroughputRatio = [double]$TinyConfig.minimumThroughputRatio
-        maximumUncontendedP99Ratio = [double]$TinyConfig.maximumUncontendedP99Ratio
+        minimumEightProcessOperationsPerSecond = [double]$TinyConfig.minimumEightProcessOperationsPerSecond
         maximumScaleP99Ratio = [double]$TinyConfig.maximumScaleP99Ratio
-        maximumP99Microseconds = [double]$TinyConfig.maximumP99Microseconds
+        maximumEightProcessP99Microseconds = [double]$TinyConfig.maximumEightProcessP99MicrosecondsByPlatform.'linux-x64'
         maximumStallMicroseconds = [double]$TinyConfig.maximumStallMicroseconds
         metrics = @($metrics)
     }
@@ -1132,18 +1129,12 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
 
     $runs = [Collections.Generic.List[object]]::new()
     $summaries = [Collections.Generic.List[object]]::new()
-    foreach ($profile in @('Legacy', 'LockFree')) {
-        foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            foreach ($processCount in @(1, 8)) {
-                $api = if ($profile -ceq 'Legacy') { 1000.0 } else { 1100.0 }
-                $p99 = if ($processCount -eq 1) {
-                    if ($profile -ceq 'Legacy') { 5.0 } else { 4.0 }
-                }
-                else {
-                    if ($profile -ceq 'Legacy') { 3.0 } else { 8.0 }
-                }
-                $maximum = if ($profile -ceq 'Legacy') { 500.0 } else { 9000.0 }
-                [int64]$cycles = if ($profile -ceq 'Legacy') { 30000 } else { 33000 }
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        foreach ($processCount in @(1, 8)) {
+                $api = 110000.0
+                $p99 = if ($processCount -eq 1) { 4.0 } else { 8.0 }
+                $maximum = 9000.0
+                [int64]$cycles = 3300000
                 [int64]$operations = $cycles * 2
                 [int64]$workerCycle = $cycles / $processCount
                 [int64]$windowSamples = [int64]$processCount * 1024
@@ -1159,7 +1150,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
                 }
                 foreach ($trial in 1..3) {
                     $runs.Add([pscustomobject][ordered]@{
-                        Profile = $profile; Scenario = $scenario; ProcessCount = $processCount; Trial = $trial
+                        Protocol = 'Sms2'; Scenario = $scenario; ProcessCount = $processCount; Trial = $trial
                         ReaderProcessCount = $(if ($scenario -ceq 'acquire-release') { $processCount } else { 0 })
                         PublisherProcessCount = $(if ($scenario -ceq 'publish-remove') { $processCount } else { 0 })
                         ObserverProcessCount = 0; Cycles = $cycles; Operations = $operations
@@ -1185,15 +1176,14 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
                     }
                 }
                 $summaries.Add([pscustomobject][ordered]@{
-                    Profile = $profile; Scenario = $scenario; ProcessCount = $processCount
+                    Protocol = 'Sms2'; Scenario = $scenario; ProcessCount = $processCount
                     MedianApiCallsPerSecond = $api; MedianP99Microseconds = $p99
                     MedianMaxMicroseconds = $maximum; TotalFailures = 0; StatusHistogram = $summaryHistogram
                 })
             }
-        }
     }
     $report = [pscustomobject][ordered]@{
-        SchemaVersion = 8
+        SchemaVersion = 9
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
@@ -1205,7 +1195,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
         }
         Configuration = [pscustomobject][ordered]@{
             Mode = 'sync'; DurationSeconds = 60; DurationBoundGraceSeconds = 60
-            Trials = 3; Profiles = @('Legacy', 'LockFree'); CountBoundProfiles = @('LockFree')
+            Trials = 3; Protocol = 'Sms2'
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
@@ -1228,8 +1218,8 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             SyncKeyCatalogSha256 = [string]$TinyConfig.syncKeyCatalogSha256
             SyncKeyCanonicalBucketAssignments = @($TinyConfig.syncKeyCanonicalBucketAssignments)
         }
-        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 8
-        SchemaCompatibility = 'synthetic schema-v8 parser self-test'
+        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 9
+        SchemaCompatibility = 'synthetic schema-v9 Sms2-only parser self-test'
     }
     [void](Assert-LinuxTinyPerformanceReport $report $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
     if (-not (Test-LinuxTinyHostTuple `
@@ -1288,12 +1278,12 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
     }
     $assertions++
 
-    $wrongCountPolicy = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $wrongCountPolicy.Configuration.CountBoundProfiles = @('Legacy')
+    $wrongProtocol = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $wrongProtocol.Configuration.Protocol = 'Sms1'
     $rejected = $false
-    try { [void](Assert-LinuxTinyPerformanceReport $wrongCountPolicy $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
+    try { [void](Assert-LinuxTinyPerformanceReport $wrongProtocol $TinyConfig $ReleaseConfig -SkipEnvironmentBinding) } catch { $rejected = $true }
     if (-not $rejected) {
-        throw 'Linux tiny performance parser self-test accepted a swapped count-bound policy.'
+        throw 'Linux tiny performance parser self-test accepted a non-SMS2 report protocol.'
     }
     $assertions++
 
@@ -1316,12 +1306,12 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
     $assertions++
 
     $tampered = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $tamperedLockFreeRun = @($tampered.Runs | Where-Object {
-        [string]$_.Profile -ceq 'LockFree' `
+    $tamperedSms2Run = @($tampered.Runs | Where-Object {
+        [string]$_.Protocol -ceq 'Sms2' `
             -and [string]$_.Scenario -ceq 'acquire-release' `
             -and [int64]$_.ProcessCount -eq 1
     })[0]
-    $tamperedLockFreeRun.MaxMicroseconds = 10001.0
+    $tamperedSms2Run.MaxMicroseconds = 10001.0
     $rejected = $false
     try {
         [void](Assert-LinuxTinyPerformanceReport $tampered $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
@@ -1330,7 +1320,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
         $rejected = $true
     }
     if (-not $rejected) {
-        throw 'Linux tiny performance parser self-test accepted an over-limit raw lock-free stall.'
+        throw 'Linux tiny performance parser self-test accepted an over-limit raw SMS2 stall.'
     }
     $assertions++
 
@@ -1353,36 +1343,9 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
     $assertions++
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $uncontendedTampered = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-        foreach ($run in @($uncontendedTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
-                -and [string]$_.Scenario -ceq $scenario `
-                -and [int64]$_.ProcessCount -eq 1
-        })) {
-            $run.P99Microseconds = 6.0
-            $run.EarlyP99Microseconds = 6.0
-            $run.LateP99Microseconds = 6.0
-        }
-        @($uncontendedTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
-                -and [string]$_.Scenario -ceq $scenario `
-                -and [int64]$_.ProcessCount -eq 1
-        })[0].MedianP99Microseconds = 6.0
-        $rejected = $false
-        try {
-            [void](Assert-LinuxTinyPerformanceReport $uncontendedTampered $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
-        }
-        catch {
-            $rejected = $true
-        }
-        if (-not $rejected) {
-            throw "Linux tiny performance parser self-test accepted an over-limit '$scenario' uncontended p99 ratio."
-        }
-        $assertions++
-
         $scaleTampered = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($scaleTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 1
         })) {
@@ -1391,7 +1354,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             $run.LateP99Microseconds = 2.0
         }
         @($scaleTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 1
         })[0].MedianP99Microseconds = 2.0
@@ -1409,7 +1372,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
 
         $absoluteTampered = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($absoluteTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })) {
@@ -1418,7 +1381,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             $run.LateP99Microseconds = 11.0
         }
         @($absoluteTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })[0].MedianP99Microseconds = 11.0
@@ -1436,7 +1399,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
 
         $throughputTampered = $report | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($throughputTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })) {
@@ -1445,10 +1408,10 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             $run.ApiCallsPerSecond = [double]$run.Operations / 120.0
         }
         @($throughputTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
-        })[0].MedianApiCallsPerSecond = 550.0
+        })[0].MedianApiCallsPerSecond = 55000.0
         $rejected = $false
         try {
             [void](Assert-LinuxTinyPerformanceReport $throughputTampered $TinyConfig $ReleaseConfig -SkipEnvironmentBinding)
@@ -1457,7 +1420,7 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
             $rejected = $true
         }
         if (-not $rejected) {
-            throw "Linux tiny performance parser self-test accepted an under-limit '$scenario' 8-process throughput ratio."
+            throw "Linux tiny performance parser self-test accepted under-limit '$scenario' absolute 8-process throughput."
         }
         $assertions++
     }
@@ -1563,7 +1526,8 @@ function Invoke-LinuxTinyPerformanceParserSelfTest {
 $definitions = [ordered]@{
     'architecture' = @(
         'tests/SharedMemoryStore.ContractTests/SharedMemoryStore.ContractTests.csproj',
-        'tests/SharedMemoryStore.ContractTests/LockFreeProfileApiContractTests.cs',
+        'tests/SharedMemoryStore.ContractTests/SingleProtocolApiContractTests.cs',
+        'tests/SharedMemoryStore.ContractTests/RetiredLayoutAbsenceContractTests.cs',
         'tests/SharedMemoryStore.ContractTests/LockFreeLayoutContractTests.cs')
     'atomic' = @(
         'tests/SharedMemoryStore.IntegrationTests/MappedAtomicLitmusIntegrationTests.cs',
@@ -1581,10 +1545,15 @@ $definitions = [ordered]@{
         'tests/SharedMemoryStore.LockFreeAgent/CheckpointCrashCommands.cs')
     'release-tests' = @(
         'SharedMemoryStore.slnx',
-        'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj')
+        'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj',
+        'scripts/validate-native.ps1',
+        'scripts/validate-python.ps1',
+        'scripts/validate-interoperability.ps1')
     'interop' = @(
         'scripts/validate-native.ps1',
         'scripts/validate-python.ps1',
+        'scripts/validate-interoperability.ps1',
+        'tests/SharedMemoryStore.InteropTests/Dockerfile',
         'scripts/validate-docker-shared-memory.ps1')
     'samples' = @('samples/LockFreeBrokerKeys/LockFreeBrokerKeys.csproj')
     'pack' = @('src/SharedMemoryStore/SharedMemoryStore.csproj')
@@ -2043,7 +2012,8 @@ function Assert-ExactAllResultShape {
         'architecture', 'atomic', 'raw', 'no-lock-held', 'no-lock-linux-strace',
         'linux-tiny-performance',
         'crash-checkpoint-kill', 'crash-linux-sigstop', 'crash-linux-docker-pause',
-        'release-tests', 'native', 'python', 'docker', 'sample-6', 'sample-12', 'pack')
+        'release-tests', 'native', 'python', 'host-interop', 'docker', 'docker-interop',
+        'sample-6', 'sample-12', 'pack')
     $requiredByName = [ordered]@{}
     foreach ($name in $names) {
         $requiredByName[$name] = $true
@@ -2141,25 +2111,24 @@ try {
         Test-Definition $name
     }
 
-    $qualificationConfig = Join-Path $root 'specs/009-lock-free-publish-read/qualification-config.json'
     if (-not (Test-Path -LiteralPath $qualificationConfig)) {
         throw 'OS validation qualification config is missing.'
     }
     $parsedConfig = Get-Content -LiteralPath $qualificationConfig -Raw | ConvertFrom-Json
     if (-not (Test-IsIntegerNumber $parsedConfig.schemaVersion) `
-        -or [int64]$parsedConfig.schemaVersion -ne 5) {
-        throw 'OS validation requires qualification config schema 5.'
+        -or [int64]$parsedConfig.schemaVersion -ne 6) {
+        throw 'OS validation requires the SMS2-only qualification config schema 6.'
     }
-    $linuxTinyConfig = Assert-LinuxTinyPerformanceConfiguration $parsedConfig
+    $tinyConfig = Assert-LinuxTinyPerformanceConfiguration $parsedConfig
     $releaseConfig = Get-RequiredPropertyValue `
         (Get-RequiredPropertyValue $parsedConfig 'tiers' 'qualification config') `
         'release' 'qualification config tiers'
 
     if ($ValidateOnly) {
-        $performanceParserAssertions = Invoke-LinuxTinyPerformanceParserSelfTest $linuxTinyConfig $releaseConfig
+        $performanceParserAssertions = Invoke-LinuxTinyPerformanceParserSelfTest $tinyConfig $releaseConfig
         $resultCommandEvidenceAssertions = Invoke-ResultCommandEvidenceSelfTest
         Add-Result 'validation-plan' 'pass' `
-            "configuration and structural inputs validated; linuxTinyPerformanceParserAssertions=$performanceParserAssertions; resultCommandEvidenceAssertions=$resultCommandEvidenceAssertions; no restore, build, tests, interop, sample, performance workload, or pack executed"
+            "SMS2-only configuration and structural inputs validated; tinyPerformanceParserAssertions=$performanceParserAssertions; resultCommandEvidenceAssertions=$resultCommandEvidenceAssertions; no restore, build, tests, interop, sample, performance workload, or pack executed"
         $completionProvenance = Get-RepositoryProvenance
         Assert-ProvenanceStable $repositoryProvenance $completionProvenance
     }
@@ -2197,9 +2166,7 @@ try {
             Invoke-Required 'linux-tiny-performance' $dotnet @(
                 'run', '-c', $Configuration, '--no-build', '--no-restore',
                 '--project', 'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj', '--',
-                '--mode', [string]$linuxTinyConfig.mode,
-                '--profile', 'both',
-                '--count-bound-profiles', 'v2',
+                '--mode', [string]$tinyConfig.mode,
                 '--scenario', 'acquire-release,publish-remove',
                 '--process-counts', '1,8',
                 '--warmup', [string]$releaseConfig.performanceWarmupSeconds,
@@ -2219,12 +2186,12 @@ try {
                 }
                 $performanceReport = Get-Content -LiteralPath $performancePath -Raw | ConvertFrom-Json -Depth 30
                 $performanceValidation = Assert-LinuxTinyPerformanceReport `
-                    $performanceReport $linuxTinyConfig $releaseConfig
+                    $performanceReport $tinyConfig $releaseConfig
                 $relativePerformancePath = [IO.Path]::GetRelativePath($root, $performancePath)
                 $performanceRow[0].detail =
-                    'schema8 exact 2-profile x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
-                    'LF1 p99<=Legacy1, LF8 throughput>=Legacy8, LF8/LF1 p99<=3, LF8 p99<=10us, ' +
-                    'and every lock-free raw MaxMicroseconds<=10000'
+                    'schema9 exact Sms2 x 2-scenario x (1,8)-process x 3-trial Linux matrix passed; ' +
+                    'Sms2 8-process throughput>=100000 ops/s, 8p/1p p99<=3, 8p p99<=10us, ' +
+                    'and every raw Sms2 MaxMicroseconds<=10000'
                 $performanceRow[0] | Add-Member -NotePropertyName performanceEvidence -NotePropertyValue `
                     ([pscustomobject][ordered]@{
                         schemaVersion = 1
@@ -2250,7 +2217,7 @@ try {
             Add-NotQualifiedPlatform @('architecture')
         }
         else {
-            Invoke-DotNetTest 'architecture' $contractProject 'FullyQualifiedName~LockFreeProfileApiContractTests|FullyQualifiedName~LockFreeLayoutContractTests'
+            Invoke-DotNetTest 'architecture' $contractProject 'FullyQualifiedName~SingleProtocolApiContractTests|FullyQualifiedName~RetiredLayoutAbsenceContractTests|FullyQualifiedName~LockFreeLayoutContractTests'
         }
     }
 
@@ -2339,6 +2306,39 @@ try {
         }
     }
 
+    # Interop tests return early when a foreign runtime is unavailable. Build
+    # current installed artifacts and run the binding script explicitly before
+    # either the aggregate release suite or the dedicated interop row; merely
+    # building an artifact in an unrelated directory does not bind a test to it.
+    if ((Test-Selected 'interop') -or (Test-Selected 'release-tests')) {
+        Invoke-OptionalScript 'native' @('cmake') (Join-Path $PSScriptRoot 'validate-native.ps1') @('-Configuration', $Configuration)
+        Invoke-OptionalScript 'python' @('python', 'cmake') (Join-Path $PSScriptRoot 'validate-python.ps1') @('-Configuration', $Configuration)
+
+        $installedPythonRelativePath = if ($IsWindows) {
+            'artifacts/python-validation/wheel-environment/Scripts/python.exe'
+        }
+        else {
+            'artifacts/python-validation/wheel-environment/bin/python'
+        }
+        $installedPython = Join-Path $root $installedPythonRelativePath
+        if (-not (Test-Path -LiteralPath $installedPython -PathType Leaf)) {
+            throw "The current installed-wheel Python interpreter is missing: '$installedPython'."
+        }
+        Invoke-Required 'host-interop' $pwsh @(
+            '-NoProfile', '-File', (Join-Path $PSScriptRoot 'validate-interoperability.ps1'),
+            '-Configuration', $Configuration,
+            '-BuildDirectory', 'artifacts/native-build',
+            '-InstallDirectory', 'artifacts/native-install',
+            '-PythonArtifactsDirectory', 'artifacts/python-validation',
+            '-PythonExecutable', $installedPython,
+            '-SkipBuild',
+            '-ArtifactsPrevalidated',
+            '-Stress',
+            '-StressValueCount', [string]$releaseConfig.interopValueCount,
+            '-StressLifecycleCycleCount', [string]$releaseConfig.interopLifecycleCycleCount,
+            '-EvidencePath', (Join-Path $evidenceRoot 'host-interop-artifacts.json'))
+    }
+
     if (Test-Selected 'release-tests') {
         $releaseTrx = Join-Path $evidenceRoot 'trx/release-tests'
         New-Item -ItemType Directory -Path $releaseTrx -Force | Out-Null
@@ -2349,19 +2349,25 @@ try {
     }
 
     if (Test-Selected 'interop') {
-        Invoke-OptionalScript 'native' @('cmake') (Join-Path $PSScriptRoot 'validate-native.ps1') @('-Configuration', $Configuration)
-        Invoke-OptionalScript 'python' @('python', 'cmake') (Join-Path $PSScriptRoot 'validate-python.ps1') @('-Configuration', $Configuration)
-
         if ($SkipDocker) {
             Add-Result 'docker' 'not-qualified' 'explicitly skipped'
+            Add-Result 'docker-interop' 'not-qualified' 'explicitly skipped'
         }
         elseif (-not (Test-NativeCommand 'docker' @('info', '--format', '{{.ServerVersion}}'))) {
             Add-Result 'docker' 'not-qualified' 'Docker command or daemon unavailable'
+            Add-Result 'docker-interop' 'not-qualified' 'Docker command or daemon unavailable'
         }
         else {
             Invoke-Required 'docker' $pwsh @(
                 '-NoProfile', '-File', (Join-Path $PSScriptRoot 'validate-docker-shared-memory.ps1'),
                 '-Profile', 'All', '-Configuration', $Configuration)
+            Invoke-Required 'docker-interop' $pwsh @(
+                '-NoProfile', '-File', (Join-Path $PSScriptRoot 'validate-interoperability.ps1'),
+                '-Configuration', $Configuration,
+                '-Docker', '-Stress',
+                '-StressValueCount', '1000',
+                '-StressLifecycleCycleCount', '10000',
+                '-EvidencePath', (Join-Path $evidenceRoot 'docker-interop-artifacts.json'))
         }
     }
 

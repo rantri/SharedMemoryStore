@@ -7,7 +7,7 @@ public sealed class CrossPlatformSynchronizationIntegrationTests
 {
     [Fact]
     [Trait("Category", "Integration")]
-    public void NoWaitAndCanceledOperationsReturnDocumentedSynchronizationOutcomes()
+    public void HeldColdSynchronizationDoesNotBlockHotOperationsAndCancellationWins()
     {
         if (!PlatformCapabilityProbe.IsSupportedHost)
         {
@@ -18,17 +18,18 @@ public sealed class CrossPlatformSynchronizationIntegrationTests
         using var store = IntegrationStoreFactory.Create(options);
         using var held = PlatformCapabilityProbe.HoldStoreSynchronization(options.Name);
 
-        StoreStatus busy = default;
+        StoreStatus publish = default;
         using var done = new ManualResetEventSlim();
         var thread = new Thread(() =>
         {
-            busy = store.TryPublish([1], [1], default, StoreWaitOptions.NoWait);
+            publish = store.TryPublish([1], [1], default, StoreWaitOptions.NoWait);
             done.Set();
         });
         thread.Start();
 
         Assert.True(done.Wait(TimeSpan.FromSeconds(1)));
-        Assert.Equal(StoreStatus.StoreBusy, busy);
+        thread.Join();
+        Assert.Equal(StoreStatus.Success, publish);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();

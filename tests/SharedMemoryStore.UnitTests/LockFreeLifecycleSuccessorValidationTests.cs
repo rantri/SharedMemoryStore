@@ -167,7 +167,7 @@ public sealed class LockFreeLifecycleSuccessorValidationTests
         ControlledLockFreeScheduler scheduler,
         string name)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 8,

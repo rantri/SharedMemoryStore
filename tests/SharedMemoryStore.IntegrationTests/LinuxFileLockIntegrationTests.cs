@@ -170,7 +170,7 @@ public sealed class LinuxFileLockIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task ConcurrentFinalCloseAndReopenKeepOnePersistentLockRendezvous()
+    public async Task ConcurrentFinalCloseAndReopenKeepOnePersistentLockRendezvousWithoutBlockingHotOperations()
     {
         if (!OperatingSystem.IsLinux() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
         {
@@ -227,16 +227,16 @@ public sealed class LinuxFileLockIntegrationTests
                 {
                     Assert.Equal("RESULT StoreBusy", RunForeignProbe(resource.LinuxSynchronizationPath));
                     Assert.Equal(
-                        StoreStatus.StoreBusy,
+                        StoreStatus.Success,
                         current.TryPublish(key, [42], default, StoreWaitOptions.NoWait));
                 }
 
                 Assert.Equal(
-                    StoreStatus.Success,
+                    StoreStatus.DuplicateKey,
                     current.TryPublish(key, [42], default, StoreWaitOptions.NoWait));
-                Assert.Equal(
-                    StoreStatus.Success,
-                    current.TryRemove(key, StoreWaitOptions.NoWait));
+                Assert.Contains(
+                    current.TryRemove(key, StoreWaitOptions.NoWait),
+                    new[] { StoreStatus.Success, StoreStatus.RemovePending });
             }
 
             current.Dispose();

@@ -237,7 +237,7 @@ public sealed class LockFreeDisposalIntegrationTests
         }
 
         string name = $"sms-v2-disposal-pending-remove-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions create = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions create = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 8,
@@ -247,7 +247,7 @@ public sealed class LockFreeDisposalIntegrationTests
             participantRecordCount: 2,
             openMode: OpenMode.CreateNew,
             enableLeaseRecovery: true);
-        SharedMemoryStoreOptions open = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions open = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 8,
@@ -628,7 +628,7 @@ public sealed class LockFreeDisposalIntegrationTests
     private static OperationObservation Projection(int length) => new(null, length);
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: SlotCount,
             maxValueBytes: 32,

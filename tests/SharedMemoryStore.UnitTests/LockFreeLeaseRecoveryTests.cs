@@ -426,7 +426,7 @@ public sealed class LockFreeLeaseRecoveryTests
         int slotCount,
         int leaseRecordCount,
         OpenMode openMode = OpenMode.CreateNew) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 16,

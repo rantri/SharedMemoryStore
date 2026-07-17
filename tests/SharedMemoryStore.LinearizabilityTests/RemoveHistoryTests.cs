@@ -247,7 +247,7 @@ public sealed class RemoveHistoryTests
 
     private static Store CreateStore()
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-remove-history-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,

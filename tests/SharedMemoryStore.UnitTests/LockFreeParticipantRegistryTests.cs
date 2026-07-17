@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Diagnostics;
 using SharedMemoryStore.LayoutV2;
-using SharedMemoryStore.Leasing;
 using SharedMemoryStore.LockFree;
 using SharedMemoryStore.UnitTests.TestSupport;
 
@@ -62,11 +61,16 @@ public sealed class LockFreeParticipantRegistryTests
         Assert.Contains(members, member => member.Name.Contains("Start", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(members, member => member.Name.Contains("Namespace", StringComparison.OrdinalIgnoreCase));
 
-        Type classifier = RequireType("SharedMemoryStore.Leasing.LeaseOwnerClassifier");
+        Type classifier = RequireType(
+            "SharedMemoryStore.LockFree.ParticipantOwnerClassifier");
         Assert.Contains(
             classifier.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic),
             method => method.Name.Contains("Classif", StringComparison.OrdinalIgnoreCase)
                 && method.GetParameters().Any(parameter => parameter.ParameterType == incarnation));
+        Assert.Null(typeof(MemoryStore).Assembly.GetType(
+            "SharedMemoryStore.Leasing.LeaseOwnerClassifier",
+            throwOnError: false,
+            ignoreCase: false));
     }
 
     [Fact]
@@ -207,7 +211,7 @@ public sealed class LockFreeParticipantRegistryTests
     [Fact]
     public void RegisteringWithNewIdentityKindAndStalePriorStartUsesPresenceOnlyClassification()
     {
-        Assert.True(LeaseOwnerClassifier.TryCaptureCurrentProcessIdentity(
+        Assert.True(ParticipantOwnerClassifier.TryCaptureCurrentProcessIdentity(
             out int identityKind,
             out long currentStart,
             out ulong pidNamespaceId));
@@ -225,9 +229,11 @@ public sealed class LockFreeParticipantRegistryTests
             ReservedValue: 0,
             Control: 0);
 
-        Assert.Equal(LeaseOwnerKind.StaleProcess, LeaseOwnerClassifier.Classify(mixed).Kind);
         Assert.Equal(
-            LeaseOwnerKind.CurrentProcess,
+            ParticipantOwnerKind.StaleProcess,
+            ParticipantOwnerClassifier.Classify(mixed).Kind);
+        Assert.Equal(
+            ParticipantOwnerKind.CurrentProcess,
             LockFreeParticipantRegistry.ClassifySnapshotOwner(mixed, pidNamespaceId).Kind);
     }
 
@@ -689,7 +695,7 @@ public sealed class LockFreeParticipantRegistryTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode mode, int participantCount) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 16,

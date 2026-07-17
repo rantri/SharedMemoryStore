@@ -5,12 +5,10 @@ binary values. This page defines the vocabulary used by the rest of the
 documentation before the advanced workflows introduce reservations, recovery,
 diagnostics, and portability details.
 
-Behavior claims on this page trace to the
-[public API contract](../specs/001-frame-memory-store/contracts/public-api.md),
-the
-[shared-memory layout contract](../specs/001-frame-memory-store/contracts/shared-memory-layout.md),
-and the
-[reservation API contract](../specs/003-zero-copy-ingest/contracts/reservation-api.md).
+Behavior claims on this page trace to the current
+[public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+and
+[protocol conformance contract](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md).
 
 ## Store
 
@@ -72,9 +70,10 @@ controls how many values can be published or pending removal/reservation at one
 time. Slots carry lifecycle identity so a stale lease or reservation token does
 not become valid after reuse.
 
-Capacity pressure is usually slot pressure, lease-record pressure, or key-index
-churn. See [Diagnostics](diagnostics.md) and [Performance scope](performance.md)
-for the fields that distinguish those cases.
+Capacity pressure is usually slot, lease-record, participant-record, or
+directory-overflow pressure. See [Diagnostics](diagnostics.md) and
+[Performance scope](performance.md) for the fields that distinguish those
+cases.
 
 ## Lease
 
@@ -98,10 +97,9 @@ succeeds.
 
 Use `Abort()` or dispose the reservation when the producer cannot finish.
 Incomplete reservations can also be recovered explicitly by an owner. The
-reservation layout is described by
-[ingest layout](../specs/003-zero-copy-ingest/contracts/ingest-layout.md) and
-the public memory lifetime rules are described by
-[reservation memory](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md).
+current token, ownership, and memory-lifetime rules are part of the
+[public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+and the canonical SMS2 protocol.
 
 ## Segmented Publish
 
@@ -113,12 +111,16 @@ one contiguous slot payload.
 
 ## Wait Policy
 
-Public operations use `StoreWaitOptions` to control shared synchronization.
-`Default` waits for a bounded time, `NoWait` returns `StoreBusy` immediately
-when synchronization is unavailable, and `Infinite` is available only for
-callers that intentionally accept unbounded waits. Cancellation returns
-`OperationCanceled`. Wait behavior is governed by the
-[contention configuration contract](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md).
+Public operations use `StoreWaitOptions` to bound retry, revalidation,
+helping, scanning, and backoff. `NoWait` permits only the protocol's immediate
+attempt, finite waits use one operation-wide deadline, and `Infinite` is
+available only to callers that intentionally accept unbounded retries.
+Cancellation returns `OperationCanceled`; exhausted local progress returns
+`StoreBusy`.
+
+After a handle opens, data operations do not acquire the platform lifecycle
+lock or any store-wide operation lock. Lock-free progress is system-wide, so an
+individual operation may still lose races until its budget expires.
 
 ## Status
 
@@ -130,9 +132,10 @@ are documented in [Errors and statuses](errors.md).
 ## Diagnostics Snapshot
 
 `DiagnosticsSnapshot` is an allocation-conscious snapshot returned by
-`GetDiagnostics()` or `TryGetDiagnostics`. It includes capacity counts, active
-lease and reservation counts, recovery results, key-index health, last failure,
-and per-status failure counts through `GetFailureCount(StoreStatus)`.
+`GetDiagnostics()` or `TryGetDiagnostics`. It includes the five-field protocol
+identity, slot/lease/participant state counts, primary and overflow directory
+occupancy, recovery results, local retry/help counters, last failure, and
+per-status failure counts through `GetFailureCount(StoreStatus)`.
 
 The package does not format logs, export metrics, or run background
 observability workers. Callers own that integration.
@@ -155,8 +158,9 @@ Capacity is fixed by options at create/open time. Pressure can come from:
 - too few reusable slots for published, pending-removal, and pending-reservation
   values.
 - too few lease records for concurrent readers.
+- too few participant records for concurrently open handles.
 - oversized keys, descriptors, or payloads.
-- key-index tombstones from high churn.
+- collision-heavy keys that consume bounded directory overflow capacity.
 
 Use diagnostics before increasing capacity so the change addresses the right
 resource.
@@ -171,11 +175,11 @@ rules and abnormal termination behavior.
 ## Portability
 
 The repository provides independently versioned .NET, CMake/C++, and Python
-distributions for 64-bit little-endian Linux and Windows hosts. They interoperate
-through mapped layout `1.2`, resource naming `1`, and the same lifecycle rules;
-the Python package loads the native C ABI `1.0`. Same-host Docker sharing is
-supported for configured Linux containers. See [Portability](portability.md)
-and [Packaging](packaging.md).
+distributions for qualified 64-bit little-endian Linux and Windows hosts. They
+interoperate through SMS2 layout `2.0`, resource protocol `2`, required-feature
+mask `7`, and the same lifecycle rules. The Python package loads the packaged
+native C ABI `2.0`. Same-host Docker sharing is supported for configured Linux
+containers. See [Portability](portability.md) and [Packaging](packaging.md).
 
 ## Package Contract
 

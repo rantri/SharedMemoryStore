@@ -139,7 +139,7 @@ public sealed class LockFreeWaitPolicyMatrixIntegrationTests
 
         const int largeCount = 32_768;
         string name = $"sms-v2-large-wait-budget-{Guid.NewGuid():N}";
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: largeCount,
             maxValueBytes: 1,
@@ -690,7 +690,7 @@ public sealed class LockFreeWaitPolicyMatrixIntegrationTests
                 Assert.Equal(1, context.ReservationRecoveryReport.RecoveredReservationCount);
                 break;
             case BoundaryOperation.Diagnostics:
-                Assert.Equal(StoreProfile.LockFree, context.Diagnostics.Profile);
+                Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), context.Diagnostics.ProtocolInfo);
                 break;
         }
     }
@@ -801,7 +801,7 @@ public sealed class LockFreeWaitPolicyMatrixIntegrationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: SlotCount,
             maxValueBytes: 64,

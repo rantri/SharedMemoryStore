@@ -6,4 +6,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("SharedMemoryStore.LinearizabilityTests")]
 [assembly: InternalsVisibleTo("SharedMemoryStore.Benchmarks")]
 [assembly: InternalsVisibleTo("SharedMemoryStore.LockFreeAgent")]
+[assembly: InternalsVisibleTo("SharedMemoryStore.InteropAgent")]
 [assembly: InternalsVisibleTo("SharedMemoryStore.SyncProbe")]

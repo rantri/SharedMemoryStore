@@ -761,7 +761,7 @@ public sealed class LockFreeReservationRecoveryTests
         (long)((unchecked((ulong)control) >> 3) & 0x1_ffff_ffffUL);
 
     private static SharedMemoryStoreOptions Options(string name, int slotCount) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 16,

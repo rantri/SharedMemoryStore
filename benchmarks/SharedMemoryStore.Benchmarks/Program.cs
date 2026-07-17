@@ -16,7 +16,6 @@ if (args.Length == 2
     Console.WriteLine($"Direct ingest relative to simple publish: {relativeRatio:N3}x ({relativePercent:N1}%).");
     return;
 }
-
 if (args.Length == 2
     && string.Equals(args[0], "--validation", StringComparison.Ordinal)
     && string.Equals(args[1], "direct-allocation", StringComparison.Ordinal))
@@ -27,30 +26,10 @@ if (args.Length == 2
     return;
 }
 
-if (args.Length == 2
-    && string.Equals(args[0], "--validation", StringComparison.Ordinal)
-    && string.Equals(args[1], "tombstone-pressure", StringComparison.Ordinal))
-{
-    var result = RunTombstonePressureValidation();
-    Console.WriteLine(BenchmarkEnvironment.Summary);
-    Console.WriteLine(
-        $"Tombstone pressure: operations={result.OperationCount:N0}; indexEntries={result.IndexEntryCount:N0}; tombstones={result.TombstoneCount:N0}; " +
-        $"cleanMissingTicks={result.CleanMissingLookupTicks:N0}; managedMissingTicks={result.ManagedMissingLookupTicks:N0}; " +
-        $"cleanInsertTicks={result.CleanInsertTicks:N0}; managedInsertTicks={result.ManagedInsertTicks:N0}; " +
-        $"maxProbe={result.MaxProbeLength:N0}; compactions={result.CompactionCount:N0}; earlyPressure={result.PressureDetectedBeforeSeventyFivePercentWorstCase}; " +
-        $"missingWithin2x={result.MissingLookupWithinTwoTimesClean}; insertWithin2x={result.InsertWithinTwoTimesClean}; preservation={result.PreservationPassed}; passed={result.Passed}");
-    if (!result.Passed)
-    {
-        Environment.ExitCode = 1;
-    }
-
-    return;
-}
-
-// Assembly discovery intentionally includes LockFreeProfileBenchmarks alongside
-// the existing reliability suites; use --filter *LockFreeProfileBenchmarks* for
-// the v1.2-versus-v2 allocation/collision/recovery comparison.
-BenchmarkSwitcher.FromAssembly(typeof(LockFreeProfileBenchmarks).Assembly).Run(args);
+// Assembly discovery intentionally includes LockFreeBenchmarks alongside
+// the existing reliability suites; use --filter *LockFreeBenchmarks* for
+// the absolute SMS2 allocation/collision/recovery measurements.
+BenchmarkSwitcher.FromAssembly(typeof(LockFreeBenchmarks).Assembly).Run(args);
 
 static FrameThroughputValidationResult RunSimplePublishSustained()
 {
@@ -65,7 +44,6 @@ static FrameThroughputValidationResult RunSimplePublishSustained()
         benchmark.Cleanup();
     }
 }
-
 static DirectIngestThroughputValidationResult RunDirectIngestSustained()
 {
     var benchmark = new DirectIngestFrameThroughputBenchmarks();
@@ -92,10 +70,4 @@ static DirectIngestAllocationValidationResult RunDirectIngestAllocationValidatio
     {
         benchmark.Cleanup();
     }
-}
-
-static TombstonePressureBenchmarkResult RunTombstonePressureValidation()
-{
-    var benchmark = new TombstonePressureBenchmarks();
-    return benchmark.ManagedPressureChurn();
 }

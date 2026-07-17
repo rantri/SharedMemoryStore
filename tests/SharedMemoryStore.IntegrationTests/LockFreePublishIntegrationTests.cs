@@ -240,7 +240,7 @@ public sealed class LockFreePublishIntegrationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, int slotCount) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 16,
