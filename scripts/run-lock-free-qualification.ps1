@@ -70,7 +70,10 @@ $acceptedOsEvidence = [Collections.Generic.List[object]]::new()
 $overallStatus = 'running'
 $failureMessage = $null
 $dotnet = (Get-Command dotnet -ErrorAction Stop).Source
-$powershell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+# PowerShell can be hosted by dotnet when installed as a global tool on Linux.
+# The process main module is then dotnet, which cannot accept PowerShell's
+# -NoProfile/-File arguments. Resolve the actual pwsh command instead.
+$powershell = (Get-Command pwsh -ErrorAction Stop).Source
 
 function Get-StringSha256 {
     param([AllowEmptyString()][string]$Value)
