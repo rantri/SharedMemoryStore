@@ -1,157 +1,199 @@
 # Portability
 
-The repository contains .NET 10, C++20, and Python 3.10+ implementations for
-ordinary same-host workflows on 64-bit little-endian Linux and Windows.
-Same-host Linux Docker participation requires deployment configuration that
-exposes compatible shared-memory, synchronization, owner-liveness, permission,
-and capacity capabilities. Layout `1.2` and resource naming `1` are the common
-cross-runtime interoperability boundary; similar public APIs alone are
-insufficient. The managed package also implements explicitly selected layout
-`2.0` and resource protocol `2`, which current C++ and Python clients reject.
+The qualified SMS2 target is little-endian x86-64 on Windows and Linux. All
+three distributions share the same mapped layout, 64-bit atomic contract,
+resource protocol, owner-classification rules, and status values.
 
-Detailed sources:
+Qualification requirements are normative in the
+[protocol conformance](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md)
+and
+[interoperability](../specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md)
+contracts.
 
-- [shared-memory-layout.md](../specs/001-frame-memory-store/contracts/shared-memory-layout.md)
-- [ingest-layout.md](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
-- [public-api-contract.md](../specs/005-api-production-readiness/contracts/public-api-contract.md)
-- [protocol/README.md](../protocol/README.md)
-- [resource-naming-v1.md](../protocol/resource-naming-v1.md)
-- [compatibility.json](../protocol/compatibility.json)
-- [interoperability.md](../specs/008-cpp-python-implementations/contracts/interoperability.md)
+## Support matrix
 
-## Current Baseline
+| Host | Managed `3.0.0` | C++ `1.0.0` / ABI `2.0` | Python `1.0.0` | Qualification |
+|---|---|---|---|---|
+| Windows x64 | supported | supported | supported | build, lifecycle, crash/recovery, interop, package |
+| Linux x64 | supported | supported | supported | build, lifecycle, crash/recovery, interop, package, Docker |
+| 32-bit process | rejected | rejected | rejected through native ABI | unsupported |
+| non-x64 architecture | rejected unless separately qualified | rejected unless separately qualified | follows native library | unsupported by this release |
+| big-endian host | rejected | rejected | follows native library | unsupported |
 
-- Managed distribution: NuGet `SharedMemoryStore` `2.0.0`, targeting
-  `net10.0`; it supports legacy layout `1.2` and explicit lock-free layout `2.0`.
-- Native distribution: CMake `SharedMemoryStore` `0.1.0`, C++20, C ABI `1.0`.
-- Python distribution: `shared-memory-store` `0.1.0`, Python 3.10 or newer,
-  using `ctypes` over the bundled native library.
-- Shared cross-runtime identities: layout `1.2`, resource naming `1`,
-  little-endian 64-bit process model. Managed-only lock-free participation uses
-  layout `2.0` and resource protocol `2` on qualified x64 hosts.
-- Implementation targets: Linux and Windows. Release validation for each
-  distribution and ordered runtime pairing must be recorded separately.
-- Managed supported container profile: Linux-based same-host Docker containers
-  with shared IPC and compatible owner-liveness, permissions, and shared-memory
-  capacity. Native/Python container claims require their own recorded
-  cross-runtime evidence.
+An unsupported process returns `UnsupportedPlatform` before creating or opening
+mapped data whenever the required platform property can be checked first.
 
-## Layout Compatibility
+## Why x86-64 is explicit
 
-Every implementation uses the same little-endian field encoding, 8-byte
-alignment, state-value assignments, key hashing, exact byte-key equality, slot
-lifecycle identity, lease registry, reservation progress, and remove/reuse
-state machine. Static fixtures pin exact record sizes, offsets, arithmetic,
-hashes, status values, and resource-name vectors.
+SMS2 depends on naturally aligned cross-process 64-bit atomics with the memory
+ordering pinned by the protocol manifest. Language-level “atomic” support is not
+enough; the implementation must demonstrate that the actual generated
+operations are lock-free, correctly aligned, visible across mapped processes,
+and safe under pause/crash schedules.
 
-Layout compatibility follows semantic versioning. A major layout-version change
-requires migration notes and contract-test updates. Minor compatible additions
-must preserve existing field offsets and state semantics.
+Adding another architecture requires executable evidence for every managed and
+native atomic used by the protocol, not merely a successful compile.
 
-Layout minor version `2` stores slot lifecycle identity as generation plus reuse
-epoch in slot metadata, index entries, and lease records. Older mappings with
-the prior record sizes are rejected as incompatible rather than interpreted with
-partial identity.
+## Windows resources
 
-## Reservation Portability
+The public name identifies the memory-mapped region. Resource protocol `2`
+derives one cold synchronization name in `Local\` or `Global\` scope according
+to the canonical rules in
+[`resource-naming-v2.md`](../protocol/resource-naming-v2.md).
 
-`SlotPublishing` is the language-neutral pending reservation state. During that
-state, `SharedSlotMetadata.Reserved` stores bytes advanced by the producer,
-`ValueLength` stores the announced payload length, and `PublisherProcessId`
-identifies the owner for explicit recovery. Commit must validate slot
-generation and exact progress before transitioning to `SlotPublished`.
+Operational requirements:
 
-Every implementation treats writable reservation memory as valid only while
-the slot remains pending and full lifecycle identity matches.
-Scatter/gather committed values are out of scope for this layout; segmented
-publish copies into one contiguous slot value.
+- every process must resolve the same session/global scope;
+- identities must have compatible mapping and mutex access;
+- services and interactive users must choose scope deliberately; and
+- endpoint security policy must allow named mapping operations.
 
-## Language Distribution Boundaries
+Windows kernel object lifetime removes the mapping and cold synchronization
+resource after their final handles close. An already-open store's hot operations
+do not acquire the named cold mutex.
 
-The .NET implementation owns its managed protocol mechanisms and does not load
-the native library. The native implementation owns one C++ protocol core and
-the Windows/Linux adapters. Its exported C ABI uses explicit-width integers,
-versioned structures, opaque handles, and caller-owned buffers. The public C++
-API adds move-only RAII and `std::span` views without making the C++ ABI the
-Python boundary.
+## Linux resources
 
-The Python package calls C ABI `1.0` through standard-library `ctypes`. A wheel
-places `shared_memory_store.dll` or `libshared_memory_store.so` beside the
-Python modules. The loader does not search the current directory, `PATH`, or a
-system library path, and it rejects incompatible ABI or protocol metadata.
-Python lease views are read-only; reservation views are writable only for the
-reservation lifetime.
+Linux uses `/dev/shm/SharedMemoryStore` when `/dev/shm` is available, otherwise a
+guarded directory below the OS temporary path. The root must be a real directory
+with safe ownership and mode. Resource protocol `2` derives a readable fragment
+plus SHA-256 suffix and creates:
 
-## Trusted Same-Host Boundary
+- `.region`: mapped data;
+- `.lock`: stable cold-open rendezvous;
+- `.lifecycle`: owner reconciliation and final cleanup;
+- `.owners`: exact live-owner sidecar;
+- private `.owners.anchor.<guid>` files; and
+- finalized `.owners.released.<guid>.ready` close markers.
 
-The direct ingest API exposes writable shared-memory bytes to producers before
-commit. The security model assumes only trusted same-host services can open the
-mapping and participate in the store. Deployment is responsible for OS ACLs,
-service identity, process isolation, and package distribution.
+Files and directories are verified as non-symbolic-link objects of the expected
+type. Linux requires open-file-description record locks for the cold lifecycle.
+If the kernel/filesystem cannot provide them, open fails with
+`UnsupportedPlatform` rather than silently weakening the contract.
 
-SharedMemoryStore validates lifecycle state, slot generation, key ownership, and
-reader visibility, but no distribution defends against a malicious in-boundary
-writer that intentionally corrupts mapped bytes, forges metadata, or ignores
-the public API.
+The stable lock files may remain after the final store closes; the data region
+and owner evidence are removed only after exact final-owner cleanup.
 
-## Platform Resource Model
+## Containers and PID namespaces
 
-Windows uses named operating-system memory mappings and named synchronization.
-An explicit `Global\` mapping name uses global synchronization in managed
-`2.0.0` and native `0.1.0`. All participants must implement compatible
-resource-naming version `1` behavior. Ordinary unqualified and explicit
-`Local\` names retain session-local synchronization.
-Linux uses deterministic files in a shared runtime memory location such as
-`/dev/shm`, with names derived from the public store name and a collision
-prevention hash. Docker containers participate in the Linux model only when
-their IPC and process-liveness configuration lets all participants see the same
-resources and classify owners safely.
+Cross-container sharing is supported only when all participants intentionally
+share:
 
-Current managed handles supplement PID/start-token checks with a private locked
-per-owner liveness anchor. Consequently, an opener does not delete a live
-managed mapping merely because that owner's PID is hidden by a different PID
-namespace. A missing anchor retains the PID/start-token fallback needed for
-C++, Python, and older managed owners. This improves region-lifetime safety but
-does not relax the documented namespace requirements for lease/reservation
-recovery or make default-isolated containers a supported topology.
+- the same IPC/mapped resource namespace;
+- the same resource root mount;
+- compatible user/group identity and file modes;
+- compatible PID namespace or canonical PID namespace identity evidence; and
+- the same public name and store capacities.
 
-The managed and native implementations must derive the same resources and
-participate in the same lock. Python inherits the native behavior rather than
-reimplementing it.
+A default-isolated container must fail clearly; it must not appear to join a
+different store with the same text name.
 
-The Linux resource directory is owner-only (`0700`), and region,
-synchronization, owner, lifecycle, and managed owner-anchor files are owner-only
-(`0600`). Cooperating host processes must therefore run as the same Unix
-identity. Containers must share a compatible identity as well as the namespaces
-required by the operations and recovery policies they use.
+SMS2 records PID namespace identity in the header and participant record.
+Linux owner anchors provide additional liveness evidence across PID namespace
+boundaries. Mixed or unproven namespace evidence is retained conservatively and
+is never assumed stale.
 
-## Unsupported Scenarios
+See [the Docker sample](../samples/DockerSharedMemory/README.md) for supported,
+recovery, contention, disposal-race, clean-consumer, and isolation validation
+modes.
 
-- macOS is not currently supported.
-- 32-bit processes, big-endian hosts, and architectures without recorded
-  conformance evidence are not current release targets.
-- Cross-host shared memory, distributed-cache behavior, persistence across host
-  restart, Windows containers, and default-isolated Docker containers are not
-  supported by these distributions.
-- Platforms without reliable named mapping or owner-liveness checks return
-  deterministic unsupported statuses for affected operations.
-- Application-specific schemas, including frame metadata, are not parsed by the
-  core store.
-- Protection against malicious writers with legitimate in-boundary access is
-  outside the package scope.
+## Owner identity and PID reuse
 
-## Compatibility Rules
+A PID alone is not ownership evidence. Participant identity includes process
+start evidence, open sequence, participant generation, and namespace identity.
+Linux additionally uses a privately locked owner anchor and exact sidecar line.
 
-- Public API, layout, lifecycle, error, diagnostics, and package metadata are
-  compatibility contracts.
-- NuGet, CMake, and Python versions advance independently. Compatibility is
-  determined from layout, resource naming, and C ABI declarations rather than
-  matching package version numbers.
-- Breaking public API or layout changes require semantic-version review,
-  migration notes, and contract-test updates.
-- A release must not convert target-platform metadata into a validation claim
-  until native tests, package consumption, and the relevant ordered runtime
-  pairs have passed on that platform.
-- Documentation that changes a compatibility promise must update
-  [CHANGELOG.md](../CHANGELOG.md), [Maintainers](maintainers.md), and
-  [Release preparation](releases.md).
+Recovery may reclaim a participant or token only after conservative owner
+classification and unchanged-state revalidation. Live, unsupported,
+inconsistent, or changing evidence is retained.
+
+## Filesystems and mounts
+
+Linux deployments must preserve the semantics of regular files, memory mapping,
+atomic rename, flush, `flock`, and open-file-description record locks. Avoid
+network filesystems, synthetic mounts, or bind mounts that do not preserve
+those guarantees.
+
+The resource root should not be writable by unrelated users. SharedMemoryStore
+is designed for trusted same-host participants with OS-level access to the same
+resources. It does not defend against a malicious process that can legitimately
+modify the mapped bytes.
+
+## Application byte portability
+
+The library treats keys, descriptors, and payloads as opaque bytes. Cross-
+language applications must define their own canonical representation:
+
+- integer width and little-endian encoding;
+- floating-point format when used;
+- text encoding and normalization policy;
+- structure/version tags;
+- optional/checksum semantics; and
+- ownership of schema evolution.
+
+Embedded NUL is valid. Never use platform-sized C/C++ structures or process
+pointers as shared application payloads.
+
+## Runtime and package boundaries
+
+The NuGet package contains only the managed implementation. The CMake package
+contains the C ABI/native library and C++ headers. The Python wheel contains the
+Python modules plus an adjacent platform native library.
+
+Python does not search the current directory or system library paths. A wheel
+for one OS/architecture cannot be moved to another target. Native and Python
+artifacts must be rebuilt for each qualified target even though the mapped
+bytes remain identical.
+
+## Wait and clock behavior
+
+Wait budgets are process-local and use monotonic elapsed-time measurement. They
+do not store wall-clock timestamps in mapped state. Scheduler latency and
+container CPU limits can still cause a finite call to return `StoreBusy` even
+while the system as a whole makes progress.
+
+Cancellation handles/tokens are local runtime objects. They are never written
+to shared memory and are not portable across processes.
+
+## Crash and cleanup behavior
+
+Hot state transitions are generation-fenced and helpable. A process crash may
+leave a published transition that another participant can complete after exact
+validation. It cannot leave a process-owned hot mutex that every participant
+must acquire.
+
+Cold owner cleanup is platform-specific:
+
+- Windows relies on kernel handle lifetime.
+- Linux reconciles exact owner lines, locked anchors, and finalized release
+  markers under the lifecycle lock.
+
+Neither platform promises durable persistence across reboot. The store is IPC
+state, not an application database.
+
+## Deployment replacement
+
+A current runtime rejects a noncurrent or malformed mapping before payload
+access. There is no portable in-place conversion. Stop work, drain tokens, close
+all handles, remove or replace the physical resources, create fresh SMS2
+resources, and republish from an application-owned authoritative source.
+
+## Qualification commands
+
+```powershell
+dotnet test SharedMemoryStore.slnx -c Release
+pwsh ./scripts/validate-native.ps1 -Configuration Release
+pwsh ./scripts/validate-python.ps1 -Configuration Release
+pwsh ./scripts/validate-docker-shared-memory.ps1 -Profile All -Configuration Release
+```
+
+`-Profile` in the Docker command selects a validation scenario; it is not a
+store protocol selector.
+
+## Related guides
+
+- [Architecture](architecture.md)
+- [Packaging](packaging.md)
+- [Errors](errors.md)
+- [Security policy](../SECURITY.md)
+- [Resource protocol 2](../protocol/resource-naming-v2.md)

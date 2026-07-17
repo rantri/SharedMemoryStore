@@ -237,7 +237,7 @@ public sealed unsafe class LockFreeFutureGenerationLocationTests
         out MemoryMappedStoreRegion region,
         out StoreLayoutV2 layout)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             $"sms-v2-future-location-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 16,

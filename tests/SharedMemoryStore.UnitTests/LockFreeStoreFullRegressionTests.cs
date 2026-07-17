@@ -368,7 +368,7 @@ public sealed class LockFreeStoreFullRegressionTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 1,

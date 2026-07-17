@@ -9,7 +9,7 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <PackageId>SharedMemoryStore</PackageId>
-    <Version>2.0.0</Version>
+    <Version>3.0.0</Version>
     <Authors>SharedMemoryStore contributors</Authors>
     <Company>SharedMemoryStore</Company>
     <Description>A bounded named shared-memory key-value store for opaque binary values.</Description>
@@ -19,7 +19,7 @@
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/rantri/SharedMemoryStore</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>NuGet SharedMemoryStore 2.0.0 adds an explicitly selected C# layout 2.0 lock-free key-value profile and resource protocol 2, including zero-copy reservation publication, shared read leases, generation-fenced removal/reuse, participant records, explicit recovery, and additive diagnostics. The legacy profile remains the default and preserves mapped layout 1.2, resource naming 1, existing status numbers, and Linux, Windows, and same-host Docker support. Layout 1.2 and 2.0 mappings are distinct: upgrade and rollback require drain, close, recreate, and application-owned republish; there is no in-place conversion or mixed-layout writer mode. Independently versioned C++ and Python 0.1.0 distributions remain layout 1.2-only and fail closed on layout 2.0.</PackageReleaseNotes>
+    <PackageReleaseNotes>NuGet SharedMemoryStore 3.0.0 provides one lock-free mapped protocol: SMS2 layout 2.0, resource protocol 2, required-feature mask 7. Ordinary creation is participant-aware and supports zero-copy reservation publication, shared read leases, generation-fenced removal and reuse, explicit recovery, and bounded diagnostics. The profile selector and layout 1.2 engine are removed. Existing retired mappings are rejected; migration requires draining and closing all handles, recreating the store, and republishing from application-owned authoritative data. C++ and Python 1.0.0 use the same SMS2 protocol through C ABI 2.0.</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <AssemblyName>SharedMemoryStore</AssemblyName>

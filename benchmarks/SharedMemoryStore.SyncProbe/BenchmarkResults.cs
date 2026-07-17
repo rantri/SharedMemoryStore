@@ -82,7 +82,7 @@ internal sealed record RoleLatencyResult(
     double LateToEarlyP99Ratio);
 
 internal sealed record RunResult(
-    string Profile,
+    string Protocol,
     string Scenario,
     int ProcessCount,
     int ReaderProcessCount,
@@ -137,7 +137,7 @@ internal sealed record RunResult(
     long FrameTarget = 0);
 
 internal sealed record SummaryResult(
-    string Profile,
+    string Protocol,
     string Scenario,
     int ProcessCount,
     double MedianApiCallsPerSecond,
@@ -194,8 +194,7 @@ internal sealed record ProbeConfiguration(
     int DurationSeconds,
     int DurationBoundGraceSeconds,
     int Trials,
-    string[] Profiles,
-    string[] CountBoundProfiles,
+    string Protocol,
     string[] Scenarios,
     SortedDictionary<string, int[]> ScenarioProcessCounts,
     SortedDictionary<string, ProbeStoreDimensions> ScenarioStoreDimensions,
@@ -217,7 +216,7 @@ internal sealed record ProbeConfiguration(
     int StickyOverflowSlotCount,
     int StickyOverflowChurnCycles,
     int StickyOverflowMissingSamplesPerWindow,
-    string LegacyFullPayloadCopiesFieldSemantics,
+    string FullPayloadCopiesFieldSemantics,
     int SyncKeysPerWorker,
     int SyncMaximumWorkerCount,
     int SyncCanonicalBucketCount,
@@ -236,13 +235,10 @@ internal sealed record ProbeReport(
 
 internal static class ProbeReportSchema
 {
-    internal const int CurrentVersion = 8;
-    internal const int MinimumCompatibleVersion = 8;
+    internal const int CurrentVersion = 9;
+    internal const int MinimumCompatibleVersion = 9;
     internal const string Compatibility =
-        "Schema v8 requires a v8-aware qualification reader because count-bound profiles and "
-        + "per-run operation/frame targets distinguish durability targets from duration-bound "
-        + "comparison rows. Property names retained from v3-v7 support archival parsing only; "
-        + "their former global completion-target meaning is not qualification-compatible. "
+        "Schema v9 reports the sole SMS2 protocol and per-run operation/frame targets. "
         + "New evidence tags disambiguate structural assertions from measured counters, and "
         + "overflow qualification fields expose the spill/cleanup/late-window transitions; "
         + "sync topology fields identify the deterministic key catalog, and early/late sample "
@@ -250,7 +246,7 @@ internal static class ProbeReportSchema
         + "retains every sampled candidate even when reservoir replacement discards it; portable "
         + "hardware metadata and exact per-scenario store dimensions bind benchmark topology.";
 
-    internal const string LegacyFullPayloadCopiesFieldSemantics =
-        "Retained for v3-v5 readers. Consult FullPayloadCopyCountIsInstrumented and "
+    internal const string FullPayloadCopiesFieldSemantics =
+        "Consult FullPayloadCopyCountIsInstrumented and "
         + "FullPayloadCopyEvidenceKind before interpreting the value as a measured event count.";
 }

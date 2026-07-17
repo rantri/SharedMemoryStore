@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using SharedMemoryStore.UnitTests.TestSupport;
@@ -596,7 +595,7 @@ public sealed class LockFreeSpillSummaryTests
     }
 
     private static SharedMemoryStoreOptions Options(string name) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: SlotCount,
             maxValueBytes: 16,

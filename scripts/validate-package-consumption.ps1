@@ -54,18 +54,16 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
-var options = new SharedMemoryStoreOptions
-{
-    Name = $"sms-consumer-{Guid.NewGuid():N}",
-    OpenMode = OpenMode.CreateOrOpen,
-    SlotCount = 2,
-    MaxValueBytes = 32,
-    MaxDescriptorBytes = 8,
-    MaxKeyBytes = 8,
-    LeaseRecordCount = 2,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 32, 8, 8, 2)
-};
+var options = SharedMemoryStoreOptions.Create(
+    $"sms-consumer-{Guid.NewGuid():N}",
+    slotCount: 2,
+    maxValueBytes: 32,
+    maxDescriptorBytes: 8,
+    maxKeyBytes: 8,
+    leaseRecordCount: 2,
+    participantRecordCount: 2,
+    openMode: OpenMode.CreateNew,
+    enableLeaseRecovery: true);
 
 var open = MemoryStore.TryCreateOrOpen(options, out var store);
 Console.WriteLine($"open: {open}");
@@ -119,7 +117,7 @@ if (disposed != StoreStatus.StoreDisposed) return 19;
 if ((OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
     && RuntimeInformation.ProcessArchitecture == Architecture.X64)
 {
-    var lockFreeOptions = SharedMemoryStoreOptions.CreateLockFree(
+    var participantOptions = SharedMemoryStoreOptions.Create(
         $"sms-consumer-v2-{Guid.NewGuid():N}",
         slotCount: 2,
         maxValueBytes: 32,
@@ -128,26 +126,27 @@ if ((OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
         leaseRecordCount: 2,
         participantRecordCount: 1,
         openMode: OpenMode.CreateNew);
-    var lockFreeOpen = MemoryStore.TryCreateOrOpen(lockFreeOptions, out var lockFreeStore);
-    Console.WriteLine($"lock-free open: {lockFreeOpen}");
-    if (lockFreeOpen != StoreOpenStatus.Success || lockFreeStore is null) return 20;
+    var participantOpen = MemoryStore.TryCreateOrOpen(participantOptions, out var participantStore);
+    Console.WriteLine($"participant-capacity open: {participantOpen}");
+    if (participantOpen != StoreOpenStatus.Success || participantStore is null) return 20;
 
-    using (lockFreeStore)
+    using (participantStore)
     {
-        if (lockFreeStore.Profile != StoreProfile.LockFree) return 21;
-        if (lockFreeStore.ProtocolInfo.LayoutMajorVersion != 2
-            || lockFreeStore.ProtocolInfo.LayoutMinorVersion != 0
-            || lockFreeStore.ProtocolInfo.ResourceProtocolVersion != 2) return 22;
-        if (lockFreeStore.TryPublish([1], [7, 8, 9], [4]) != StoreStatus.Success) return 23;
-        if (lockFreeStore.TryAcquire([1], out var lockFreeLease) != StoreStatus.Success) return 24;
-        using (lockFreeLease)
+        if (participantStore.ProtocolInfo.LayoutMajorVersion != 2
+            || participantStore.ProtocolInfo.LayoutMinorVersion != 0
+            || participantStore.ProtocolInfo.ResourceProtocolVersion != 2
+            || participantStore.ProtocolInfo.RequiredFeatures != 7
+            || participantStore.ProtocolInfo.OptionalFeatures != 0) return 21;
+        if (participantStore.TryPublish([1], [7, 8, 9], [4]) != StoreStatus.Success) return 22;
+        if (participantStore.TryAcquire([1], out var participantLease) != StoreStatus.Success) return 23;
+        using (participantLease)
         {
-            if (!new byte[] { 7, 8, 9 }.AsSpan().SequenceEqual(lockFreeLease.ValueSpan)) return 25;
+            if (!new byte[] { 7, 8, 9 }.AsSpan().SequenceEqual(participantLease.ValueSpan)) return 24;
         }
 
-        if (lockFreeStore.TryRemove([1]) != StoreStatus.Success) return 26;
-        var lockFreeOpenExisting = SharedMemoryStoreOptions.CreateLockFree(
-            lockFreeOptions.Name,
+        if (participantStore.TryRemove([1]) != StoreStatus.Success) return 25;
+        var openExisting = SharedMemoryStoreOptions.Create(
+            participantOptions.Name,
             slotCount: 2,
             maxValueBytes: 32,
             maxDescriptorBytes: 8,
@@ -155,8 +154,8 @@ if ((OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
             leaseRecordCount: 2,
             participantRecordCount: 1,
             openMode: OpenMode.OpenExisting);
-        if (MemoryStore.TryCreateOrOpen(lockFreeOpenExisting, out var exhausted)
-            != StoreOpenStatus.ParticipantTableFull) return 27;
+        if (MemoryStore.TryCreateOrOpen(openExisting, out var exhausted)
+            != StoreOpenStatus.ParticipantTableFull) return 26;
         exhausted?.Dispose();
     }
 }

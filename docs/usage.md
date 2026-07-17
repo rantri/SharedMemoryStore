@@ -1,333 +1,288 @@
-# Usage
+# Usage and lifecycle rules
 
-This guide describes the primary package consumer workflows. Read
-[Concepts](concepts.md) first if the terms store, key, descriptor, payload,
-slot, lease, reservation, wait policy, or diagnostics snapshot are new.
+SharedMemoryStore exposes one SMS2 protocol through idiomatic C#, C++, and
+Python APIs. The names differ by language, but the ordering points, statuses,
+mapped bytes, token lifetimes, recovery rules, and capacity limits are the same.
 
-Behavior traces:
+Normative behavior is defined by the current
+[public API](../specs/010-lock-free-only-multilang/contracts/public-api.md) and
+[protocol conformance](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md)
+contracts.
 
-- [public-api.md](../specs/001-frame-memory-store/contracts/public-api.md)
-- [error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md)
-- [reservation-api.md](../specs/003-zero-copy-ingest/contracts/reservation-api.md)
-- [ingest-layout.md](../specs/003-zero-copy-ingest/contracts/ingest-layout.md)
-- [contention-configuration-contract.md](../specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
-- [reservation-memory-contract.md](../specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
+## Configure capacity once
 
-## Install or Reference
+A physical store has fixed dimensions:
 
-For a repository checkout, build a local package source:
+- `SlotCount`: maximum simultaneously allocated value generations;
+- `MaxValueBytes`, `MaxDescriptorBytes`, and `MaxKeyBytes`;
+- `LeaseRecordCount`: maximum simultaneously active lease records; and
+- `ParticipantRecordCount`: maximum open handles, default `64`.
 
-```powershell
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
-dotnet new console -f net10.0 -n SharedMemoryStore.Tryout -o artifacts/tryout
-dotnet add artifacts/tryout/SharedMemoryStore.Tryout.csproj package SharedMemoryStore --source artifacts/package
-```
-
-See [Getting started](getting-started.md) for the first-use workflow and
-[Packaging](packaging.md) for package metadata and clean consumer validation.
-
-## Create or Open
-
-Choose a store name, open mode, and fixed capacities. Use
-`SharedMemoryStoreOptions.Create` for ordinary cases or set properties directly
-when you need full control.
+Use the language helper to calculate the exact SMS2 region size. C#:
 
 ```csharp
-using SharedMemoryStore;
-
-var options = SharedMemoryStoreOptions.Create(
-    name: "sms-app-values",
-    slotCount: 128,
+SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
+    "frames",
+    slotCount: 1024,
     maxValueBytes: 1_048_576,
-    maxDescriptorBytes: 256,
+    maxDescriptorBytes: 128,
     maxKeyBytes: 64,
-    leaseRecordCount: 256,
+    leaseRecordCount: 4096,
+    participantRecordCount: 64,
+    openMode: OpenMode.CreateOrOpen,
     enableLeaseRecovery: true);
-
-var open = MemoryStore.TryCreateOrOpen(options, out var store);
-if (open != StoreOpenStatus.Success || store is null)
-{
-    return;
-}
 ```
 
-`OpenMode.CreateNew` fails with `AlreadyExists` when the mapping already exists.
-`OpenMode.OpenExisting` fails with `NotFound` when it does not. `CreateOrOpen`
-creates when needed and validates an existing layout before returning success.
+C++ uses `store_options::create(...)`; Python uses
+`StoreOptions.create(...)`. Processes opening the same public name must provide
+identical dimensions and recovery settings. A mismatch returns
+`IncompatibleLayout` before payload projection.
 
-## Validate Options
+Every successful handle owns one participant record. Do not size the
+participant table as a process count unless each process has exactly one handle.
+Closed records are generation-fenced before reuse.
 
-Use validation when options come from configuration:
+## Open modes
+
+| Mode | Meaning |
+|---|---|
+| `CreateNew` / `CREATE_NEW` | Create only; return `AlreadyExists` if a physical store exists. |
+| `OpenExisting` / `OPEN_EXISTING` | Open only; return `NotFound` if none exists. |
+| `CreateOrOpen` / `CREATE_OR_OPEN` | Create when absent, otherwise validate and open. |
+
+Only the physical creator initializes the region. An opener never treats a zero,
+partial, noncurrent, or malformed header as an empty store.
+
+## Publish a complete value
+
+Keys, descriptors, and values are opaque byte sequences. Keys must be nonempty.
 
 ```csharp
-var validation = options.Validate();
-if (!validation.IsValid)
-{
-    foreach (var failure in validation.Failures)
-    {
-        Console.WriteLine($"{failure.MemberName}: {failure.Message}");
-    }
-}
+StoreStatus status = store.TryPublish(
+    key: [0x01, 0x00, 0x02],
+    value: [0x10, 0x00, 0x20],
+    descriptor: [0x01]);
 ```
 
-Validation failures map to `StoreOpenStatus.InvalidOptions` or
-`InsufficientCapacity`. Capacity choices should leave room for published values,
-pending removals, pending reservations, concurrent readers, and key churn.
+Publication copies descriptor and payload bytes into the mapped slot, validates
+the exact key and generation, and makes the value visible only at the final
+publication ordering point. Readers never observe a partially published value.
 
-## Encode Keys, Descriptors, and Payloads
+Important results:
 
-Keys, descriptors, and payloads are byte sequences. Public operations accept
-`ReadOnlySpan<byte>`, so hot paths can write canonical bytes into stack or
-pooled buffers and pass spans without creating a new `byte[]`.
+- `Success`: the complete value is published;
+- `DuplicateKey`: the exact key is already published, pending removal, or held
+  by a pending reservation;
+- `StoreFull`: no reusable slot generation is currently available;
+- `StoreBusy`: the bounded retry/help budget expired before publication;
+- size and key validation statuses for invalid caller input.
 
-```csharp
-using System.Buffers.Binary;
+## Publish segments
 
-Span<byte> key = stackalloc byte[1 + 4];
-key[0] = 1; // application-owned key namespace
-BinaryPrimitives.WriteInt32LittleEndian(key[1..], orderId);
-
-Span<byte> descriptor = stackalloc byte[12];
-BinaryPrimitives.WriteInt32LittleEndian(descriptor[0..4], schemaVersion);
-BinaryPrimitives.WriteInt64LittleEndian(descriptor[4..12], timestampTicks);
-
-var status = store.TryPublish(key, payload, descriptor);
-```
-
-Use [Byte encoding](byte-encoding.md) for recommended helper methods,
-string/GUID key conventions, composite keys, descriptor layout, and payload
-allocation guidance.
-
-## Wait Policies
-
-Operations use `StoreWaitOptions.Default` unless you pass a policy overload.
+Segmented publication accepts an ordered `ReadOnlySequence<byte>` in C#, a span
+of byte spans in C++, or an iterable of bytes-like values in Python. It performs
+one logical publication and reports the copied byte count.
 
 ```csharp
-var status = store.TryPublish(
+StoreStatus status = store.TryPublishSegments(
     key,
-    payload,
+    sequence,
     descriptor,
-    StoreWaitOptions.NoWait);
+    out int copiedBytes);
 ```
 
-Use `NoWait` for health probes or request paths where immediate `StoreBusy` is
-better than waiting. Use `Infinite` only when indefinite blocking is a deliberate
-application decision. Cancellation returns `OperationCanceled`.
+The total segment length must fit `MaxValueBytes`. No payload-sized temporary
+buffer is required by the store.
 
-## Publish Values
+## Direct reservation ingest
 
-Use `TryPublish` when the payload already exists as a contiguous
-`ReadOnlySpan<byte>`.
+Reservations publish data directly into the future mapped payload area:
 
 ```csharp
-var key = new byte[] { 1, 2, 3 };
-var descriptor = new byte[] { 9, 8 };
-var payload = new byte[] { 4, 5, 6, 7 };
+StoreStatus reserved = store.TryReserve(
+    key,
+    payloadLength,
+    descriptor,
+    out ValueReservation reservation);
 
-var publish = store.TryPublish(key, payload, descriptor);
-```
-
-Expected success is `StoreStatus.Success`. Common non-success statuses are
-`DuplicateKey`, `InvalidKey`, `KeyTooLarge`, `ValueTooLarge`,
-`DescriptorTooLarge`, `StoreFull`, `StoreBusy`, `OperationCanceled`,
-`UnsupportedPlatform`, `StoreDisposed`, `CorruptStore`, and `UnknownFailure`.
-
-## Acquire and Read
-
-`TryAcquire` returns a `ValueLease` that protects one published slot generation.
-Read descriptor and payload spans only while the lease is active.
-
-```csharp
-var acquire = store.TryAcquire(key, out var lease);
-if (acquire == StoreStatus.Success)
+if (reserved == StoreStatus.Success)
 {
     try
     {
-        ReadOnlySpan<byte> descriptorBytes = lease.DescriptorSpan;
-        ReadOnlySpan<byte> payloadBytes = lease.ValueSpan;
+        while (reservation.RemainingBytes > 0)
+        {
+            Span<byte> target = reservation.GetSpan(reservation.RemainingBytes);
+            int written = FillFromSource(target);
+            StoreStatus advanced = reservation.Advance(written);
+            if (advanced != StoreStatus.Success)
+            {
+                throw new InvalidOperationException($"Advance failed: {advanced}");
+            }
+        }
+
+        StoreStatus committed = reservation.Commit();
+        if (committed != StoreStatus.Success)
+        {
+            throw new InvalidOperationException($"Commit failed: {committed}");
+        }
     }
     finally
     {
-        _ = lease.Release();
+        if (reservation.IsValid)
+        {
+            _ = reservation.Abort();
+        }
     }
 }
 ```
 
-Use `Release()` when the status matters. Use `Dispose()` for best-effort cleanup
-when you do not need the status.
+Reservation rules:
 
-## Remove and Reuse
+- the announced payload length is immutable;
+- progress must advance monotonically and never beyond that length;
+- exactly one producer owns a reservation token;
+- the key is unavailable to readers until commit orders publication;
+- duplicate publication is rejected while the reservation is pending;
+- commit requires exact progress; and
+- abort or recovery unlinks the key and cooperatively reclaims the generation.
 
-Removal first makes the key logically absent. It returns `RemovePending` when an
-active lease protects that generation or when the caller's bounded policy ends
-before post-removal classification or reclamation completes. Existing leases
-remain readable, new acquires for that key fail, and final release, a later
-remove, or allocation-pressure helping can finish physical reclamation. A
-`Success` result confirms that the bounded lease classification found no
-protecting lease, but callers should still use capacity outcomes rather than
-assume that this call alone completed every physical cleanup step.
+The writable span, C++ span, or Python `memoryview` is borrowed. It ends when the
+reservation advances beyond that range, commits, aborts, is recovered, or its
+store closes.
 
-`LeaseTableFull` is an exact physical-capacity result, not an exhausted-scan
-guess. The lock-free profile confirms two identical, structurally valid,
-all-non-Free lease-control snapshots. A released/moving record or contention on
-the handle-local proof buffer follows `StoreWaitOptions` and may yield
-`StoreBusy`; malformed controls yield `CorruptStore`.
+## Acquire a zero-copy lease
 
 ```csharp
-var remove = store.TryRemove(key);
-```
-
-Publishing the same key while the value is still published, pending removal, or
-owned by `Reserved(ExplicitReservation)` returns `DuplicateKey`. An internal
-`Reserved(AtomicPublication)` used by `TryPublish` or `TryPublishSegments`
-remains tentative and does not alone justify that result. Because lock-free-v2
-candidate claim follows an initial lookup but precedes final arbitration, a
-raced caller can return genuine `StoreFull` when no candidate is reusable.
-The result is certified by two identical, structurally valid, all-non-Free
-slot-control snapshots. `Initializing`/`Reserved` require a structurally valid
-configured participant token; all other states require participant zero and
-`Retired` additionally requires the terminal generation. A malformed state,
-generation, or owner shape returns `CorruptStore`, even if both snapshots contain
-the same malformed word. Movement or a free slot is contention and is retried
-according to the supplied `StoreWaitOptions` rather than reported as false
-capacity exhaustion.
-
-## Direct Reservation Ingest
-
-Use `TryReserve` when the key, descriptor, and final payload length are known
-before all payload bytes are available. This is the typical direct ingest path
-for length-delimited frames.
-
-```csharp
-var reserve = store.TryReserve(key, payloadLength: 4, descriptor, out var reservation);
-if (reserve == StoreStatus.Success)
+StoreStatus acquired = store.TryAcquire(key, out ValueLease lease);
+if (acquired == StoreStatus.Success)
 {
-    new byte[] { 4, 5, 6, 7 }.CopyTo(reservation.GetSpan(4));
-    var advance = reservation.Advance(4);
-    var complete = advance == StoreStatus.Success
-        ? reservation.Commit()
-        : reservation.Abort();
+    using (lease)
+    {
+        ReadOnlySpan<byte> descriptor = lease.DescriptorSpan;
+        ReadOnlySpan<byte> value = lease.ValueSpan;
+        Consume(descriptor, value);
+    }
 }
 ```
 
-Readers cannot acquire the key until `Commit()` succeeds. Commit before exact
-completion returns `ReservationIncomplete`. Advancing beyond the remaining
-payload length returns `ReservationWriteOutOfRange`. `Abort()` and active
-reservation disposal remove the pending key without exposing partial bytes.
+The lease binds the exact store, participant incarnation, lease-record
+incarnation, slot index, and slot generation. Releasing it is idempotent only in
+the documented sense: a second release returns `LeaseAlreadyReleased`; a stale
+or structurally invalid token never releases a later incarnation.
 
-In the lock-free profile, `TryReserve` records `ExplicitReservation` and orders
-when its exact slot changes from `Initializing` to `Reserved`. The earlier state
-is a tentative physical claim: other callers may help it, but it does not alone
-justify `DuplicateKey`. Normal recovery preserves a lifecycle owned by an exact
-live Active participant. A stale owner or one that has published exact
-`Closing`/`Recovering` authority can be recovered; the current-process override
-is an administrative quiescent-shutdown policy described below.
+Do not retain a span, C++ `std::span`, Python `memoryview`, or derived view after
+release, recovery, or store close. Copy bytes into application-owned memory when
+they must outlive the lease.
 
-Writable spans are valid only while the reservation is pending and the store
-handle remains open. Use `DangerousGetMemory` only for trusted direct-I/O
-adapters, such as stream or socket reads that require `Memory<byte>`. The
-returned memory is retained-capable, so callers must not retain or use it after
-commit, abort, recovery, disposal, store disposal, or slot reuse.
+## Remove and reuse
 
-## Segmented Publish
+`TryRemove` has two phases:
 
-Use `TryPublishSegments` when payload bytes already exist in a
-`ReadOnlySequence<byte>` and flattening them first would be wasteful.
+1. make the key logically absent; and
+2. physically reclaim its slot generation when no lease protects it and
+   bounded cleanup completes.
 
 ```csharp
-ReadOnlySequence<byte> payload = GetPayloadSequence();
-var publish = store.TryPublishSegments(key, payload, descriptor, out var copiedBytes);
+StoreStatus removed = store.TryRemove(key);
 ```
 
-The helper reserves a contiguous slot, copies each segment in order, and
-publishes only after the copied byte count matches the sequence length. Under
-the legacy profile it holds the operation's shared lock through cleanup. Under
-the lock-free v2 profile it uses the caller's local retry budget and publishes
-only helpable shared transitions; no operation-wide cross-process lock is
-acquired. A copy, validation, timeout, or pre-order cancellation failure
-relinquishes ownership or hands it to exact-generation cleanup, so bounded
-contention cannot strand a caller-inaccessible reservation.
+- `Success` means logical removal and physical reclamation completed.
+- `RemovePending` means logical removal completed but a lease or bounded helper
+  step still delays reuse.
+- `NotFound` means no published value was found at the call's lookup ordering
+  point.
 
-In lock-free v2, both this helper and `TryPublish` record
-`AtomicPublication`. Their internal `Initializing` and `Reserved` states are
-tentative; the one public operation orders only when the slot becomes
-`Published`. A same-key caller helps/revalidates those states and may return
-`DuplicateKey` only after a public duplicate witness appears, or `StoreBusy`
-when its bounded budget expires. Tentative states still occupy physical slot
-capacity and can therefore contribute to `StoreFull`.
+Once logically removed, new acquires return `NotFound`; an existing lease may
+continue reading its exact generation. Its final release may complete
+reclamation. A later publish of the same key succeeds only after the old
+generation is safely unlinked and reusable.
+
+## Explicit recovery
+
+Recovery scans are caller-invoked; there is no background thread. Enable
+recovery in the store options and call:
+
+```csharp
+StoreStatus leases = store.TryRecoverLeases(
+    new LeaseRecoveryOptions(RecoverCurrentProcessLeases: false),
+    out LeaseRecoveryReport leaseReport);
+
+StoreStatus reservations = store.TryRecoverReservations(
+    new ReservationRecoveryOptions(RecoverCurrentProcessReservations: false),
+    out ReservationRecoveryReport reservationReport);
+```
+
+Recovery validates the exact participant and record incarnation, classifies the
+owner, revalidates unchanged state, and then performs an exact compare/exchange.
+It never reclaims a record that may still have a live owner. Reports distinguish
+scanned, recovered, active, unsupported, and failed/inconsistent records.
+
+Current-process recovery is opt-in because it invalidates tokens owned by the
+calling process. A recovered local lease or reservation must subsequently
+report its stale/completed outcome rather than touching a reused generation.
+
+## Wait policies and cancellation
+
+C# exposes:
+
+```csharp
+StoreWaitOptions.NoWait
+StoreWaitOptions.Default
+StoreWaitOptions.Infinite
+new StoreWaitOptions(timeout, cancellationToken)
+```
+
+C++ and Python expose equivalent no-wait, finite, infinite, and cancellation
+values. One budget covers the whole call.
+
+Hot operations do not wait on an OS-owned store lock. They may retry failed
+CAS operations, revalidate versioned records, help incomplete transitions, scan
+bounded candidates, and back off locally. `StoreBusy` means that work did not
+order within the caller's budget. It is safe to retry according to application
+policy.
+
+Cold create/open/close may wait on platform lifecycle coordination and can also
+return `StoreBusy` or `OperationCanceled`. Holding that cold resource must not
+delay an already-open handle's hot operations.
+
+Cancellation is checked before ordering points and during bounded cleanup. It
+does not undo a result already visible to other participants.
+
+## Same-handle concurrency and close
+
+A store handle accepts concurrent operations. Local lifetime accounting admits
+entered calls while the handle is open. Closing the handle:
+
+1. prevents new operations from entering;
+2. waits for already-entered local calls to drain;
+3. invalidates local lease/reservation access;
+4. releases the participant record; and
+5. performs bounded platform-owner cleanup.
+
+Calls that lose the race to close return `StoreDisposed` or the operation's
+already ordered status. Close does not become mapped or process-wide operation
+synchronization.
+
+Lease and reservation tokens cannot outlive their exact store handle. C++ move
+operations and Python context managers preserve this ownership rule.
 
 ## Diagnostics
 
-Use `GetDiagnostics()` for a best-effort snapshot from an open store handle.
-Use `TryGetDiagnostics()` when the status matters, for example in health checks
-or shutdown paths.
+`TryGetDiagnostics` performs a bounded structural scan and combines it with
+process-local counters. It is observational: correctness never depends on a
+diagnostics call. See [diagnostics.md](diagnostics.md).
 
-```csharp
-var status = store.TryGetDiagnostics(out var snapshot);
-if (status == StoreStatus.Success)
-{
-    Console.WriteLine(snapshot.FreeSlotCount);
-    Console.WriteLine(snapshot.GetFailureCount(StoreStatus.StoreFull));
-}
-```
+## Deployment replacement
 
-The package does not write logs, export metrics, or start background workers.
-See [Diagnostics](diagnostics.md) for fields and support evidence.
+There is no mapped conversion path. To replace a noncurrent deployment, stop
+new work, drain tokens, close all handles, remove or replace the physical store,
+create fresh SMS2 resources, and republish from application-owned authoritative
+data. A current client rejects a noncurrent mapping before reading its values.
 
-## Explicit Recovery
+## Related guides
 
-Recovery is owner policy, not automatic cleanup.
-
-```csharp
-var leaseRecovery = store.TryRecoverLeases(
-    new LeaseRecoveryOptions(RecoverCurrentProcessLeases: false),
-    out var leaseReport);
-
-var reservationRecovery = store.TryRecoverReservations(
-    new ReservationRecoveryOptions(RecoverCurrentProcessReservations: false),
-    out var reservationReport);
-```
-
-Use recovery for controlled owner workflows, tests, or cleanup after abnormal
-termination. Normal readers and producers should still release leases, commit or
-abort reservations, and dispose store handles directly.
-
-`RecoverCurrentProcessLeases: false` remains safe while lease activity continues.
-Before using the true test/controlled-shutdown override, stop and drain lease
-acquisition, `ValueSpan`/`DescriptorSpan` projection, borrowed-span consumption,
-and release across every current-process handle attached to that mapping. Keep
-the process quiescent until recovery returns; the store does not impose a
-hot-path gate to enforce this administrative precondition.
-
-`RecoverCurrentProcessReservations: false` likewise preserves reservations and
-atomic publications whose exact participant remains live Active. Before using
-the true reservation override, stop and drain `TryReserve`, `TryPublish`,
-`TryPublishSegments`, writable projection and borrowed-memory use, `Advance`,
-`Commit`, `Abort`, reservation disposal, and `MemoryStore` handle disposal
-across every current-process handle attached to the mapping. Keep that
-writer/view quiescence until recovery returns. Racing the override with those
-operations is outside the supported result contract.
-
-## Dispose
-
-Dispose every store handle when finished:
-
-```csharp
-store.Dispose();
-```
-
-Disposal invalidates future operations on that handle and invalidates span
-projections previously obtained from leases or reservations. Public operations
-racing with disposal complete if they entered first or return documented
-statuses such as `StoreDisposed`, invalid token outcomes, or empty spans.
-
-## Related Samples
-
-- [samples/BasicUsage/README.md](../samples/BasicUsage/README.md): minimal
-  create, publish, acquire, release, remove, reuse, and diagnostics.
-- [samples/FrameValue/README.md](../samples/FrameValue/README.md): descriptor
-  metadata and multiple-reader removal behavior.
-- [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md):
-  reservation, abort, segmented publish, and reader workflows.
-- [samples/HostedServiceIntegration/README.md](../samples/HostedServiceIntegration/README.md):
-  optional lifecycle and health wrapper.
+- [Errors and statuses](errors.md)
+- [Diagnostics](diagnostics.md)
+- [Examples](examples.md)
+- [Architecture](architecture.md)
+- [Portability](portability.md)

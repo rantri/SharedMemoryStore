@@ -10,7 +10,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void SimpleAndReservationPublicationAreInvisibleUntilCommitAndThenExact()
     {
-        using var store = CreateLockFreeStore(slotCount: 4);
+        using var store = CreateStore(slotCount: 4);
 
         Assert.Equal(StoreStatus.Success, store.TryPublish([1], [1, 2, 3], [7]));
         Assert.Equal(StoreStatus.Success, store.TryAcquire([1], out var simple));
@@ -35,7 +35,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void SegmentedPublicationCopiesTheLogicalSequenceAndDescriptorExactly()
     {
-        using var store = CreateLockFreeStore();
+        using var store = CreateStore();
         var sequence = SequenceFactory.Create([1, 2], [3], [4, 5]);
 
         Assert.Equal(StoreStatus.Success, store.TryPublishSegments([1], sequence, [6], out var copied));
@@ -49,7 +49,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void EmptyOversizedAndZeroLengthBoundariesReturnStableStatuses()
     {
-        using var store = CreateLockFreeStore(
+        using var store = CreateStore(
             slotCount: 6,
             maxValueBytes: 3,
             maxDescriptorBytes: 1,
@@ -81,7 +81,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void DuplicateAndCapacityStatusesDoNotCreateSecondCurrentValue()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 1, default, out var reservation));
         Assert.Equal(StoreStatus.DuplicateKey, store.TryPublish([1], [2]));
@@ -99,7 +99,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void PreCanceledPublicationLeavesNoKeySlotOrCopiedBytes()
     {
-        using var store = CreateLockFreeStore(slotCount: 3);
+        using var store = CreateStore(slotCount: 3);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var wait = new StoreWaitOptions(TimeSpan.FromSeconds(1), cancellation.Token);
@@ -125,7 +125,7 @@ public sealed class LockFreePublishContractTests
     [Fact]
     public void PublishReserveAdvanceCommitAndSegmentsNeverEnterOperationSynchronizer()
     {
-        using var store = CreateLockFreeStore(slotCount: 4);
+        using var store = CreateStore(slotCount: 4);
         using var held = new HeldOperationSynchronizer(storeName: StoreName(store));
         var sequence = new ReadOnlySequence<byte>(new byte[] { 2 });
         var stopwatch = Stopwatch.StartNew();
@@ -151,7 +151,7 @@ public sealed class LockFreePublishContractTests
     {
         const int WarmupIterations = 16;
         const int MeasuredIterations = 64;
-        using var store = CreateLockFreeStore(slotCount: 3 * (WarmupIterations + MeasuredIterations));
+        using var store = CreateStore(slotCount: 3 * (WarmupIterations + MeasuredIterations));
         var simpleValue = new byte[] { 1 };
         var segmentValue = new byte[] { 2 };
         var segmented = new ReadOnlySequence<byte>(segmentValue);
@@ -207,14 +207,14 @@ public sealed class LockFreePublishContractTests
         }
     }
 
-    private static MemoryStore CreateLockFreeStore(
+    private static MemoryStore CreateStore(
         int slotCount = 8,
         int maxValueBytes = 16,
         int maxDescriptorBytes = 4,
         int maxKeyBytes = 8)
     {
         var name = $"sms-v2-publish-contract-{Guid.NewGuid():N}";
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes,
@@ -228,7 +228,7 @@ public sealed class LockFreePublishContractTests
 
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<MemoryStore>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         StoreNames.Add(result, new StoreNameHolder(name));
         return result;
     }

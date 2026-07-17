@@ -1,292 +1,288 @@
 # SharedMemoryStore
 
-SharedMemoryStore is a monorepo for bounded named shared-memory key-value
-storage. Its .NET, native C++, and Python distributions store opaque byte keys,
-optional descriptor bytes, and immutable payload bytes in one versioned
-memory-mapped protocol so same-host processes can exchange data without copying
-payloads through a broker process.
+SharedMemoryStore is a bounded, cross-process shared-memory key-value store for
+opaque binary keys, descriptors, and payloads. Its .NET, C++, and Python
+distributions implement the same lock-free SMS2 mapped protocol on Windows and
+Linux x64.
 
-Distribution identities:
+The store is intentionally small in scope. It publishes named values, provides
+zero-copy reservations and read leases, removes and reuses generations, exposes
+explicit recovery, and reports bounded diagnostics. Queueing, routing,
+subscriptions, persistence, serialization, and application schemas belong in
+the application layer.
 
-- NuGet: `SharedMemoryStore` `2.0.0`, targeting `net10.0` with .NET BCL
-  runtime dependencies only. The legacy layout remains the default; C# callers
-  opt in to the lock-free layout explicitly.
-- CMake: `SharedMemoryStore` `0.1.0`, exposing a C++20 RAII API and fixed-width
-  C ABI `1.0` over the native shared library.
-- Python: `shared-memory-store` `0.1.0`, requiring Python 3.10 or newer and
-  using standard-library `ctypes` with the packaged native library.
-- Shared protocol: C# supports mapped layouts `1.2` and `2.0`; C++ and Python
-  remain layout-`1.2` clients and reject layout 2.0. Resource naming versions
-  are `1` and `2` respectively.
-- License: MIT, see the [license file](LICENSE).
+## Current releases and protocol
 
-The managed `1.0.0` line established the original production .NET API contract;
-the `2.0.0` line adds the explicit lock-free profile while retaining the legacy
-profile and its layout. The
-native and Python `0.1.0` lines are independently versioned initial
-distributions; they do not change or ship inside the NuGet package. Linux and
-Windows are implementation targets. Same-host Linux Docker containers require
-shared IPC, owner-liveness, permission, and shared-memory capacity capabilities.
-See [Portability](docs/portability.md) and
-[Compatibility metadata](protocol/compatibility.json) before combining
-independently released distributions.
+| Distribution | Version | Runtime surface |
+|---|---:|---|
+| NuGet `SharedMemoryStore` | `3.0.0` | `net10.0`, C# |
+| CMake `SharedMemoryStore` | `1.0.0` | C++20 and C ABI `2.0` |
+| Python `shared-memory-store` | `1.0.0` | Python 3.10+ over the packaged C ABI `2.0` library |
 
-## What It Provides
+All three create and read exactly one shared protocol:
 
-The shared lifecycle implemented by the three public APIs supports:
-
-- create or open a named store with explicit capacity limits.
-- publish immutable value bytes and optional descriptor bytes under an opaque
-  byte key.
-- acquire an owning lease, read descriptor and value views, and release or
-  dispose the lease exactly once.
-- remove values and reuse slots after active readers release their leases.
-- reserve store-owned payload memory for direct length-delimited frame ingest,
-  advance exact write progress, and commit atomically.
-- publish segmented buffered payloads, including .NET
-  `ReadOnlySequence<byte>`, without a temporary full-payload array.
-- abort or explicitly recover incomplete reservations without exposing partial
-  bytes to readers.
-- run owner-controlled stale lease recovery when enabled.
-- inspect caller-formatted diagnostics snapshots without library console output,
-  including lease recovery results and key-index tombstone health.
-
-The native core implements the mapped protocol and Windows/Linux resource
-mechanisms once. The C++ API wraps the C ABI with move-only RAII stores, leases,
-and reservations. The Python package uses `ctypes` and context-managed objects
-over that same ABI; it does not maintain a second protocol state machine.
-
-The store does not parse frame headers, own application schemas, provide a
-cross-host cache, persist data beyond process and mapping lifetime, or turn
-Docker into distributed storage.
-
-## Explicit lock-free C# profile
-
-`SharedMemoryStoreOptions.CreateLockFree(...)` creates or opens mapped layout
-2.0. Existing helpers and manually constructed options remain on the legacy
-layout unless `StoreProfile.LockFree` is selected explicitly. Processes using
-different profiles cannot participate in the same live mapping; incompatible
-opens fail before payload projection.
-
-The lock-free profile is still a bounded key-value store. An application broker
-may load-balance work by sending keys to 6-12 workers, while observers and other
-processes independently acquire the same immutable values. The store does not
-enqueue keys, choose workers, acknowledge work, or turn a read lease into an
-exclusive claim. See the runnable
-[`LockFreeBrokerKeys`](samples/LockFreeBrokerKeys/Program.cs) sample.
-
-Steady-state layout-2.0 publish, acquire, release, remove, and helping paths do
-not enter the named cross-process lifecycle lock. Progress is system-wide
-lock-free, not wait-free: a paused or terminated participant cannot own a
-store-wide data-path lock, but one caller can still exhaust its bounded retry
-budget under sustained contention and receive `StoreBusy`. Reservations belong
-to one producer; leases are shared exact-generation protections; recovery is an
-explicit caller-controlled operation rather than a background worker.
-
-The trust boundary is same-host cooperating processes with write access to the
-mapping. Layout 2.0 is neither cross-host storage nor protection against a
-malicious mapped writer. Performance depends on payload size, key distribution,
-contention, lease duration, capacity pressure, process placement, and recovery;
-qualification reports separate those workloads instead of treating one
-throughput number as universal.
-
-To migrate under the same public name, drain and close every legacy handle,
-recreate the mapping as layout 2.0, and republish application-owned values. A
-side-by-side cutover uses a distinct store name. Rollback recreates layout 1.2;
-neither direction reinterprets mapped bytes in place.
-
-## First Use
-
-Start with [Getting started](docs/getting-started.md). It separates the NuGet,
-CMake, and wheel workflows and explains how processes select the same named
-store. The managed package workflow remains:
-
-```powershell
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
-dotnet new console -f net10.0 -n SharedMemoryStore.Tryout -o artifacts/tryout
-dotnet add artifacts/tryout/SharedMemoryStore.Tryout.csproj package SharedMemoryStore --source artifacts/package
+```text
+magic=SMS2 layout=2.0 resource-protocol=2 required-features=7 optional-features=0
 ```
 
-Minimal workflow:
+Package versions are independent from the mapped protocol identity. The
+canonical byte layout, resource names, feature masks, and distribution matrix
+live in [protocol/README.md](protocol/README.md) and
+[protocol/compatibility.json](protocol/compatibility.json).
+
+## Core properties
+
+- Fixed capacities are chosen before creation: slots, value bytes, descriptor
+  bytes, key bytes, lease records, and participant records.
+- Every open handle owns one participant record. The default capacity is `64`;
+  exhaustion returns `ParticipantTableFull` without disturbing existing
+  handles.
+- Publish, reserve, commit, acquire, release, remove, reclaim, recovery help,
+  and diagnostics do not acquire a process-owned or store-wide OS lock.
+- Cold create, open, participant registration, close, and final resource cleanup
+  use bounded platform coordination.
+- Keys are exact opaque byte sequences. Hashes select candidates, but equality
+  always checks the complete key bytes.
+- Leases and reservations are generation-fenced. Their mapped views are valid
+  only while the exact token and store handle remain alive.
+- The qualified atomic contract is little-endian x86-64 with naturally aligned
+  lock-free 64-bit atomics.
+
+## C# quick start
+
+Install the package:
+
+```powershell
+dotnet add package SharedMemoryStore --version 3.0.0
+```
+
+Create options with the ordinary participant-aware helper:
 
 ```csharp
 using SharedMemoryStore;
 
-var options = new SharedMemoryStoreOptions
-{
-    Name = $"sms-{Guid.NewGuid():N}",
-    OpenMode = OpenMode.CreateOrOpen,
-    SlotCount = 2,
-    MaxValueBytes = 64,
-    MaxDescriptorBytes = 16,
-    MaxKeyBytes = 16,
-    LeaseRecordCount = 4,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
-};
+var options = SharedMemoryStoreOptions.Create(
+    $"orders-{Guid.NewGuid():N}",
+    slotCount: 128,
+    maxValueBytes: 64 * 1024,
+    maxDescriptorBytes: 64,
+    maxKeyBytes: 64,
+    leaseRecordCount: 256,
+    participantRecordCount: 64,
+    openMode: OpenMode.CreateNew,
+    enableLeaseRecovery: true);
 
-var open = MemoryStore.TryCreateOrOpen(options, out var store);
-if (open != StoreOpenStatus.Success || store is null)
+StoreOpenStatus opened = MemoryStore.TryCreateOrOpen(options, out MemoryStore? store);
+if (opened != StoreOpenStatus.Success || store is null)
 {
-    return;
+    throw new InvalidOperationException($"Open failed: {opened}");
 }
 
 using (store)
 {
-    var status = store.TryPublish([1, 2, 3], [4, 5, 6], [9]);
-    status = store.TryAcquire([1, 2, 3], out var lease);
-    var firstByte = lease.ValueSpan[0];
-    status = lease.Release();
-    status = store.TryRemove([1, 2, 3]);
+    byte[] key = [0x01, 0x00, 0x02];
+    byte[] value = [0x10, 0x00, 0x20];
 
-    status = store.TryReserve([4], 3, [1], out var reservation);
-    new byte[] { 7, 8, 9 }.CopyTo(reservation.GetSpan());
-    status = reservation.Advance(3);
-    status = reservation.Commit();
+    if (store.TryPublish(key, value) != StoreStatus.Success)
+    {
+        throw new InvalidOperationException("Publish failed.");
+    }
+
+    if (store.TryAcquire(key, out ValueLease lease) != StoreStatus.Success)
+    {
+        throw new InvalidOperationException("Acquire failed.");
+    }
+
+    using (lease)
+    {
+        Console.WriteLine(Convert.ToHexString(lease.ValueSpan));
+    }
+
+    StoreStatus removed = store.TryRemove(key);
+    if (removed is not (StoreStatus.Success or StoreStatus.RemovePending))
+    {
+        throw new InvalidOperationException($"Remove failed: {removed}");
+    }
+
+    Console.WriteLine(store.ProtocolInfo); // (2, 0, 2, 7, 0)
 }
 ```
 
-Expected operational failures are returned as `StoreOpenStatus` or
-`StoreStatus` values. See [Errors and statuses](docs/errors.md) for duplicate
-keys, missing keys, full stores, oversized values, invalid leases, unsupported
-platforms, stale leases, cleanup failures, and version mismatches.
-Current-process lease recovery skips other live owner processes, disposal races
-return documented statuses or empty token views, and slot lifecycle identity is
-safe across generation rollover.
+`TryRemove` makes the key logically absent at its ordering point. It returns
+`RemovePending` when a live lease or bounded cleanup still delays physical slot
+reuse; a later release, remove, or allocation-pressure helper may finish the
+reclamation.
 
-Native build and test entry point:
+## C++ quick start
 
-```powershell
-pwsh ./scripts/validate-native.ps1 -Configuration Release
+Build or install the CMake package, then consume it with:
+
+```cmake
+find_package(SharedMemoryStore CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE SharedMemoryStore::shared_memory_store)
 ```
 
-Python wheel build and installed-sample entry point:
+```cpp
+#include <shared_memory_store/store.hpp>
+#include <array>
 
-```powershell
-python -m pip install build
-python -m build --wheel
-python -m venv artifacts/python-consumer
-artifacts/python-consumer/Scripts/python -m pip install (Get-ChildItem dist/*.whl | Select-Object -First 1)
-artifacts/python-consumer/Scripts/python samples/PythonBasicUsage/main.py
+using namespace shared_memory_store;
+
+auto options = store_options::create(
+    "orders", 128, 64 * 1024, 64, 64, 256, 64,
+    open_mode::create_or_open, true);
+
+memory_store store;
+if (memory_store::try_create_or_open(options, store) != open_status::success) {
+    return 1;
+}
+
+const std::array<std::byte, 2> key{std::byte{1}, std::byte{2}};
+const std::array<std::byte, 3> value{std::byte{7}, std::byte{8}, std::byte{9}};
+if (store.try_publish(key, value) != status::success) return 2;
+
+value_lease lease;
+if (store.try_acquire(key, lease) != status::success) return 3;
+auto borrowed = lease.value();
+return lease.release() == status::success ? 0 : 4;
 ```
 
-On Linux, use `artifacts/python-consumer/bin/python`. The Python sample must run
-from an installed wheel because the native loader deliberately searches only
-the package directory, never the current directory or system library path.
+`memory_store`, `value_lease`, and `value_reservation` are move-only. Their
+destructors are best-effort fallbacks; explicit close, release, and abort remain
+the deterministic lifecycle operations.
 
-## Documentation
+## Python quick start
 
-- [Documentation index](docs/index.md): complete table of contents by audience.
-- [Getting started](docs/getting-started.md): NuGet, CMake, wheel, minimal
-  workflow, and interoperability setup.
-- [Concepts](docs/concepts.md): store, name, key, descriptor, payload, slot,
-  lease, reservation, wait policy, status, diagnostics, recovery, capacity,
-  lifecycle, portability, and package contract vocabulary.
-- [Byte encoding](docs/byte-encoding.md): canonical key, descriptor, and
-  payload byte layouts with allocation-conscious helper patterns.
-- [Usage guide](docs/usage.md): create/open, publish, reserve, segmented publish,
-  acquire, release, remove, reuse, diagnostics, recovery, and dispose.
-- [Examples](docs/examples.md): basic values, frame-shaped values, direct
-  reservation ingest, segmented payloads, diagnostics, waits, and error
-  handling.
-- [Errors and statuses](docs/errors.md): deterministic status outcomes and
-  troubleshooting.
-- [Diagnostics](docs/diagnostics.md): snapshot fields and consumer-owned
-  observability.
-- [Lifecycle](docs/lifecycle.md): store ownership, leases, removal, stale
-  recovery, abnormal termination, and cleanup.
-- [Integration](docs/integration.md): optional lifecycle, health, hosting, and
-  narrow-interface boundaries outside the core package.
-- [Performance scope](docs/performance.md): measured scope and unmeasured
-  claims.
-- [Portability](docs/portability.md): distribution versions, Linux, Windows,
-  same-host Docker, layout compatibility, and cross-runtime constraints.
-- [Samples](docs/samples.md): ordered runnable sample ladder from minimal usage
-  through frame values, zero-copy ingest, optional hosted integration, and
-  same-host Docker validation.
-- [Architecture](docs/architecture.md): managed and native dependency
-  direction, source areas, storage, lifecycle, synchronization, recovery, and
-  diagnostics.
-- [Maintainers](docs/maintainers.md): documentation update rules, validation
-  commands, contract boundaries, performance evidence, and release impact.
-- [Packaging](docs/packaging.md): NuGet, CMake, wheel, compatibility metadata,
-  release notes, and clean consumer validation.
-- [Release preparation](docs/releases.md): maintainer checks before publication.
+Build and install the platform wheel, then use the context-managed API:
 
-Detailed behavior sources:
+```python
+from shared_memory_store import MemoryStore, OpenMode, StoreOpenStatus, StoreOptions, StoreStatus
 
-- [Public API contract](specs/001-frame-memory-store/contracts/public-api.md)
-- [Error taxonomy contract](specs/001-frame-memory-store/contracts/error-taxonomy.md)
-- [Shared-memory layout contract](specs/001-frame-memory-store/contracts/shared-memory-layout.md)
-- [Reservation API contract](specs/003-zero-copy-ingest/contracts/reservation-api.md)
-- [Ingest layout contract](specs/003-zero-copy-ingest/contracts/ingest-layout.md)
-- [Reservation diagnostics and errors](specs/003-zero-copy-ingest/contracts/diagnostics-and-errors.md)
-- [Owner recovery hardening contract](specs/004-store-reliability-hardening/contracts/owner-recovery-contract.md)
-- [Disposal and rollover hardening contract](specs/004-store-reliability-hardening/contracts/disposal-rollover-contract.md)
-- [Index health hardening contract](specs/004-store-reliability-hardening/contracts/index-health-contract.md)
-- [Production public API contract](specs/005-api-production-readiness/contracts/public-api-contract.md)
-- [Contention configuration contract](specs/005-api-production-readiness/contracts/contention-configuration-contract.md)
-- [Diagnostics integration contract](specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md)
-- [Reservation memory contract](specs/005-api-production-readiness/contracts/reservation-memory-contract.md)
-- [Language-neutral protocol](protocol/README.md)
-- [Native C ABI contract](specs/008-cpp-python-implementations/contracts/native-c-api.md)
-- [C++ API contract](specs/008-cpp-python-implementations/contracts/cpp-api.md)
-- [Python API contract](specs/008-cpp-python-implementations/contracts/python-api.md)
-- [Interoperability contract](specs/008-cpp-python-implementations/contracts/interoperability.md)
-- [Distribution packaging contract](specs/008-cpp-python-implementations/contracts/packaging.md)
+options = StoreOptions.create(
+    "orders",
+    slot_count=128,
+    max_value_bytes=64 * 1024,
+    max_descriptor_bytes=64,
+    max_key_bytes=64,
+    lease_record_count=256,
+    participant_record_count=64,
+    open_mode=OpenMode.CREATE_OR_OPEN,
+    enable_lease_recovery=True,
+)
 
-Runnable samples:
+open_status, store = MemoryStore.open(options)
+if open_status is not StoreOpenStatus.SUCCESS or store is None:
+    raise RuntimeError(f"open failed: {open_status}")
 
-- [Basic usage sample](samples/BasicUsage/README.md)
-- [Frame value sample](samples/FrameValue/README.md)
-- [Zero-copy ingest sample](samples/ZeroCopyIngest/README.md)
-- [Hosted service integration sample](samples/HostedServiceIntegration/README.md)
-- [Docker shared-memory sample](samples/DockerSharedMemory/README.md)
-- [C++ basic usage sample](samples/CppBasicUsage/README.md)
-- [Python basic usage sample](samples/PythonBasicUsage/README.md)
-- [Lock-free broker-key sample](samples/LockFreeBrokerKeys/Program.cs)
+with store:
+    if store.publish(b"order-1", b"payload\x00") is not StoreStatus.SUCCESS:
+        raise RuntimeError("publish failed")
+    acquire_status, lease = store.acquire(b"order-1")
+    if acquire_status is not StoreStatus.SUCCESS or lease is None:
+        raise RuntimeError(f"acquire failed: {acquire_status}")
+    with lease:
+        print(bytes(lease.value))
+```
 
-## Project Policies
+Python loads only the native library packaged beside its modules. A clean wheel
+consumer must not depend on the repository source tree or `PYTHONPATH`.
 
-- [Contributing](CONTRIBUTING.md): setup, validation, compatibility review, and
-  pull request expectations.
-- [Code of conduct](CODE_OF_CONDUCT.md): project-specific conduct expectations.
-- [Support](SUPPORT.md): questions, bugs, unsupported scenarios, and best-effort
-  prerelease support.
-- [Security](SECURITY.md): private vulnerability reporting guidance.
-- Issue templates:
-  [bug report](.github/ISSUE_TEMPLATE/bug_report.yml),
-  [documentation issue](.github/ISSUE_TEMPLATE/documentation.yml), and
-  [feature request](.github/ISSUE_TEMPLATE/feature_request.yml).
-- [Pull request template](.github/pull_request_template.md): review checklist
-  for behavior, API, package, validation, documentation, compatibility,
-  security, support, and release-note impact.
-- [Changelog](CHANGELOG.md): reverse-chronological package and documentation
-  history.
-- [Release notes](docs/releases.md): release readiness checklist and package
-  notes alignment.
+## Waits, progress, and cancellation
 
-## Local Validation
+Every operation accepts a no-wait, finite, or infinite policy. C# uses
+`StoreWaitOptions`, C++ uses `wait_options`, and Python uses `WaitOptions`.
+Finite budgets cover local retry, revalidation, helping, backoff, and any cold
+lifecycle wait for that call. Cancellation wins only before the operation's
+documented ordering point; it never rolls back an already published shared
+result.
+
+`StoreBusy` means the call exhausted its bounded progress budget. It is a
+retryable contention result, not evidence of corruption and not proof that a
+global lock was held.
+
+## Recovery and diagnostics
+
+Recovery is explicit and conservative. Enable it in the options, then call the
+lease or reservation recovery API. A record is reclaimed only when its exact
+participant incarnation and owner identity are safely stale. Live, changing,
+unsupported, or inconsistent evidence is retained and reported.
+
+Diagnostics report the immutable five-field protocol identity plus shared
+capacity, slot, lease, reservation, participant, and directory facts. CAS
+retries, helping, contention exhaustion, invalid/stale tokens, recovery
+attempts, owner classifications, and status counts are local to the calling
+runtime or handle unless documented otherwise.
+
+See [docs/diagnostics.md](docs/diagnostics.md) for the complete distinction.
+
+## Moving an existing deployment to SMS2
+
+There is no in-place conversion and no current client reads a noncurrent mapping
+to migrate it. Use application-owned authoritative data:
+
+1. stop publishers and prevent new readers;
+2. drain leases and reservations;
+3. close every process-local handle;
+4. remove or replace the old physical store;
+5. create a fresh SMS2 store with the intended participant-aware capacities;
+6. republish authoritative values; and
+7. start current clients.
+
+A side-by-side cutover uses a distinct public store name. An incompatible or
+malformed existing mapping returns `IncompatibleLayout` before payload access.
+
+## Build and validation
+
+Managed:
 
 ```powershell
-pwsh ./scripts/validate-docs.ps1
 dotnet build SharedMemoryStore.slnx -c Release
-dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
-dotnet run --project samples/FrameValue/FrameValue.csproj -c Release
-dotnet run --project samples/ZeroCopyIngest/ZeroCopyIngest.csproj -c Release
-dotnet run --project samples/HostedServiceIntegration/HostedServiceIntegration.csproj -c Release
-dotnet run --project samples/DockerSharedMemory/DockerSharedMemory.csproj -c Release -- all
-pwsh ./scripts/validate-package-consumption.ps1
 dotnet test SharedMemoryStore.slnx -c Release
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
-pwsh ./scripts/validate-cross-platform.ps1 -SkipDocker
-pwsh ./scripts/validate-docker-shared-memory.ps1
+pwsh ./scripts/validate-package-consumption.ps1 -Configuration Release
+```
+
+Native and Python:
+
+```powershell
 pwsh ./scripts/validate-native.ps1 -Configuration Release
 pwsh ./scripts/validate-python.ps1 -Configuration Release
-pwsh ./scripts/validate-interoperability.ps1 -Configuration Release -Stress
 ```
 
-Documentation changes must keep package metadata, README content, release notes,
-support policy, security policy, compatibility metadata, and contract links
-aligned across managed `2.0.0`, native `0.1.0`, Python `0.1.0`, ABI `1.0`, and
-layouts `1.2` and `2.0`.
+The repository also contains a deterministic protocol manifest, nine ordered
+runtime-pair tests, raw visibility and crash checkpoints, package-consumer
+tests, and Windows/Linux qualification gates.
+
+## Documentation and samples
+
+- [Documentation index](docs/index.md)
+- [Getting started](docs/getting-started.md)
+- [Concepts](docs/concepts.md)
+- [Byte encoding](docs/byte-encoding.md)
+- [Usage and lifetimes](docs/usage.md)
+- [Statuses and recovery](docs/errors.md)
+- [Diagnostics](docs/diagnostics.md)
+- [Lifecycle](docs/lifecycle.md)
+- [Integration](docs/integration.md)
+- [Performance scope](docs/performance.md)
+- [Architecture](docs/architecture.md)
+- [Packaging](docs/packaging.md)
+- [Portability](docs/portability.md)
+- [Examples](docs/examples.md)
+- [Sample catalog](docs/samples.md)
+- [Maintainer guide](docs/maintainers.md)
+- [Release and migration notes](docs/releases.md)
+- [Changelog](CHANGELOG.md)
+- [C# basic usage](samples/BasicUsage/README.md)
+- [Frame value](samples/FrameValue/README.md)
+- [Zero-copy ingest](samples/ZeroCopyIngest/README.md)
+- [Hosted integration](samples/HostedServiceIntegration/README.md)
+- [C++ basic usage](samples/CppBasicUsage/README.md)
+- [Python basic usage](samples/PythonBasicUsage/README.md)
+- [Docker shared-memory validation](samples/DockerSharedMemory/README.md)
+- [Broker-key sample](samples/LockFreeBrokerKeys/README.md)
+
+## License and project policy
+
+SharedMemoryStore is licensed under the [MIT License](LICENSE). See
+[CONTRIBUTING.md](CONTRIBUTING.md), [SUPPORT.md](SUPPORT.md), and
+[SECURITY.md](SECURITY.md) before contributing or reporting an issue.

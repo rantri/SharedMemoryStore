@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import json
 from pathlib import Path
@@ -10,12 +9,218 @@ import unicodedata
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = REPOSITORY_ROOT / "protocol" / "fixtures" / "v1.2" / "manifest.json"
+MANIFEST_PATH = REPOSITORY_ROOT / "protocol" / "fixtures" / "v2.0" / "manifest.json"
 
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 INT64_MIN = -(1 << 63)
 INT64_MAX = (1 << 63) - 1
+MAXIMUM_SLOT_COUNT = 1_048_575
+MAXIMUM_PARTICIPANT_COUNT = 1_048_575
+MAXIMUM_GENERATION = (1 << 33) - 1
+
+CODEC_FAMILIES = {
+    "participant_token",
+    "participant_control",
+    "slot_control",
+    "lease_control",
+    "binding",
+    "spill_summary",
+    "directory_location",
+    "directory_operation",
+}
+
+EXPECTED_RECORDS: dict[str, tuple[int, int, dict[str, int]]] = {
+    "store_header": (
+        512,
+        64,
+        {
+            "magic": 0,
+            "layout_major_version": 4,
+            "layout_minor_version": 6,
+            "header_length": 8,
+            "resource_protocol_version": 12,
+            "required_features": 16,
+            "optional_features": 24,
+            "total_bytes": 32,
+            "store_id": 40,
+            "control": 48,
+            "sequence": 56,
+            "slot_count": 64,
+            "lease_record_count": 68,
+            "participant_record_count": 72,
+            "max_key_bytes": 76,
+            "max_descriptor_bytes": 80,
+            "max_value_bytes": 84,
+            "participant_index_bits": 88,
+            "participant_generation_bits": 92,
+            "participant_offset": 96,
+            "participant_length": 104,
+            "participant_stride": 112,
+            "primary_lane_count": 116,
+            "primary_bucket_count": 120,
+            "primary_bucket_stride": 124,
+            "primary_directory_offset": 128,
+            "primary_directory_length": 136,
+            "overflow_directory_offset": 144,
+            "overflow_directory_length": 152,
+            "overflow_stride": 160,
+            "lease_stride": 164,
+            "lease_registry_offset": 168,
+            "lease_registry_length": 176,
+            "slot_metadata_stride": 184,
+            "key_stride": 188,
+            "slot_metadata_offset": 192,
+            "slot_metadata_length": 200,
+            "key_storage_offset": 208,
+            "key_storage_length": 216,
+            "descriptor_stride": 224,
+            "payload_stride": 228,
+            "descriptor_storage_offset": 232,
+            "descriptor_storage_length": 240,
+            "payload_storage_offset": 248,
+            "payload_storage_length": 256,
+            "pid_namespace_id": 264,
+            "pid_namespace_mode": 272,
+        },
+    ),
+    "participant": (
+        64,
+        64,
+        {
+            "control": 0,
+            "identity_kind": 8,
+            "reserved": 12,
+            "process_start_value": 16,
+            "open_sequence": 24,
+            "pid_namespace_id": 32,
+        },
+    ),
+    "primary_directory_bucket": (
+        128,
+        64,
+        {"spill_summary": 0, "mutation": 8, "lanes": 16},
+    ),
+    "overflow_binding": (8, 8, {"binding": 0}),
+    "lease": (64, 64, {"control": 0, "slot_binding": 8, "acquire_sequence": 16}),
+    "value_slot": (
+        128,
+        64,
+        {
+            "control": 0,
+            "directory_binding": 8,
+            "directory_location": 16,
+            "directory_operation": 24,
+            "key_hash": 32,
+            "key_length": 40,
+            "descriptor_length": 44,
+            "value_length": 48,
+            "publication_intent": 52,
+            "bytes_advanced": 56,
+            "commit_sequence": 64,
+            "key_offset": 72,
+            "descriptor_offset": 80,
+            "payload_offset": 88,
+        },
+    ),
+}
+
+EXPECTED_STATES = {
+    "store": {"initializing": 1, "ready": 2, "corrupt": 3, "unsupported": 4},
+    "participant": {
+        "free": 0,
+        "registering": 1,
+        "active": 2,
+        "closing": 3,
+        "recovering": 4,
+        "reclaiming": 5,
+        "retired": 6,
+    },
+    "slot": {
+        "free": 0,
+        "initializing": 1,
+        "reserved": 2,
+        "published": 3,
+        "remove_requested": 4,
+        "aborting": 5,
+        "reclaiming": 6,
+        "retired": 7,
+    },
+    "lease": {
+        "free": 0,
+        "claiming": 1,
+        "active": 2,
+        "releasing": 3,
+        "recovering": 4,
+        "retired": 5,
+    },
+    "publication_intent": {
+        "none": 0,
+        "explicit_reservation": 1,
+        "atomic_publication": 2,
+    },
+    "identity_kind": {
+        "unknown": 0,
+        "windows_process_creation_file_time": 1,
+        "linux_proc_start_ticks": 2,
+    },
+    "pid_namespace_mode": {"recovery_enabled": 1, "mixed_or_unproven": 2},
+}
+
+EXPECTED_OPEN_MODES = {"create_new": 0, "open_existing": 1, "create_or_open": 2}
+
+EXPECTED_OPEN_STATUSES = {
+    "success": 0,
+    "already_exists": 1,
+    "not_found": 2,
+    "invalid_options": 3,
+    "incompatible_layout": 4,
+    "unsupported_platform": 5,
+    "insufficient_capacity": 6,
+    "access_denied": 7,
+    "mapping_failed": 8,
+    "store_busy": 9,
+    "operation_canceled": 10,
+    "participant_table_full": 11,
+}
+
+EXPECTED_OPERATION_STATUSES = {
+    "success": 0,
+    "duplicate_key": 1,
+    "not_found": 2,
+    "key_too_large": 3,
+    "value_too_large": 4,
+    "descriptor_too_large": 5,
+    "store_full": 6,
+    "lease_table_full": 7,
+    "invalid_lease": 8,
+    "lease_already_released": 9,
+    "remove_pending": 10,
+    "unsupported_platform": 11,
+    "store_disposed": 12,
+    "corrupt_store": 13,
+    "access_denied": 14,
+    "unknown_failure": 15,
+    "invalid_reservation": 16,
+    "reservation_incomplete": 17,
+    "reservation_already_completed": 18,
+    "reservation_write_out_of_range": 19,
+    "invalid_key": 20,
+    "store_busy": 21,
+    "operation_canceled": 22,
+}
+
+EXPECTED_OFFLINE_STATES = {
+    "empty",
+    "reserved",
+    "published",
+    "leased",
+    "pending-removal",
+    "spilled",
+    "recovering",
+    "reclaimed",
+    "corrupt",
+}
 
 
 class LayoutInvalidArgument(ValueError):
@@ -38,88 +243,110 @@ def _checked_int64(value: int) -> int:
     return value
 
 
-def _align_int32(value: int) -> int:
-    return _checked_int32(_checked_int32(value + 7) & ~7)
-
-
-def _align_int64(value: int) -> int:
-    return _checked_int64(_checked_int64(value + 7) & ~7)
+def _align(value: int, alignment: int) -> int:
+    return _checked_int64(_checked_int64(value + alignment - 1) & -alignment)
 
 
 def _next_power_of_two(value: int) -> int:
     if value <= 0 or value > 1 << 30:
         raise LayoutArithmeticOverflow
-
     result = 1
     while result < value:
         result = _checked_int32(result << 1)
     return result
 
 
+def _required_bits(distinct_values: int) -> int:
+    return max(1, (distinct_values - 1).bit_length())
+
+
 def _calculate_layout(
     *,
     slot_count: int,
-    max_value_bytes: int,
-    max_descriptor_bytes: int,
-    max_key_bytes: int,
     lease_record_count: int,
+    participant_record_count: int,
+    max_key_bytes: int,
+    max_descriptor_bytes: int,
+    max_value_bytes: int,
 ) -> dict[str, int]:
-    if slot_count < 1:
-        raise LayoutInvalidArgument
-    if max_value_bytes < 1:
-        raise LayoutInvalidArgument
-    if max_descriptor_bytes < 0:
-        raise LayoutInvalidArgument
-    if max_key_bytes < 1:
+    values = (
+        slot_count,
+        lease_record_count,
+        participant_record_count,
+        max_key_bytes,
+        max_descriptor_bytes,
+        max_value_bytes,
+    )
+    for value in values:
+        _checked_int32(value)
+
+    if not 1 <= slot_count <= MAXIMUM_SLOT_COUNT:
         raise LayoutInvalidArgument
     if lease_record_count < 1:
         raise LayoutInvalidArgument
+    if not 1 <= participant_record_count <= MAXIMUM_PARTICIPANT_COUNT:
+        raise LayoutInvalidArgument
+    if max_key_bytes < 1 or max_descriptor_bytes < 0 or max_value_bytes < 1:
+        raise LayoutInvalidArgument
 
-    for value in (
-        slot_count,
-        max_value_bytes,
-        max_descriptor_bytes,
-        max_key_bytes,
-        lease_record_count,
-    ):
-        _checked_int32(value)
+    participant_index_bits = _required_bits(participant_record_count + 1)
+    participant_generation_bits = 28 - participant_index_bits
+    if participant_generation_bits < 8:
+        raise LayoutInvalidArgument
 
-    header_length = _align_int32(160)
-    doubled_slots = _checked_int32(slot_count * 2)
-    index_entry_count = _next_power_of_two(max(4, doubled_slots))
-    index_entry_size = _align_int32(_checked_int32(32 + max_key_bytes))
-    index_offset = header_length
-    index_length = _checked_int64(index_entry_count * index_entry_size)
-    lease_registry_offset = _align_int64(_checked_int64(index_offset + index_length))
-    lease_registry_length = _checked_int64(lease_record_count * 40)
-    slot_metadata_offset = _align_int64(
-        _checked_int64(lease_registry_offset + lease_registry_length)
+    participant_offset = 512
+    participant_length = _checked_int64(participant_record_count * 64)
+    primary_lane_count = _next_power_of_two(max(32, _checked_int32(slot_count * 4)))
+    primary_bucket_count = primary_lane_count // 8
+    primary_directory_offset = _align(participant_offset + participant_length, 64)
+    primary_directory_length = _checked_int64(primary_bucket_count * 128)
+    overflow_directory_offset = _align(
+        primary_directory_offset + primary_directory_length, 8
     )
-    slot_metadata_length = _checked_int64(slot_count * 72)
-    descriptor_stride = _align_int32(max(1, max_descriptor_bytes))
-    descriptor_storage_offset = _align_int64(
-        _checked_int64(slot_metadata_offset + slot_metadata_length)
+    overflow_directory_length = _checked_int64(slot_count * 8)
+    lease_registry_offset = _align(
+        overflow_directory_offset + overflow_directory_length, 64
     )
+    lease_registry_length = _checked_int64(lease_record_count * 64)
+    slot_metadata_offset = _align(lease_registry_offset + lease_registry_length, 64)
+    slot_metadata_length = _checked_int64(slot_count * 128)
+    key_stride = _checked_int32(_align(max(1, max_key_bytes), 8))
+    key_storage_offset = _align(slot_metadata_offset + slot_metadata_length, 8)
+    key_storage_length = _checked_int64(slot_count * key_stride)
+    descriptor_stride = _checked_int32(_align(max(1, max_descriptor_bytes), 8))
+    descriptor_storage_offset = _align(key_storage_offset + key_storage_length, 8)
     descriptor_storage_length = _checked_int64(slot_count * descriptor_stride)
-    payload_stride = _align_int32(max(1, max_value_bytes))
-    payload_storage_offset = _align_int64(
-        _checked_int64(descriptor_storage_offset + descriptor_storage_length)
+    payload_stride = _checked_int32(_align(max(1, max_value_bytes), 8))
+    payload_storage_offset = _align(
+        descriptor_storage_offset + descriptor_storage_length, 8
     )
     payload_storage_length = _checked_int64(slot_count * payload_stride)
-    required_bytes = _align_int64(
-        _checked_int64(payload_storage_offset + payload_storage_length)
-    )
+    required_bytes = _align(payload_storage_offset + payload_storage_length, 8)
 
     return {
-        "header_length": header_length,
-        "index_entry_count": index_entry_count,
-        "index_entry_size": index_entry_size,
-        "index_offset": index_offset,
-        "index_length": index_length,
+        "header_length": 512,
+        "participant_index_bits": participant_index_bits,
+        "participant_generation_bits": participant_generation_bits,
+        "participant_stride": 64,
+        "participant_offset": participant_offset,
+        "participant_length": participant_length,
+        "primary_lane_count": primary_lane_count,
+        "primary_bucket_count": primary_bucket_count,
+        "primary_bucket_stride": 128,
+        "primary_directory_offset": primary_directory_offset,
+        "primary_directory_length": primary_directory_length,
+        "overflow_stride": 8,
+        "overflow_directory_offset": overflow_directory_offset,
+        "overflow_directory_length": overflow_directory_length,
+        "lease_stride": 64,
         "lease_registry_offset": lease_registry_offset,
         "lease_registry_length": lease_registry_length,
+        "slot_metadata_stride": 128,
         "slot_metadata_offset": slot_metadata_offset,
         "slot_metadata_length": slot_metadata_length,
+        "key_stride": key_stride,
+        "key_storage_offset": key_storage_offset,
+        "key_storage_length": key_storage_length,
         "descriptor_stride": descriptor_stride,
         "descriptor_storage_offset": descriptor_storage_offset,
         "descriptor_storage_length": descriptor_storage_length,
@@ -140,7 +367,10 @@ def _fnv1a_64(value: bytes) -> int:
 
 def _utf16_code_units(value: str) -> list[int]:
     encoded = value.encode("utf-16-le")
-    return [int.from_bytes(encoded[index : index + 2], "little") for index in range(0, len(encoded), 2)]
+    return [
+        int.from_bytes(encoded[index : index + 2], "little")
+        for index in range(0, len(encoded), 2)
+    ]
 
 
 def _is_dotnet_letter_or_digit(code_unit: int) -> bool:
@@ -148,35 +378,35 @@ def _is_dotnet_letter_or_digit(code_unit: int) -> bool:
     return category.startswith("L") or category == "Nd"
 
 
-def _derive_resource_names(public_name: str) -> dict[str, object]:
-    code_units = _utf16_code_units(public_name)
-
-    windows_readable = "".join(
+def _derive_windows_resource(public_name: str) -> dict[str, str]:
+    readable = "".join(
         chr(code_unit)
         if _is_dotnet_letter_or_digit(code_unit) or code_unit in (ord("-"), ord("_"))
         else "_"
-        for code_unit in code_units
+        for code_unit in _utf16_code_units(public_name)
     )
     scope = "Global\\" if public_name[:7].lower() == "global\\" else "Local\\"
+    return {
+        "region_name": public_name,
+        "synchronization_name": f"{scope}SharedMemoryStore-{readable}",
+    }
 
-    linux_readable = "".join(
+
+def _derive_linux_resource(public_name: str) -> dict[str, object]:
+    readable = "".join(
         chr(code_unit)
         if code_unit < 128
         and (chr(code_unit).isalnum() or code_unit in (ord("-"), ord("_"), ord(".")))
         else "_"
-        for code_unit in code_units
+        for code_unit in _utf16_code_units(public_name)
     ).strip("_.")
-    linux_readable = (linux_readable or "store")[:80]
+    readable = (readable or "store")[:80]
     digest = hashlib.sha256(public_name.encode("utf-8")).hexdigest()[:16]
-    fragment = f"sms-{linux_readable}-{digest}"
-
+    fragment = f"sms-{readable}-{digest}"
     return {
-        "utf16_code_units": len(code_units),
-        "windows_region_name": public_name,
-        "windows_synchronization_name": f"{scope}SharedMemoryStore-{windows_readable}",
-        "linux_sha256_prefix_hex": digest,
-        "linux_fragment": fragment,
-        "linux_files": {
+        "sha256_prefix_hex": digest,
+        "fragment": fragment,
+        "files": {
             "region": f"{fragment}.region",
             "synchronization": f"{fragment}.lock",
             "owners": f"{fragment}.owners",
@@ -185,214 +415,113 @@ def _derive_resource_names(public_name: str) -> dict[str, object]:
     }
 
 
-def _read_int32(region: bytes, offset: int) -> int:
-    return struct.unpack_from("<i", region, offset)[0]
+def _encode_codec(family: str, parts: dict[str, object]) -> int:
+    if family == "participant_token":
+        count = int(parts["participant_record_count"])
+        index = int(parts["record_index"])
+        generation = int(parts["generation"])
+        if not 1 <= count <= MAXIMUM_PARTICIPANT_COUNT:
+            raise ValueError
+        index_bits = _required_bits(count + 1)
+        generation_mask = (1 << (28 - index_bits)) - 1
+        if not 0 <= index < count or not 1 <= generation <= generation_mask:
+            raise ValueError
+        return (generation << index_bits) | index + 1
 
+    if family == "participant_control":
+        count = int(parts["participant_record_count"])
+        state = int(parts["state"])
+        incarnation = int(parts["incarnation"])
+        process_id = int(parts["process_id"])
+        if not 1 <= count <= MAXIMUM_PARTICIPANT_COUNT:
+            raise ValueError
+        generation_mask = (1 << (28 - _required_bits(count + 1))) - 1
+        owned = state in (1, 2, 3, 4)
+        if (
+            not 0 <= state <= 6
+            or not 1 <= incarnation <= generation_mask
+            or (owned and process_id <= 0)
+            or (not owned and process_id != 0)
+            or process_id > INT32_MAX
+            or (state == 6 and incarnation != generation_mask)
+        ):
+            raise ValueError
+        return state | (incarnation << 3) | (process_id << 31)
 
-def _read_int64(region: bytes, offset: int) -> int:
-    return struct.unpack_from("<q", region, offset)[0]
+    if family in ("slot_control", "lease_control"):
+        state = int(parts["state"])
+        generation = int(parts["generation"])
+        participant_token = int(parts["participant_token"])
+        maximum_state = 7 if family == "slot_control" else 5
+        owned_states = (1, 2)
+        if (
+            not 0 <= state <= maximum_state
+            or not 1 <= generation <= MAXIMUM_GENERATION
+            or not 0 <= participant_token < 1 << 28
+            or ((state in owned_states) != (participant_token != 0))
+            or (state == maximum_state and generation != MAXIMUM_GENERATION)
+        ):
+            raise ValueError
+        return state | (generation << 3) | (participant_token << 36)
 
+    if family == "binding":
+        if bool(parts.get("empty", False)):
+            return 0
+        index = int(parts["slot_index"])
+        generation = int(parts["generation"])
+        if not 0 <= index < (1 << 31) - 1 or not 1 <= generation <= MAXIMUM_GENERATION:
+            raise ValueError
+        return index + 1 | (generation << 31)
 
-def _read_uint64(region: bytes, offset: int) -> int:
-    return struct.unpack_from("<Q", region, offset)[0]
+    if family == "spill_summary":
+        if bool(parts.get("initial_empty", False)):
+            return 0
+        index = int(parts["slot_index"])
+        generation = int(parts["generation"])
+        present = bool(parts["present"])
+        if not 0 <= index < MAXIMUM_SLOT_COUNT or not 1 <= generation <= MAXIMUM_GENERATION:
+            raise ValueError
+        return index + 1 | (generation << 20) | (int(present) << 53)
 
+    if family == "directory_location":
+        kind = int(parts["kind"])
+        index = int(parts["index"])
+        generation = int(parts["generation"])
+        if kind == index == generation == 0:
+            return 0
+        if kind not in (1, 2) or not 0 <= index < 1 << 22 or not 1 <= generation <= MAXIMUM_GENERATION:
+            raise ValueError
+        return kind | (index << 2) | (generation << 24)
 
-def _normalize_mapped_region(fixture_name: str, region: bytes) -> dict[str, object]:
-    index_state_names = ("Empty", "Occupied", "Tombstone")
-    slot_state_names = ("Free", "Publishing", "Published", "RemoveRequested", "Reclaiming")
-    lease_state_names = ("Free", "Active", "Released", "Abandoned")
-
-    index_entries: list[dict[str, object]] = []
-    index_count = _read_int32(region, 44)
-    index_stride = _read_int32(region, 48)
-    index_offset = _read_int64(region, 56)
-    for entry_index in range(index_count):
-        offset = index_offset + (entry_index * index_stride)
-        state = _read_int32(region, offset)
-        if state == 0:
-            continue
-        key_length = _read_int32(region, offset + 4)
-        index_entries.append(
-            {
-                "entry_index": entry_index,
-                "state": state,
-                "state_name": index_state_names[state],
-                "key_hex": region[offset + 32 : offset + 32 + key_length].hex(),
-                "key_hash_hex": f"{_read_uint64(region, offset + 8):016x}",
-                "slot_index": _read_int32(region, offset + 16),
-                "slot_generation": _read_int32(region, offset + 20),
-                "slot_reuse_epoch": _read_int64(region, offset + 24),
-            }
+    if family == "directory_operation":
+        intent = int(parts["intent"])
+        phase = int(parts["phase"])
+        target_kind = int(parts["target_kind"])
+        target_index = int(parts["target_index"])
+        generation = int(parts["generation"])
+        if intent == phase == target_kind == target_index == generation == 0:
+            return 0
+        if intent not in (1, 2) or not 1 <= phase <= 5 or not 1 <= generation <= MAXIMUM_GENERATION:
+            raise ValueError
+        no_target = target_kind == target_index == 0
+        valid_target = target_kind in (1, 2) and 0 <= target_index < 1 << 22
+        if phase in (1, 4) and not no_target:
+            raise ValueError
+        if phase in (2, 3) and not valid_target:
+            raise ValueError
+        if phase == 5 and intent == 1 and not valid_target:
+            raise ValueError
+        if phase == 5 and intent == 2 and not (no_target or valid_target):
+            raise ValueError
+        return (
+            intent
+            | (phase << 2)
+            | (target_kind << 5)
+            | (target_index << 7)
+            | (generation << 29)
         )
 
-    lease_records: list[dict[str, object]] = []
-    lease_count = _read_int32(region, 28)
-    lease_offset = _read_int64(region, 72)
-    for record_index in range(lease_count):
-        offset = lease_offset + (record_index * 40)
-        state = _read_int32(region, offset)
-        if state == 0:
-            continue
-        lease_records.append(
-            {
-                "record_id": _read_int32(region, offset + 4),
-                "state": state,
-                "state_name": lease_state_names[state],
-                "slot_index": _read_int32(region, offset + 8),
-                "slot_generation": _read_int32(region, offset + 12),
-                "slot_reuse_epoch": _read_int64(region, offset + 16),
-                "owner_process_id": _read_int32(region, offset + 24),
-                "acquire_sequence": _read_int64(region, offset + 32),
-            }
-        )
-
-    slots: list[dict[str, object]] = []
-    slot_count = _read_int32(region, 24)
-    slot_offset = _read_int64(region, 88)
-    for slot_index in range(slot_count):
-        offset = slot_offset + (slot_index * 72)
-        state = _read_int32(region, offset)
-        descriptor_length = _read_int32(region, offset + 24)
-        payload_length = _read_int32(region, offset + 28)
-        descriptor_offset = _read_int64(region, offset + 48)
-        payload_offset = _read_int64(region, offset + 56)
-        slots.append(
-            {
-                "slot_index": slot_index,
-                "state": state,
-                "state_name": slot_state_names[state],
-                "generation": _read_int32(region, offset + 4),
-                "reuse_epoch": _read_int64(region, offset + 8),
-                "usage_count": _read_int32(region, offset + 16),
-                "key_length": _read_int32(region, offset + 20),
-                "descriptor_hex": region[
-                    descriptor_offset : descriptor_offset + descriptor_length
-                ].hex(),
-                "payload_hex": region[payload_offset : payload_offset + payload_length].hex(),
-                "publisher_process_id": _read_int32(region, offset + 32),
-                "reservation_bytes_written": _read_int32(region, offset + 36),
-                "key_hash_hex": f"{_read_uint64(region, offset + 40):016x}",
-                "descriptor_offset": descriptor_offset,
-                "payload_offset": payload_offset,
-                "committed_sequence": _read_int64(region, offset + 64),
-            }
-        )
-
-    return {
-        "format_version": 1,
-        "fixture": fixture_name,
-        "offline_only": True,
-        "protocol": {
-            "layout_major": _read_int32(region, 4),
-            "layout_minor": _read_int32(region, 8),
-            "byte_order": "little",
-        },
-        "header": {
-            "magic_hex": f"{_read_int32(region, 0) & 0xFFFFFFFF:08x}",
-            "header_length": _read_int32(region, 12),
-            "total_bytes": _read_int64(region, 16),
-            "slot_count": slot_count,
-            "lease_record_count": lease_count,
-            "max_key_bytes": _read_int32(region, 32),
-            "max_descriptor_bytes": _read_int32(region, 36),
-            "max_value_bytes": _read_int32(region, 40),
-            "index_entry_count": index_count,
-            "index_entry_size": index_stride,
-            "index_offset": index_offset,
-            "index_length": _read_int64(region, 64),
-            "lease_registry_offset": lease_offset,
-            "lease_registry_length": _read_int64(region, 80),
-            "slot_metadata_offset": slot_offset,
-            "slot_metadata_length": _read_int64(region, 96),
-            "descriptor_storage_offset": _read_int64(region, 104),
-            "descriptor_storage_length": _read_int64(region, 112),
-            "payload_storage_offset": _read_int64(region, 120),
-            "payload_storage_length": _read_int64(region, 128),
-            "store_id_hex": f"{_read_uint64(region, 136):016x}",
-            "store_state": _read_int32(region, 144),
-            "sequence": _read_int64(region, 152),
-        },
-        "index_entries": index_entries,
-        "lease_records": lease_records,
-        "slots": slots,
-    }
-
-
-class StoreHeader(ctypes.LittleEndianStructure):
-    _pack_ = 8
-    _fields_ = [
-        ("magic", ctypes.c_int32),
-        ("layout_major_version", ctypes.c_int32),
-        ("layout_minor_version", ctypes.c_int32),
-        ("header_length", ctypes.c_int32),
-        ("total_bytes", ctypes.c_int64),
-        ("slot_count", ctypes.c_int32),
-        ("lease_record_count", ctypes.c_int32),
-        ("max_key_bytes", ctypes.c_int32),
-        ("max_descriptor_bytes", ctypes.c_int32),
-        ("max_value_bytes", ctypes.c_int32),
-        ("index_entry_count", ctypes.c_int32),
-        ("index_entry_size", ctypes.c_int32),
-        ("index_offset", ctypes.c_int64),
-        ("index_length", ctypes.c_int64),
-        ("lease_registry_offset", ctypes.c_int64),
-        ("lease_registry_length", ctypes.c_int64),
-        ("slot_metadata_offset", ctypes.c_int64),
-        ("slot_metadata_length", ctypes.c_int64),
-        ("descriptor_storage_offset", ctypes.c_int64),
-        ("descriptor_storage_length", ctypes.c_int64),
-        ("payload_storage_offset", ctypes.c_int64),
-        ("payload_storage_length", ctypes.c_int64),
-        ("store_id", ctypes.c_int64),
-        ("store_state", ctypes.c_int32),
-        ("reserved", ctypes.c_int32),
-        ("sequence", ctypes.c_int64),
-    ]
-
-
-class IndexEntryHeader(ctypes.LittleEndianStructure):
-    _pack_ = 8
-    _fields_ = [
-        ("state", ctypes.c_int32),
-        ("key_length", ctypes.c_int32),
-        ("key_hash", ctypes.c_uint64),
-        ("slot_index", ctypes.c_int32),
-        ("slot_generation", ctypes.c_int32),
-        ("slot_reuse_epoch", ctypes.c_int64),
-    ]
-
-
-class SlotMetadata(ctypes.LittleEndianStructure):
-    _pack_ = 8
-    _fields_ = [
-        ("state", ctypes.c_int32),
-        ("generation", ctypes.c_int32),
-        ("reuse_epoch", ctypes.c_int64),
-        ("usage_count", ctypes.c_int32),
-        ("key_length", ctypes.c_int32),
-        ("descriptor_length", ctypes.c_int32),
-        ("value_length", ctypes.c_int32),
-        ("publisher_process_id", ctypes.c_int32),
-        ("reserved", ctypes.c_int32),
-        ("key_hash", ctypes.c_uint64),
-        ("descriptor_offset", ctypes.c_int64),
-        ("payload_offset", ctypes.c_int64),
-        ("committed_sequence", ctypes.c_int64),
-    ]
-
-
-class LeaseRecord(ctypes.LittleEndianStructure):
-    _pack_ = 8
-    _fields_ = [
-        ("state", ctypes.c_int32),
-        ("lease_record_id", ctypes.c_int32),
-        ("slot_index", ctypes.c_int32),
-        ("slot_generation", ctypes.c_int32),
-        ("slot_reuse_epoch", ctypes.c_int64),
-        ("owner_process_id", ctypes.c_int32),
-        ("reserved", ctypes.c_int32),
-        ("acquire_sequence", ctypes.c_int64),
-    ]
+    raise AssertionError(f"Unknown codec family: {family}")
 
 
 class ProtocolManifestTests(unittest.TestCase):
@@ -400,227 +529,291 @@ class ProtocolManifestTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
-    def test_protocol_identity_and_magic_are_exact(self) -> None:
+    def _require_keys(self, value: dict[str, object], keys: set[str], context: str) -> None:
+        missing = sorted(keys - value.keys())
+        self.assertFalse(missing, f"{context} is missing required keys: {missing}")
+
+    def test_manifest_declares_sms2_as_the_only_creatable_and_readable_protocol(self) -> None:
         protocol = self.manifest["protocol"]
+        self._require_keys(
+            protocol,
+            {
+                "creatable_layouts",
+                "readable_layouts",
+                "noncurrent_mapping_policy",
+                "layout_major",
+                "layout_minor",
+                "resource_protocol",
+                "magic_ascii",
+                "magic_integer_hex",
+                "little_endian_bytes_hex",
+                "byte_order",
+                "required_architecture",
+                "atomic_width",
+                "atomic_alignment",
+                "acquire_load_order",
+                "release_store_order",
+                "rmw_order",
+                "required_features",
+                "optional_features",
+                "required_feature_bits",
+                "incompatible_draft_required_feature_masks",
+            },
+            "protocol",
+        )
         self.assertEqual(1, self.manifest["format_version"])
-        self.assertEqual(1, protocol["layout_major"])
-        self.assertEqual(2, protocol["layout_minor"])
-        self.assertEqual(1, protocol["resource_naming_version"])
+        self.assertEqual(["2.0"], protocol["creatable_layouts"])
+        self.assertEqual(["2.0"], protocol["readable_layouts"])
+        self.assertNotIn("retired_layouts", protocol)
+        self.assertEqual(
+            "reject-before-payload-access",
+            protocol["noncurrent_mapping_policy"],
+        )
+        self.assertEqual(2, protocol["layout_major"])
+        self.assertEqual(0, protocol["layout_minor"])
+        self.assertEqual(2, protocol["resource_protocol"])
+        self.assertEqual("SMS2", protocol["magic_ascii"])
+        self.assertEqual("32534d53", protocol["magic_integer_hex"])
+        self.assertEqual("534d5332", protocol["little_endian_bytes_hex"])
         self.assertEqual("little", protocol["byte_order"])
-        self.assertEqual(8, protocol["max_field_alignment"])
-
-        magic = protocol["magic"]
-        self.assertEqual("SMS1", magic["ascii"])
-        self.assertEqual(0x31534D53, magic["integer_value"])
-        self.assertEqual(f"{magic['integer_value']:08x}", magic["integer_hex"])
-        self.assertEqual(
-            magic["ascii"].encode("ascii"),
-            bytes.fromhex(magic["little_endian_bytes_hex"]),
-        )
-        self.assertEqual(
-            magic["integer_value"],
-            int.from_bytes(bytes.fromhex(magic["little_endian_bytes_hex"]), "little"),
-        )
-
-    def test_every_record_size_type_offset_and_padding(self) -> None:
-        structures = {
-            "store_header": StoreHeader,
-            "index_entry_header": IndexEntryHeader,
-            "slot_metadata": SlotMetadata,
-            "lease_record": LeaseRecord,
-        }
-        type_names = {
-            ctypes.c_int32: "int32",
-            ctypes.c_int64: "int64",
-            ctypes.c_uint64: "uint64",
-        }
-
-        self.assertEqual(set(structures), set(self.manifest["records"]))
-        for record_name, structure in structures.items():
-            with self.subTest(record=record_name):
-                record = self.manifest["records"][record_name]
-                self.assertEqual(record["size"], ctypes.sizeof(structure))
-                declared_fields = dict(structure._fields_)
-                self.assertEqual(set(record["fields"]), set(declared_fields))
-                occupied: set[int] = set()
-                for field_name, field_type in structure._fields_:
-                    expected = record["fields"][field_name]
-                    descriptor = getattr(structure, field_name)
-                    self.assertEqual(expected["offset"], descriptor.offset)
-                    self.assertEqual(expected["type"], type_names[field_type])
-                    occupied.update(range(descriptor.offset, descriptor.offset + ctypes.sizeof(field_type)))
-
-                actual_padding = sorted(set(range(ctypes.sizeof(structure))) - occupied)
-                expected_padding = sorted(
-                    byte
-                    for padding in record["padding"]
-                    for byte in range(padding["offset"], padding["offset"] + padding["length"])
-                )
-                self.assertEqual(expected_padding, actual_padding)
-
-        self.assertEqual(
-            self.manifest["records"]["index_entry_header"]["size"],
-            self.manifest["records"]["index_entry_header"]["inline_key_offset"],
-        )
-
-    def test_state_open_mode_and_status_assignments_are_exact(self) -> None:
+        self.assertEqual("x86_64", protocol["required_architecture"])
+        self.assertEqual(8, protocol["atomic_width"])
+        self.assertEqual(8, protocol["atomic_alignment"])
+        self.assertEqual("acquire", protocol["acquire_load_order"])
+        self.assertEqual("release", protocol["release_store_order"])
+        self.assertEqual("sequentially-consistent", protocol["rmw_order"])
+        self.assertEqual(7, protocol["required_features"])
+        self.assertEqual(0, protocol["optional_features"])
         self.assertEqual(
             {
-                "store": {"Initializing": 0, "Ready": 1, "Disposing": 2, "Corrupt": 3, "Unsupported": 4},
-                "index": {"Empty": 0, "Occupied": 1, "Tombstone": 2},
-                "slot": {"Free": 0, "Publishing": 1, "Published": 2, "RemoveRequested": 3, "Reclaiming": 4},
-                "lease": {"Free": 0, "Active": 1, "Released": 2, "Abandoned": 3},
+                "versioned_empty_spill_summary": 1,
+                "publication_intent": 2,
+                "pid_namespace_identity": 4,
             },
-            self.manifest["states"],
+            protocol["required_feature_bits"],
         )
-        self.assertEqual(
-            {"CreateNew": 0, "OpenExisting": 1, "CreateOrOpen": 2},
-            self.manifest["open_modes"],
-        )
-        self.assertEqual(
+        self.assertEqual([0, 1, 3], protocol["incompatible_draft_required_feature_masks"])
+
+    def test_every_record_size_alignment_and_field_offset_is_exact(self) -> None:
+        records = self.manifest["records"]
+        self.assertEqual(set(EXPECTED_RECORDS), set(records))
+        for name, (size, alignment, fields) in EXPECTED_RECORDS.items():
+            with self.subTest(record=name):
+                record = records[name]
+                self._require_keys(record, {"size", "alignment", "fields"}, f"record {name}")
+                self.assertEqual(size, record["size"])
+                self.assertEqual(alignment, record["alignment"])
+                self.assertEqual(fields, record["fields"])
+        self.assertEqual(8, records["primary_directory_bucket"]["lane_count"])
+
+    def test_all_state_families_and_wire_assignments_are_exact(self) -> None:
+        self.assertEqual(EXPECTED_STATES, self.manifest["states"])
+
+    def test_every_control_codec_has_valid_boundary_and_malformed_vectors(self) -> None:
+        self._require_keys(self.manifest, {"codec_vectors"}, "manifest")
+        codecs = self.manifest["codec_vectors"]
+        self.assertEqual(CODEC_FAMILIES, set(codecs))
+        all_reasons: set[str] = set()
+        for family in sorted(CODEC_FAMILIES):
+            vectors = codecs[family]
+            with self.subTest(codec=family):
+                self.assertGreaterEqual(len(vectors), 4)
+                self.assertEqual(len(vectors), len({vector["name"] for vector in vectors}))
+                valid_count = 0
+                invalid_count = 0
+                for vector in vectors:
+                    self._require_keys(
+                        vector,
+                        {"name", "valid", "encoded_hex"},
+                        f"codec vector {family}/{vector.get('name', '<unnamed>')}",
+                    )
+                    raw = int(vector["encoded_hex"], 16)
+                    self.assertEqual(f"{raw:016x}", vector["encoded_hex"])
+                    self.assertLess(raw, 1 << 64)
+                    if vector["valid"]:
+                        valid_count += 1
+                        self._require_keys(vector, {"parts"}, f"valid codec vector {family}")
+                        self.assertEqual(raw, _encode_codec(family, vector["parts"]))
+                    else:
+                        invalid_count += 1
+                        self._require_keys(vector, {"reason"}, f"invalid codec vector {family}")
+                        self.assertIsInstance(vector["reason"], str)
+                        self.assertTrue(vector["reason"])
+                        all_reasons.add(vector["reason"])
+                self.assertGreaterEqual(valid_count, 2)
+                self.assertGreaterEqual(invalid_count, 2)
+                self.assertTrue(any("terminal" in vector["name"] for vector in vectors))
+
+        self.assertTrue(
             {
-                "Success": 0,
-                "AlreadyExists": 1,
-                "NotFound": 2,
-                "InvalidOptions": 3,
-                "IncompatibleLayout": 4,
-                "UnsupportedPlatform": 5,
-                "InsufficientCapacity": 6,
-                "AccessDenied": 7,
-                "MappingFailed": 8,
-                "StoreBusy": 9,
-                "OperationCanceled": 10,
-            },
-            self.manifest["status_values"]["store_open_status"],
-        )
-        self.assertEqual(
-            {
-                "Success": 0,
-                "DuplicateKey": 1,
-                "NotFound": 2,
-                "KeyTooLarge": 3,
-                "ValueTooLarge": 4,
-                "DescriptorTooLarge": 5,
-                "StoreFull": 6,
-                "LeaseTableFull": 7,
-                "InvalidLease": 8,
-                "LeaseAlreadyReleased": 9,
-                "RemovePending": 10,
-                "UnsupportedPlatform": 11,
-                "StoreDisposed": 12,
-                "CorruptStore": 13,
-                "AccessDenied": 14,
-                "UnknownFailure": 15,
-                "InvalidReservation": 16,
-                "ReservationIncomplete": 17,
-                "ReservationAlreadyCompleted": 18,
-                "ReservationWriteOutOfRange": 19,
-                "InvalidKey": 20,
-                "StoreBusy": 21,
-                "OperationCanceled": 22,
-            },
-            self.manifest["status_values"]["store_status"],
+                "reserved_bits_nonzero",
+                "zero_generation",
+                "out_of_range",
+                "invalid_state",
+                "invalid_owner",
+            }.issubset(all_reasons)
         )
 
-    def test_every_fnv1a_vector(self) -> None:
-        specification = self.manifest["fnv1a_64"]
-        self.assertEqual(0xCBF29CE484222325, int(specification["offset_basis_hex"], 16))
-        self.assertEqual(0x00000100000001B3, int(specification["prime_hex"], 16))
-        names: set[str] = set()
-        for vector in specification["vectors"]:
+    def test_sizing_limits_and_every_valid_and_invalid_vector_are_executable(self) -> None:
+        sizing = self.manifest["sizing"]
+        self._require_keys(sizing, {"limits", "valid_vectors", "invalid_vectors"}, "sizing")
+        self.assertEqual(
+            {
+                "slot_count": {"min": 1, "max": MAXIMUM_SLOT_COUNT},
+                "participant_record_count": {
+                    "min": 1,
+                    "max": MAXIMUM_PARTICIPANT_COUNT,
+                },
+                "lease_record_count": {"min": 1},
+                "max_key_bytes": {"min": 1},
+                "max_descriptor_bytes": {"min": 0},
+                "max_value_bytes": {"min": 1},
+            },
+            sizing["limits"],
+        )
+        self.assertGreaterEqual(len(sizing["valid_vectors"]), 4)
+        for vector in sizing["valid_vectors"]:
             with self.subTest(vector=vector["name"]):
-                self.assertNotIn(vector["name"], names)
-                names.add(vector["name"])
-                value = bytes.fromhex(vector["bytes_hex"])
-                self.assertEqual(bool(value), vector["valid_store_key"])
-                self.assertEqual(16, len(vector["expected_hash_hex"]))
-                self.assertEqual(
-                    int(vector["expected_hash_hex"], 16),
-                    _fnv1a_64(value),
-                )
-
-    def test_every_successful_layout_vector(self) -> None:
-        names: set[str] = set()
-        for vector in self.manifest["layout_calculation"]["vectors"]:
-            with self.subTest(vector=vector["name"]):
-                self.assertNotIn(vector["name"], names)
-                names.add(vector["name"])
                 self.assertEqual(vector["expected"], _calculate_layout(**vector["input"]))
 
-    def test_every_layout_error_vector(self) -> None:
-        error_types = {
+        errors = {
             "invalid_argument": LayoutInvalidArgument,
             "arithmetic_overflow": LayoutArithmeticOverflow,
         }
-        names: set[str] = set()
-        for vector in self.manifest["layout_calculation"]["error_vectors"]:
+        observed_errors: set[str] = set()
+        self.assertGreaterEqual(len(sizing["invalid_vectors"]), 8)
+        for vector in sizing["invalid_vectors"]:
             with self.subTest(vector=vector["name"]):
-                self.assertNotIn(vector["name"], names)
-                names.add(vector["name"])
-                expected_error = vector["expected_error"]
-                self.assertIn(expected_error, error_types)
-                with self.assertRaises(error_types[expected_error]):
+                expected_error = vector["error"]
+                observed_errors.add(expected_error)
+                with self.assertRaises(errors[expected_error]):
                     _calculate_layout(**vector["input"])
+        self.assertEqual(set(errors), observed_errors)
 
-    def test_every_offline_mapped_region_fixture_and_snapshot(self) -> None:
-        expected_names = {
-            "empty",
-            "published",
-            "pending-reservation",
-            "pending-removal",
-            "reused-slot",
-        }
-        fixtures = self.manifest["mapped_region_fixtures"]
-        self.assertEqual(expected_names, {fixture["name"] for fixture in fixtures})
+    def test_hash_and_exact_key_vectors_cover_binary_keys_and_collisions(self) -> None:
+        self._require_keys(
+            self.manifest,
+            {"hash_vectors", "exact_key_vectors"},
+            "manifest",
+        )
+        vectors = self.manifest["hash_vectors"]
+        self.assertGreaterEqual(len(vectors), 6)
+        self.assertEqual(len(vectors), len({vector["name"] for vector in vectors}))
+        for vector in vectors:
+            value = bytes.fromhex(vector["bytes_hex"])
+            self.assertEqual(value.hex(), vector["bytes_hex"])
+            self.assertEqual(f"{_fnv1a_64(value):016x}", vector["expected_hash_hex"])
+            self.assertEqual(bool(value), vector["valid_store_key"])
+        self.assertTrue(any("00" in vector["bytes_hex"] for vector in vectors))
+        self.assertTrue(
+            any(any(byte >= 0x80 for byte in bytes.fromhex(vector["bytes_hex"])) for vector in vectors)
+        )
 
+        exact_vectors = self.manifest["exact_key_vectors"]
+        self.assertGreaterEqual(len(exact_vectors), 3)
+        collision_seen = False
+        for vector in exact_vectors:
+            left = bytes.fromhex(vector["left_hex"])
+            right = bytes.fromhex(vector["right_hex"])
+            shared_hash = int(vector["shared_hash_hex"], 16)
+            self.assertEqual(f"{shared_hash:016x}", vector["shared_hash_hex"])
+            self.assertEqual(left == right, vector["equal"])
+            collision_seen |= left != right
+        self.assertTrue(collision_seen, "At least one distinct-key shared-hash vector is required.")
+
+    def test_windows_and_linux_resource_name_vectors_match_protocol_two_identity(self) -> None:
+        self._require_keys(self.manifest, {"resource_name_vectors"}, "manifest")
+        vectors = self.manifest["resource_name_vectors"]
+        self.assertEqual({"windows", "linux"}, set(vectors))
+        self.assertGreaterEqual(len(vectors["windows"]), 4)
+        self.assertGreaterEqual(len(vectors["linux"]), 4)
+        for vector in vectors["windows"]:
+            expected = _derive_windows_resource(vector["public_name"])
+            self.assertEqual(expected["region_name"], vector["region_name"])
+            self.assertEqual(
+                expected["synchronization_name"],
+                vector["synchronization_name"],
+            )
+        for vector in vectors["linux"]:
+            expected = _derive_linux_resource(vector["public_name"])
+            self.assertEqual(expected["sha256_prefix_hex"], vector["sha256_prefix_hex"])
+            self.assertEqual(expected["fragment"], vector["fragment"])
+            self.assertEqual(expected["files"], vector["files"])
+            owner_token = vector["owner_token"]
+            self.assertEqual(32, len(owner_token))
+            self.assertEqual(owner_token, f"{int(owner_token, 16):032x}")
+            owners = expected["files"]["owners"]
+            self.assertEqual(
+                f"{owners}.anchor.{owner_token}",
+                vector["owner_anchor"],
+            )
+            self.assertEqual(
+                f"{owners}.released.{owner_token}.ready",
+                vector["release_marker"],
+            )
+
+    def test_open_mode_assignments_are_exact(self) -> None:
+        self._require_keys(self.manifest, {"open_modes"}, "manifest")
+        self.assertEqual(EXPECTED_OPEN_MODES, self.manifest["open_modes"])
+
+    def test_public_status_assignments_are_complete_and_exact(self) -> None:
+        self._require_keys(self.manifest, {"statuses"}, "manifest")
+        self.assertEqual(
+            {"open": EXPECTED_OPEN_STATUSES, "operation": EXPECTED_OPERATION_STATUSES},
+            self.manifest["statuses"],
+        )
+
+    def test_all_nine_mapped_fixtures_are_integrity_checked_and_offline_only(self) -> None:
+        self._require_keys(self.manifest, {"offline_fixtures"}, "manifest")
+        fixtures = self.manifest["offline_fixtures"]
+        self.assertEqual(EXPECTED_OFFLINE_STATES, {fixture["state"] for fixture in fixtures})
+        fixture_root = MANIFEST_PATH.parent.resolve()
         for fixture in fixtures:
-            with self.subTest(fixture=fixture["name"]):
-                self.assertTrue(fixture["offline_only"])
-                binary_path = MANIFEST_PATH.parent / fixture["binary_file"]
-                snapshot_path = MANIFEST_PATH.parent / fixture["snapshot_file"]
-                region = binary_path.read_bytes()
+            with self.subTest(state=fixture["state"]):
+                self._require_keys(
+                    fixture,
+                    {
+                        "state",
+                        "binary_path",
+                        "snapshot_path",
+                        "byte_length",
+                        "binary_sha256_hex",
+                        "snapshot_sha256_hex",
+                        "offline_only",
+                    },
+                    f"offline fixture {fixture['state']}",
+                )
+                self.assertIs(fixture["offline_only"], True)
+                binary_path = (fixture_root / fixture["binary_path"]).resolve()
+                snapshot_path = (fixture_root / fixture["snapshot_path"]).resolve()
+                self.assertTrue(binary_path.is_relative_to(fixture_root))
+                self.assertTrue(snapshot_path.is_relative_to(fixture_root))
+                binary = binary_path.read_bytes()
                 snapshot_bytes = snapshot_path.read_bytes()
-
-                self.assertEqual(fixture["byte_length"], len(region))
+                self.assertEqual(fixture["byte_length"], len(binary))
                 self.assertEqual(
-                    fixture["binary_sha256_hex"], hashlib.sha256(region).hexdigest()
+                    fixture["binary_sha256_hex"],
+                    hashlib.sha256(binary).hexdigest(),
                 )
                 self.assertEqual(
                     fixture["snapshot_sha256_hex"],
                     hashlib.sha256(snapshot_bytes).hexdigest(),
                 )
+                self.assertEqual(b"SMS2", binary[:4])
+                self.assertEqual((2, 0, 512), struct.unpack_from("<HHi", binary, 4))
 
                 snapshot = json.loads(snapshot_bytes)
+                self.assertIs(snapshot["offline_only"], True)
+                self.assertEqual(fixture["state"], snapshot["state"])
                 self.assertEqual(
-                    snapshot,
-                    _normalize_mapped_region(fixture["name"], region),
-                )
-
-    def test_every_resource_name_vector(self) -> None:
-        specification = self.manifest["resource_naming"]
-        self.assertEqual(1, specification["version"])
-        self.assertEqual("0700", specification["linux_directory_mode_octal"])
-        self.assertEqual("0600", specification["linux_file_mode_octal"])
-        names: set[str] = set()
-        linux_fragments: set[str] = set()
-        for vector in specification["vectors"]:
-            with self.subTest(vector=vector["name"]):
-                self.assertNotIn(vector["name"], names)
-                names.add(vector["name"])
-                derived = _derive_resource_names(vector["public_name"])
-                self.assertEqual(vector["utf16_code_units"], derived.pop("utf16_code_units"))
-                self.assertLessEqual(
-                    vector["utf16_code_units"],
-                    specification["maximum_public_name_utf16_code_units"],
-                )
-                self.assertEqual(vector["expected"], derived)
-                fragment = vector["expected"]["linux_fragment"]
-                self.assertNotIn(fragment, linux_fragments)
-                linux_fragments.add(fragment)
-                readable = fragment.removeprefix("sms-").rsplit("-", 1)[0]
-                self.assertLessEqual(
-                    len(_utf16_code_units(readable)),
-                    specification["maximum_linux_readable_utf16_code_units"],
+                    {
+                        "layout_major": 2,
+                        "layout_minor": 0,
+                        "resource_protocol": 2,
+                        "required_features": 7,
+                        "optional_features": 0,
+                    },
+                    snapshot["protocol"],
                 )
 
 

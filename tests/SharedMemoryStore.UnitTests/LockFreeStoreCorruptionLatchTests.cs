@@ -255,7 +255,7 @@ public sealed unsafe class LockFreeStoreCorruptionLatchTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode mode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 8,

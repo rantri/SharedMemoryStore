@@ -419,7 +419,7 @@ public sealed class LockFreeOsTraceIntegrationTests
     private static MemoryStore CreateStore(string name)
     {
         StoreOpenStatus status = MemoryStore.TryCreateOrOpen(
-            SharedMemoryStoreOptions.CreateLockFree(
+            SharedMemoryStoreOptions.Create(
                 name,
                 SlotCount,
                 MaxValueBytes,

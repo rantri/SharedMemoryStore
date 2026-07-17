@@ -18,11 +18,6 @@ internal static class LockFreeInstrumentedStoreFactory
         out MemoryStore? store)
     {
         store = null;
-        if (options.Profile != StoreProfile.LockFree)
-        {
-            return StoreOpenStatus.InvalidOptions;
-        }
-
         StoreOpenStatus validation = SharedMemoryStoreOptionsValidator.Validate(options, out _);
         if (validation != StoreOpenStatus.Success)
         {

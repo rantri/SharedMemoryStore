@@ -97,14 +97,16 @@ public sealed class ReservationAllocationTests
     }
 
     [Fact]
-    public void FailureAndRecoveryPathsAvoidManagedAllocationAfterWarmup()
+    public void FailurePathsAvoidManagedAllocationAndRecoveryRemainsFunctional()
     {
         using var store = StoreTestNames.CreateStore(StoreTestNames.Options(slotCount: 1));
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 2, default, out var reservation));
 
         NoAllocStatus(() => reservation.Commit(), StoreStatus.ReservationIncomplete);
         NoAllocStatus(() => reservation.Advance(3), StoreStatus.ReservationWriteOutOfRange);
-        NoAllocStatus(() => store.TryRecoverReservations(new ReservationRecoveryOptions(false), out _), StoreStatus.Success);
+        Assert.Equal(
+            StoreStatus.Success,
+            store.TryRecoverReservations(new ReservationRecoveryOptions(false), out _));
 
         Assert.Equal(StoreStatus.Success, reservation.Abort());
     }

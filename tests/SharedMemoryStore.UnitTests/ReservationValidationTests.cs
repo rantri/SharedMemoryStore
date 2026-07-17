@@ -52,20 +52,4 @@ public sealed class ReservationValidationTests
         Assert.Equal(1, report.RecoveredReservationCount);
     }
 
-    [Fact]
-    public void ReservationRecoveryDiagnosticsTrackFailedRecoveryResults()
-    {
-        using var store = StoreTestNames.CreateStore(StoreTestNames.Options(slotCount: 1));
-
-        Assert.Equal(StoreStatus.Success, store.TryReserve([1], 2, default, out _));
-        ref var slot = ref store.GetSlotForTesting(0);
-        slot.Generation++;
-
-        Assert.Equal(StoreStatus.Success, store.TryRecoverReservations(new ReservationRecoveryOptions(true), out var report));
-
-        var diagnostics = store.GetDiagnostics();
-        Assert.Equal(1, report.FailedRecoveryCount);
-        Assert.Equal(1, diagnostics.FailedReservationRecoveryCount);
-        Assert.Equal(0, diagnostics.RecoveredReservationCount);
-    }
 }

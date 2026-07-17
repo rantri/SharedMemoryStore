@@ -7,7 +7,7 @@ public sealed class LockFreePublishAllocationTests
     [Fact]
     public void RetainedMemoryManagersAreSparseAndSpanOnlyHandlesCreateNone()
     {
-        using var store = CreateLockFreeStore(slotCount: 257);
+        using var store = CreateStore(slotCount: 257);
         object engine = typeof(MemoryStore)
             .GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(store)!;
@@ -36,7 +36,7 @@ public sealed class LockFreePublishAllocationTests
     [Fact]
     public void WarmReservationAbortAndReuseAllocateZeroBytes()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
         var key = new byte[] { 1 };
 
         // Cross the tiered-PGO promotion threshold before measuring; otherwise
@@ -61,7 +61,7 @@ public sealed class LockFreePublishAllocationTests
     [Fact]
     public void WarmDuplicateReservationAndPublicationFailuresAllocateZeroBytes()
     {
-        using var store = CreateLockFreeStore(slotCount: 2);
+        using var store = CreateStore(slotCount: 2);
         var key = new byte[] { 1 };
         var value = new byte[] { 2 };
         Assert.Equal(StoreStatus.Success, store.TryReserve(key, 1, default, out var owner));
@@ -88,7 +88,7 @@ public sealed class LockFreePublishAllocationTests
     [Fact]
     public void WarmInvalidIncompleteAndStaleReservationFailuresAllocateZeroBytes()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 2, default, out var pending));
 
         for (var index = 0; index < 1_000; index++)
@@ -135,12 +135,12 @@ public sealed class LockFreePublishAllocationTests
 
         // Warm every direct-ingest method in a disposable store. Span-only
         // direct ingest does not require retained-memory manager creation.
-        using (var warmup = CreateLockFreeStore(slotCount: 1))
+        using (var warmup = CreateStore(slotCount: 1))
         {
             CommitOne(warmup, 1);
         }
 
-        using var store = CreateLockFreeStore(slotCount: SlotCount);
+        using var store = CreateStore(slotCount: SlotCount);
         CollectGarbage();
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var index = 0; index < SlotCount; index++)
@@ -178,9 +178,9 @@ public sealed class LockFreePublishAllocationTests
         RequireStatus(StoreStatus.Success, reservation.Commit());
     }
 
-    private static MemoryStore CreateLockFreeStore(int slotCount)
+    private static MemoryStore CreateStore(int slotCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-publish-allocation-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 8,
@@ -193,7 +193,7 @@ public sealed class LockFreePublishAllocationTests
         var status = MemoryStore.TryCreateOrOpen(options, out var store);
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<MemoryStore>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         return result;
     }
 

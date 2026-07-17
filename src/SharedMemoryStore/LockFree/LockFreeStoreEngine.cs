@@ -5,7 +5,6 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using SharedMemoryStore.Engines;
 using SharedMemoryStore.Interop;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 
 namespace SharedMemoryStore.LockFree;
@@ -134,7 +133,6 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
         _reservationMemory = new LockFreeReservationMemory(region, layout, _slots);
         _recoveryEnabled = recoveryEnabled;
         _protocolInfo = new StoreProtocolInfo(
-            StoreProfile.LockFree,
             LayoutV2Constants.LayoutMajorVersion,
             LayoutV2Constants.LayoutMinorVersion,
             LayoutV2Constants.ResourceProtocolVersion,
@@ -147,8 +145,6 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
             telemetry,
             storeControl);
     }
-
-    public StoreProfile Profile => StoreProfile.LockFree;
 
     public StoreProtocolInfo ProtocolInfo => _protocolInfo;
 
@@ -2533,7 +2529,7 @@ internal sealed unsafe class LockFreeStoreEngine<TCheckpoint> : IStoreEngine, IL
             return 0;
         }
 
-        return SharedMemoryStore.Leasing.LeaseOwnerClassifier.TryObserveLinuxPidNamespaceId(
+        return ParticipantOwnerClassifier.TryObserveLinuxPidNamespaceId(
                 Environment.ProcessId,
                 out ulong pidNamespaceId)
             ? pidNamespaceId

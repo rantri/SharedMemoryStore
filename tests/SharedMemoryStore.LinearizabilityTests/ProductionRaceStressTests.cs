@@ -756,7 +756,6 @@ public sealed class ProductionRaceStressTests
     {
         var options = new SharedMemoryStoreOptions
         {
-            Profile = source.Profile,
             Name = source.Name,
             OpenMode = openMode,
             TotalBytes = source.TotalBytes,
@@ -783,7 +782,7 @@ public sealed class ProductionRaceStressTests
         int leaseCount,
         OpenMode openMode,
         bool enableLeaseRecovery = false) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             $"sms-sc011-{family}-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 8,

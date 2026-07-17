@@ -402,7 +402,7 @@ public sealed class LockFreeConflictCleanupAndAtomicAbortTests
     private static MemoryStore CreateStore(string suffix)
     {
         StoreOpenStatus status = MemoryStore.TryCreateOrOpen(
-            SharedMemoryStoreOptions.CreateLockFree(
+            SharedMemoryStoreOptions.Create(
                 $"sms-v2-conflict-abort-{suffix}-{Guid.NewGuid():N}",
                 slotCount: 1,
                 maxValueBytes: 1,

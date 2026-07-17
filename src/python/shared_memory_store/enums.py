@@ -28,6 +28,7 @@ class StoreOpenStatus(IntEnum):
     MAPPING_FAILED = 8
     STORE_BUSY = 9
     OPERATION_CANCELED = 10
+    PARTICIPANT_TABLE_FULL = 11
 
 
 

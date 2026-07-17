@@ -142,7 +142,7 @@ public sealed class LockFreeRemoveContractTests
         int maxKeyBytes = 8)
     {
         string name = $"sms-v2-remove-contract-{Guid.NewGuid():N}";
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 64,

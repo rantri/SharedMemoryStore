@@ -1,6 +1,5 @@
 using System.Threading;
 using SharedMemoryStore.Engines;
-using SharedMemoryStore.Layout;
 
 namespace SharedMemoryStore.Diagnostics;
 
@@ -64,62 +63,11 @@ internal sealed class StoreDiagnostics
         AddPositive(ref _failedReservationRecoveryCount, failedCount);
     }
 
-    public DiagnosticsSnapshot CreateSnapshot(
-        long totalBytes,
-        int slotCount,
-        int freeSlotCount,
-        int publishedSlotCount,
-        int pendingRemovalCount,
-        int activeReservationCount,
-        int activeLeaseCount,
-        IndexStateCounts indexState,
-        long indexCompactionCount)
-    {
-        Span<long> counts = stackalloc long[_failureCounts.Length];
-        for (var i = 0; i < counts.Length; i++)
-        {
-            counts[i] = Volatile.Read(ref _failureCounts[i]);
-        }
-
-        return new DiagnosticsSnapshot(
-            totalBytes,
-            slotCount,
-            freeSlotCount,
-            publishedSlotCount,
-            pendingRemovalCount,
-            activeLeaseCount,
-            activeReservationCount,
-            Volatile.Read(ref _abortedReservationCount),
-            Volatile.Read(ref _recoveredLeaseCount),
-            Volatile.Read(ref _activeLeaseRecoveryCount),
-            Volatile.Read(ref _unsupportedLeaseRecoveryCount),
-            Volatile.Read(ref _failedLeaseRecoveryCount),
-            Volatile.Read(ref _recoveredReservationCount),
-            Volatile.Read(ref _activeReservationRecoveryCount),
-            Volatile.Read(ref _unsupportedReservationRecoveryCount),
-            Volatile.Read(ref _failedReservationRecoveryCount),
-            Volatile.Read(ref _capacityPressureCount),
-            indexState.EntryCount,
-            indexState.OccupiedCount,
-            indexState.TombstoneCount,
-            indexState.EmptyCount,
-            indexState.UsableCapacity,
-            indexState.LastObservedProbeLength,
-            indexState.MaxObservedProbeLength,
-            indexCompactionCount,
-            (StoreStatus)Volatile.Read(ref _lastFailureStatus),
-            counts,
-            StoreProfile.Legacy,
-            new StoreProtocolInfo(StoreProfile.Legacy, 1, 2, 1, 0, 0),
-            default);
-    }
-
     /// <summary>
     /// Combines profile-neutral local counters with a bounded engine snapshot.
     /// No correctness decision may depend on the resulting cross-instant view.
     /// </summary>
     internal DiagnosticsSnapshot CreateSnapshot(
-        StoreProfile profile,
         StoreProtocolInfo protocolInfo,
         in EngineMetrics metrics)
     {
@@ -149,15 +97,12 @@ internal sealed class StoreDiagnostics
             Volatile.Read(ref _capacityPressureCount),
             metrics.IndexEntryCount,
             metrics.OccupiedIndexEntryCount,
-            metrics.TombstoneIndexEntryCount,
             metrics.EmptyIndexEntryCount,
             metrics.UsableIndexCapacity,
             metrics.LastObservedProbeLength,
             metrics.MaxObservedProbeLength,
-            metrics.IndexCompactionCount,
             (StoreStatus)Volatile.Read(ref _lastFailureStatus),
             counts,
-            profile,
             protocolInfo,
             metrics);
     }

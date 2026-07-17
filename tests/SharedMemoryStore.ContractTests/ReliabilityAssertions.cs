@@ -12,11 +12,4 @@ internal static class ReliabilityAssertions
         var exception = Record.Exception(operation);
         Assert.Null(exception);
     }
-
-    public static void AssertIndexHealthAddsUp(DiagnosticsSnapshot snapshot)
-    {
-        Assert.Equal(
-            snapshot.IndexEntryCount,
-            snapshot.OccupiedIndexEntryCount + snapshot.TombstoneIndexEntryCount + snapshot.EmptyIndexEntryCount);
-    }
 }

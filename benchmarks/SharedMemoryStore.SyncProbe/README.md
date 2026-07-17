@@ -5,10 +5,9 @@ raw JSON; it is not a BenchmarkDotNet microbenchmark.
 
 ## Evidence semantics
 
-Report schema v8 requires a v8-aware reader for qualification. Existing JSON
-property names remain present so older readers may parse or archive the report,
-but schemas v3-v7 interpreted completion targets globally and therefore cannot
-safely qualify the profile-aware rows. `MinimumCompatibleSchemaVersion` is 8,
+Report schema v9 is SMS2-only and requires a v9-aware qualification reader.
+`Configuration.Protocol`, every run, and every summary identify `Sms2`; there
+is no retired-protocol row or selector. `MinimumCompatibleSchemaVersion` is 9,
 and `SchemaCompatibility` states this contract in every report.
 
 `Environment` records the repository commit and clean/dirty state plus SHA-256
@@ -19,11 +18,11 @@ portable processor model, logical and physical processor counts, and total host
 memory; `Configuration.ScenarioStoreDimensions` binds every selected scenario
 to its exact slot/value/descriptor/key/lease/participant dimensions.
 
-Schema v8 records `Configuration.CountBoundProfiles` and each run's
-`OperationTarget` and `FrameTarget`. Qualification uses duration-bound Legacy
-comparison rows and applies the 100-million mixed-operation and 100,000-frame
-durability targets only to the lock-free profile. Standalone probes preserve the
-previous behavior by defaulting `--count-bound-profiles` to `both`.
+Schema v9 records each run's `OperationTarget` and `FrameTarget`. Completion
+policy is scenario-owned: `mixed-churn` uses the configured operation target,
+`large-ingest` uses the configured frame target, and ordinary SMS2 scenarios
+remain duration-bound. No command-line protocol selector or comparison policy
+is accepted.
 `Configuration.DurationBoundGraceSeconds` records the controller watchdog grace;
 `--duration-bound-grace` configures it. A duration-bound trial gets one hard
 deadline covering store creation, warm-up, measurement, worker collection, and
@@ -43,8 +42,7 @@ one option or an invalid commit/state is an error. Qualification still compares
 the report with clean start and completion provenance and the fresh assembly
 manifest, so the injected pair is not accepted on trust.
 
-`FullPayloadCopies` is retained for schema compatibility. A zero in that legacy
-field is not, by itself, a measured copy count. Consumers must also inspect:
+`FullPayloadCopies` is not, by itself, a measured copy count. Consumers must also inspect:
 
 - `FullPayloadCopyCountIsInstrumented`
 - `FullPayloadCopyEvidenceKind`
@@ -65,8 +63,8 @@ Broker allocation evidence has two scopes:
 
 ## Tiny-operation topology and latency sampling
 
-The synchronization scenarios use one deterministic catalog for both store
-profiles. Each of the 12 supported workers owns two keys and alternates between
+The synchronization scenarios use one deterministic SMS2 key catalog. Each of
+the 12 supported workers owns two keys and alternates between
 them by cycle. Both keys for worker `i` have canonical bucket `i` in the
 16-bucket directory used by the 32-slot synchronization store. Configuration
 records the key count per worker, maximum worker count, canonical bucket count,
@@ -93,7 +91,7 @@ spill/occupancy/scan diagnostics in `StickyOverflow`.
 
 ```powershell
 dotnet run -c Release --project benchmarks/SharedMemoryStore.SyncProbe -- `
-  --mode overflow --profile v2 --overflow-slot-count 4096 `
+  --mode overflow --overflow-slot-count 4096 `
   --overflow-churn-cycles 10000 --overflow-missing-samples 16384 `
   --trials 3 --output artifacts/sticky-overflow.json
 ```

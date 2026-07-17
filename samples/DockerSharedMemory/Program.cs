@@ -42,6 +42,7 @@ static SharedMemoryStoreOptions Options(string storeName, OpenMode mode)
         maxDescriptorBytes: 32,
         maxKeyBytes: 32,
         leaseRecordCount: 8,
+        participantRecordCount: 16,
         openMode: mode,
         enableLeaseRecovery: true);
 }

@@ -1,132 +1,145 @@
-# Getting Started
+# Getting started
 
-This guide selects one of the .NET, native C++, or Python distributions and
-gets a clean consumer to a complete create/open, publish, acquire, release,
-remove, and close workflow. Layout `1.2` and resource naming `1` remain the
-cross-runtime boundary. The managed package additionally supports explicit C#
-layout `2.0`/resource protocol `2`; native and Python clients reject that layout.
+Choose the language package that fits the caller. The .NET, C++, and Python
+surfaces are independently versioned, but all of them create and read the same
+SMS2 layout `2.0` and resource protocol `2`.
+
+| Caller | Distribution | Current version | Primary store type |
+|---|---|---:|---|
+| C# | NuGet `SharedMemoryStore` | `3.0.0` | `MemoryStore` |
+| C++ | CMake `SharedMemoryStore` | `1.0.0` | `shared_memory_store::memory_store` |
+| Python | wheel `shared-memory-store` | `1.0.0` | `shared_memory_store.MemoryStore` |
+
+The native and Python packages use C ABI `2.0`. Package versions do not select
+the mapped layout.
 
 ## Prerequisites
 
-- .NET SDK compatible with `net10.0` for the managed package and cross-runtime
-  orchestration.
-- CMake 3.20 or newer and a C++20 compiler for the native distribution.
-- Python 3.10 or newer plus a PEP 517 build frontend for a source wheel build.
-- PowerShell 7 (`pwsh`) for repository validation scripts.
-- Linux or Windows for ordinary runtime and development workflows.
-- Docker Engine or Docker Desktop only when validating same-host container
-  sharing.
+- Windows x64 or Linux x64 on a little-endian host.
+- .NET SDK compatible with `net10.0` for C#.
+- CMake 3.20+ and a C++20 compiler for C++ or a source-built Python wheel.
+- Python 3.10+ and a PEP 517 frontend such as `build` for Python packaging.
+- All processes that share a public store name must use identical capacity and
+  recovery options.
 
-The managed package version is `2.0.0`; the native and Python distributions are
-independently versioned `0.1.0`. If an artifact has not been published to its
-ecosystem feed, build it locally from the repository.
+Every successful handle reports protocol identity `(2, 0, 2, 7, 0)`:
+layout major/minor, resource protocol, required features, optional features.
 
-| Consumer | Artifact | Public entry point |
-|----------|----------|--------------------|
-| .NET | NuGet `SharedMemoryStore` `2.0.0` | `MemoryStore` |
-| C++ | CMake `SharedMemoryStore` `0.1.0` | `shared_memory_store::memory_store` |
-| Python | wheel `shared-memory-store` `0.1.0` | `shared_memory_store.MemoryStore` |
+## C#
 
-## .NET: Create a Local Package Source
+Install the package:
 
 ```powershell
-dotnet pack src/SharedMemoryStore/SharedMemoryStore.csproj -c Release -o artifacts/package
+dotnet new console -n SmsQuickstart
+dotnet add SmsQuickstart package SharedMemoryStore --version 3.0.0
 ```
 
-Create a clean consumer project:
-
-```powershell
-dotnet new console -f net10.0 -n SharedMemoryStore.Tryout -o artifacts/tryout
-dotnet add artifacts/tryout/SharedMemoryStore.Tryout.csproj package SharedMemoryStore --source artifacts/package
-```
-
-## .NET Minimal Workflow
-
-Replace `artifacts/tryout/Program.cs` with this program:
+Use ordinary participant-aware creation:
 
 ```csharp
 using SharedMemoryStore;
 
-var options = new SharedMemoryStoreOptions
-{
-    Name = $"sms-start-{Guid.NewGuid():N}",
-    OpenMode = OpenMode.CreateOrOpen,
-    SlotCount = 2,
-    MaxValueBytes = 64,
-    MaxDescriptorBytes = 16,
-    MaxKeyBytes = 16,
-    LeaseRecordCount = 4,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, 64, 16, 16, 4)
-};
+SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
+    "quickstart",
+    slotCount: 16,
+    maxValueBytes: 4096,
+    maxDescriptorBytes: 64,
+    maxKeyBytes: 64,
+    leaseRecordCount: 32,
+    participantRecordCount: 8,
+    openMode: OpenMode.CreateOrOpen,
+    enableLeaseRecovery: true);
 
-var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
-Console.WriteLine(openStatus);
-if (openStatus != StoreOpenStatus.Success || store is null)
+StoreOpenStatus open = MemoryStore.TryCreateOrOpen(options, out MemoryStore? store);
+if (open != StoreOpenStatus.Success || store is null)
 {
-    return 1;
+    throw new InvalidOperationException($"Open failed: {open}");
 }
 
 using (store)
 {
-    var key = new byte[] { 1, 2, 3 };
-    Console.WriteLine(store.TryPublish(key, [4, 5, 6], [9]));
-    Console.WriteLine(store.TryAcquire(key, out var lease));
-    Console.WriteLine(lease.ValueLength);
-    Console.WriteLine(lease.Release());
+    byte[] key = "frame-1"u8.ToArray();
+    byte[] value = [1, 0, 2, 0, 3];
+
+    StoreStatus publish = store.TryPublish(key, value);
+    if (publish != StoreStatus.Success)
+    {
+        throw new InvalidOperationException($"Publish failed: {publish}");
+    }
+
+    StoreStatus acquire = store.TryAcquire(key, out ValueLease lease);
+    if (acquire != StoreStatus.Success)
+    {
+        throw new InvalidOperationException($"Acquire failed: {acquire}");
+    }
+
+    using (lease)
+    {
+        Console.WriteLine(Convert.ToHexString(lease.ValueSpan));
+    }
+
     Console.WriteLine(store.TryRemove(key));
-    Console.WriteLine(store.TryPublish(key, [7]));
+    Console.WriteLine(store.ProtocolInfo);
+}
+```
+
+Run the repository sample with:
+
+```powershell
+dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release
+```
+
+## C++
+
+Configure, build, and install the package from a checkout:
+
+```powershell
+cmake -S . -B artifacts/native -DSMS_BUILD_TESTS=ON -DSMS_BUILD_SAMPLES=ON -DSMS_INSTALL=ON
+cmake --build artifacts/native --config Release
+ctest --test-dir artifacts/native -C Release --output-on-failure
+cmake --install artifacts/native --config Release --prefix artifacts/native-install
+```
+
+An external consumer uses the installed config package:
+
+```cmake
+find_package(SharedMemoryStore 1.0 CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE SharedMemoryStore::shared_memory_store)
+```
+
+Minimal C++:
+
+```cpp
+#include <shared_memory_store/store.hpp>
+#include <array>
+
+using namespace shared_memory_store;
+
+auto options = store_options::create(
+    "quickstart", 16, 4096, 64, 64, 32, 8,
+    open_mode::create_or_open, true);
+
+memory_store store;
+if (memory_store::try_create_or_open(options, store) != open_status::success) {
+    return 1;
 }
 
-return 0;
+const std::array<std::byte, 2> key{std::byte{1}, std::byte{2}};
+const std::array<std::byte, 3> value{std::byte{3}, std::byte{4}, std::byte{5}};
+if (store.try_publish(key, value) != status::success) return 2;
+
+value_lease lease;
+if (store.try_acquire(key, lease) != status::success) return 3;
+auto view = lease.value();
+return lease.release() == status::success ? 0 : 4;
 ```
 
-Run it:
+The borrowed span ends with the lease lifetime. Explicitly release tokens and
+close stores when the outcome matters; destructors are best-effort cleanup.
 
-```powershell
-dotnet run --project artifacts/tryout/SharedMemoryStore.Tryout.csproj -c Release
-```
+## Python
 
-Expected status path:
-
-```text
-Success
-Success
-Success
-3
-Success
-Success
-Success
-```
-
-## C++: Build and Consume the CMake Package
-
-Build the shared library, dependency-free native tests, and basic sample:
-
-```powershell
-cmake -S . -B artifacts/native-build -DSMS_BUILD_TESTS=ON -DSMS_BUILD_SAMPLES=ON
-cmake --build artifacts/native-build --config Release
-ctest --test-dir artifacts/native-build -C Release --output-on-failure
-cmake --install artifacts/native-build --config Release --prefix artifacts/native-install
-```
-
-The installed package exports `SharedMemoryStore::SharedMemoryStore` for
-`find_package(SharedMemoryStore CONFIG REQUIRED)`. The C++ sample uses
-`store_options::create`, `memory_store::try_create_or_open`, `try_publish`, and
-a move-only `value_lease`:
-
-```powershell
-cmake -S samples/CppBasicUsage -B artifacts/cpp-sample -DCMAKE_PREFIX_PATH=artifacts/native-install
-cmake --build artifacts/cpp-sample --config Release
-```
-
-[`scripts/validate-native.ps1`](../scripts/validate-native.ps1) combines the
-native build, tests, installation, and clean CMake consumer check.
-
-## Python: Build and Install a Wheel
-
-The Python distribution packages the platform native library beside its
-modules. Build a wheel, install it into a clean environment, and run the sample:
+Build and install a wheel into a clean environment:
 
 ```powershell
 python -m pip install build
@@ -136,50 +149,85 @@ artifacts/python-consumer/Scripts/python -m pip install (Get-ChildItem dist/*.wh
 artifacts/python-consumer/Scripts/python samples/PythonBasicUsage/main.py
 ```
 
-On Linux, replace `Scripts/python` with `bin/python`. Installation from a built
-wheel does not require a compiler. Do not run the sample by adding
-`src/python` to `PYTHONPATH`: the package intentionally loads only its adjacent,
-version-checked native library.
+On Linux use `artifacts/python-consumer/bin/python`. The installed package loads
+only its adjacent `shared_memory_store.dll` or `libshared_memory_store.so`; do
+not add `src/python` to `PYTHONPATH` for a package-consumer test.
 
-## Open One Store from Multiple Runtimes
+Minimal Python:
 
-Processes interoperate only when they run on the same supported host and use
-the same public store name, capacities, total mapped bytes, layout version, and
-resource-naming rules. Keep the creator alive while a second runtime opens with
-the equivalent `OpenExisting` mode. Keys, descriptors, and payloads are opaque
-bytes and must not be converted through text. Use the compatibility metadata in
-[`protocol/compatibility.json`](../protocol/compatibility.json) when combining
-independently released versions.
+```python
+from shared_memory_store import MemoryStore, OpenMode, StoreOpenStatus, StoreOptions, StoreStatus
 
-The test-only JSON-lines agents and ordered-pair suite live under
-[`tests/SharedMemoryStore.InteropTests/`](../tests/SharedMemoryStore.InteropTests/).
-Their presence does not replace per-platform release evidence.
+options = StoreOptions.create(
+    "quickstart",
+    slot_count=16,
+    max_value_bytes=4096,
+    max_descriptor_bytes=64,
+    max_key_bytes=64,
+    lease_record_count=32,
+    participant_record_count=8,
+    open_mode=OpenMode.CREATE_OR_OPEN,
+    enable_lease_recovery=True,
+)
 
-## Next Steps
+opened, store = MemoryStore.open(options)
+if opened is not StoreOpenStatus.SUCCESS or store is None:
+    raise RuntimeError(f"open failed: {opened}")
 
-- Use [Concepts](concepts.md) for the package vocabulary before advanced
-  workflows.
-- Use [Byte encoding](byte-encoding.md) when replacing sample byte literals
-  with application string, integer, GUID, descriptor, or payload conventions.
-- Use [Usage](usage.md) for the full consumer workflow.
-- Use [Examples](examples.md) for basic values, frame-shaped values, direct
-  ingest, segmented payloads, waits, and diagnostics snippets.
-- Use [Errors](errors.md) when an operation returns a non-success status.
-- Use [Diagnostics](diagnostics.md) to inspect capacity pressure and failure
-  counters.
-- Use [Lifecycle](lifecycle.md) to understand ownership, lease release, removal,
-  stale recovery, and disposal.
-- Use [Samples](samples.md) for the complete runnable sample ladder.
-- Use [Packaging](packaging.md) for native installation, wheel contents, and
-  independent versioning.
-- Use [Portability](portability.md) before mixing runtimes or containers.
-- Use [samples/BasicUsage/README.md](../samples/BasicUsage/README.md) for a
-  runnable repository sample.
-- Use [samples/ZeroCopyIngest/README.md](../samples/ZeroCopyIngest/README.md)
-  for direct reservation and segmented publish workflows.
-- Use [samples/DockerSharedMemory/README.md](../samples/DockerSharedMemory/README.md)
-  when validating same-host Docker container participation.
-- Use [samples/CppBasicUsage/README.md](../samples/CppBasicUsage/README.md) for
-  the native RAII sample.
-- Use [samples/PythonBasicUsage/README.md](../samples/PythonBasicUsage/README.md)
-  for the installed-wheel sample.
+with store:
+    if store.publish(b"frame-1", b"\x01\x00\x02") is not StoreStatus.SUCCESS:
+        raise RuntimeError("publish failed")
+    acquired, lease = store.acquire(b"frame-1")
+    if acquired is not StoreStatus.SUCCESS or lease is None:
+        raise RuntimeError(f"acquire failed: {acquired}")
+    with lease:
+        print(bytes(lease.value))
+```
+
+`memoryview` objects from leases and reservations are zero-copy borrowed views.
+Do not retain direct or derived views after the owning token or store ends.
+
+## Sharing one store across languages
+
+Every participant must agree on:
+
+- public name and `OpenMode` intent;
+- total bytes and every configured capacity;
+- participant-record count;
+- recovery enablement and host namespace assumptions; and
+- the canonical little-endian byte encoding chosen by the application.
+
+The library treats keys, descriptors, and payloads as bytes. It does not encode
+integers, text, schemas, or ownership metadata for the application. Embedded
+NUL bytes are valid.
+
+## Common first-use outcomes
+
+- `AlreadyExists`: `CreateNew` found an existing physical store.
+- `NotFound`: `OpenExisting` found no physical store.
+- `IncompatibleLayout`: an existing mapping or requested capacity does not
+  match SMS2. No payload bytes were projected.
+- `ParticipantTableFull`: every configured participant record is active or not
+  yet safely reusable.
+- `StoreBusy`: the cold open budget or a hot local retry/help budget expired.
+- `UnsupportedPlatform`: the host cannot provide the required mapping, atomic,
+  or owner-classification contract.
+
+See [errors.md](errors.md) for operation statuses and [usage.md](usage.md) for
+reservations, removal, recovery, waits, and disposal.
+
+## Moving a noncurrent deployment
+
+A current client does not convert an existing mapping. Stop writers and
+readers, drain tokens, close every handle, remove or replace the physical store,
+create a fresh SMS2 store, and republish from application-owned authoritative
+data. Use a distinct public name for a side-by-side cutover.
+
+## Next steps
+
+- [Usage](usage.md)
+- [Examples](examples.md)
+- [Diagnostics](diagnostics.md)
+- [Architecture](architecture.md)
+- [Packaging](packaging.md)
+- [Portability](portability.md)

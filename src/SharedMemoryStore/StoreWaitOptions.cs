@@ -4,8 +4,7 @@ using System.Threading;
 namespace SharedMemoryStore;
 
 /// <summary>
-/// Bounds work performed by public store operations. Legacy stores apply the bound to shared
-/// synchronization; lock-free stores apply it to local retry, revalidation, helping, and backoff.
+/// Bounds local retry, revalidation, helping, and backoff performed by public store operations.
 /// </summary>
 /// <param name="Timeout">
 /// Maximum operation wait/work bound, <see cref="TimeSpan.Zero"/> for the minimum safe attempt,
@@ -23,7 +22,7 @@ public readonly record struct StoreWaitOptions(TimeSpan Timeout, CancellationTok
     public static StoreWaitOptions NoWait { get; } = new(TimeSpan.Zero);
 
     /// <summary>
-    /// Gets an unbounded policy for intentional legacy blocking or lock-free local retry.
+    /// Gets an unbounded policy for intentional local retry.
     /// </summary>
     public static StoreWaitOptions Infinite { get; } = new(System.Threading.Timeout.InfiniteTimeSpan);
 

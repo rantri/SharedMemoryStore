@@ -23,13 +23,14 @@ if (open != StoreOpenStatus.Success || producer is null)
 
 using (producer)
 {
-    if (producer.Profile != StoreProfile.LockFree
-        || producer.ProtocolInfo.LayoutMajorVersion != 2
+    if (producer.ProtocolInfo.LayoutMajorVersion != 2
         || producer.ProtocolInfo.LayoutMinorVersion != 0
-        || producer.ProtocolInfo.ResourceProtocolVersion != 2)
+        || producer.ProtocolInfo.ResourceProtocolVersion != 2
+        || producer.ProtocolInfo.RequiredFeatures != 7
+        || producer.ProtocolInfo.OptionalFeatures != 0)
     {
         throw new InvalidOperationException(
-            $"Unexpected profile/protocol: {producer.Profile}, {producer.ProtocolInfo}.");
+            $"Unexpected protocol: {producer.ProtocolInfo}.");
     }
 
     // These channels stand in for an application-owned broker. The store is
@@ -159,7 +160,6 @@ using (producer)
 
     StoreStatus diagnosticsStatus = producer.TryGetDiagnostics(out DiagnosticsSnapshot diagnostics);
     if (diagnosticsStatus != StoreStatus.Success
-        || diagnostics.Profile != StoreProfile.LockFree
         || diagnostics.ProtocolInfo.LayoutMajorVersion != 2)
     {
         throw new InvalidOperationException($"Diagnostics failed: {diagnosticsStatus}.");
@@ -169,7 +169,7 @@ using (producer)
         $"RESULT workers={workerCount} frames={frameCount} processed={processed} "
         + $"workerChecksum={workerChecksum} observerChecksum={observerChecksum} "
         + $"pendingRemove={pending} missing={missing} diagnostics={diagnosticsStatus} "
-        + $"profile={producer.Profile} layout={producer.ProtocolInfo.LayoutMajorVersion}."
+        + $"layout={producer.ProtocolInfo.LayoutMajorVersion}."
         + $"{producer.ProtocolInfo.LayoutMinorVersion} "
         + $"recoveredLeases={leaseRecovery.RecoveredLeaseCount} "
         + $"recoveredReservations={reservationRecovery.RecoveredReservationCount}");
@@ -178,7 +178,7 @@ using (producer)
 return 0;
 
 static SharedMemoryStoreOptions Options(string name, int slotCount, OpenMode mode) =>
-    SharedMemoryStoreOptions.CreateLockFree(
+    SharedMemoryStoreOptions.Create(
         name,
         slotCount,
         maxValueBytes: PayloadBytes,

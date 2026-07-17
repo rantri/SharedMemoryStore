@@ -1,4 +1,3 @@
-using SharedMemoryStore.Engines.LegacyV12;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.LockFree;
 
@@ -6,9 +5,6 @@ namespace SharedMemoryStore.Engines;
 
 internal static class StoreEngineFactory
 {
-    internal static MemoryStore WrapLegacy(MemoryStore legacyCore) =>
-        WrapOwnedEngine(new LegacyV12StoreEngine(legacyCore));
-
     /// <summary>
     /// Transfers one fully constructed engine into the public facade. If facade
     /// initialization throws (including an engine property getter), ownership
@@ -28,7 +24,7 @@ internal static class StoreEngineFactory
         }
     }
 
-    internal static StoreOpenStatus TryCreateLockFreeUnderColdGate(
+    internal static StoreOpenStatus TryCreateUnderColdGate(
         SharedMemoryStoreOptions options,
         StoreWaitOptions waitOptions,
         long waitStartTimestamp,

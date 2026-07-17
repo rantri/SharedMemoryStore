@@ -28,9 +28,26 @@ internal sealed record AgentDefinition(
                 [Path.Combine(repository, "tests", "python", "interop_agent.py")],
                 new Dictionary<string, string?>
                 {
-                    ["PYTHONPATH"] = Path.Combine(repository, "src", "python")
+                    ["PYTHONPATH"] = PythonPackageRoot(repository)
                 }),
             _ => throw new ArgumentOutOfRangeException(nameof(runtime), runtime, "Unknown agent runtime.")
+        };
+    }
+
+    public static AgentDefinition ResolveCheckpoint(string runtime)
+    {
+        AgentDefinition definition = Resolve(runtime);
+        if (runtime != "python")
+        {
+            return definition;
+        }
+
+        string repository = RepositoryRoot();
+        string checkpointLibrary = System.Environment.GetEnvironmentVariable(
+            "SMS_PYTHON_CHECKPOINT_LIBRARY") ?? DefaultPythonCheckpointLibrary(repository);
+        return definition with
+        {
+            Arguments = [.. definition.Arguments, "--checkpoint-library", checkpointLibrary]
         };
     }
 
@@ -46,15 +63,21 @@ internal sealed record AgentDefinition(
             return false;
         }
 
+        if (Runtime == "python"
+            && Arguments.Count >= 3
+            && Arguments[^2] == "--checkpoint-library"
+            && !File.Exists(Arguments[^1]))
+        {
+            return false;
+        }
+
         if (Runtime == "python")
         {
             var nativeLibrary = OperatingSystem.IsWindows()
                 ? "shared_memory_store.dll"
                 : "libshared_memory_store.so";
             if (!File.Exists(Path.Combine(
-                    RepositoryRoot(),
-                    "src",
-                    "python",
+                    PythonPackageRoot(RepositoryRoot()),
                     "shared_memory_store",
                     nativeLibrary)))
             {
@@ -68,6 +91,14 @@ internal sealed record AgentDefinition(
     private static string DefaultCppAgent(string repository) => OperatingSystem.IsWindows()
         ? Path.Combine(repository, "artifacts", "native-win", "sms_cpp_interop_agent.exe")
         : Path.Combine(repository, "artifacts", "cmake-wsl", "tests", "cpp", "sms_cpp_interop_agent");
+
+    private static string DefaultPythonCheckpointLibrary(string repository) => OperatingSystem.IsWindows()
+        ? Path.Combine(repository, "artifacts", "native-win", "src", "cpp", "shared_memory_store_python_checkpoint.dll")
+        : Path.Combine(repository, "artifacts", "cmake-wsl", "src", "cpp", "libshared_memory_store_python_checkpoint.so");
+
+    private static string PythonPackageRoot(string repository) =>
+        System.Environment.GetEnvironmentVariable("SMS_PYTHONPATH")
+        ?? Path.Combine(repository, "src", "python");
 
     private static string RepositoryRoot()
     {
@@ -95,6 +126,8 @@ internal sealed class AgentProcess : IAsyncDisposable
         _process = process;
         _stderr = process.StandardError.ReadToEndAsync();
     }
+
+    public int ProcessId => _process.Id;
 
     public static async Task<AgentProcess> StartAsync(AgentDefinition definition)
     {
@@ -176,6 +209,16 @@ internal sealed class AgentProcess : IAsyncDisposable
 
     public async Task CrashAsync(TimeSpan? timeout = null)
     {
+        await AbruptCommandAsync<object?>("crash", arguments: null, timeout).ConfigureAwait(false);
+    }
+
+    public async Task CrashAtCheckpointAsync<T>(T arguments, TimeSpan? timeout = null)
+    {
+        await AbruptCommandAsync("crashAtCheckpoint", arguments, timeout).ConfigureAwait(false);
+    }
+
+    private async Task AbruptCommandAsync<T>(string command, T? arguments, TimeSpan? timeout)
+    {
         if (_process.HasExited)
         {
             throw new InvalidOperationException(
@@ -185,8 +228,8 @@ internal sealed class AgentProcess : IAsyncDisposable
         var request = new AgentRequest
         {
             Id = Interlocked.Increment(ref _requestSequence).ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Command = "crash",
-            Arguments = null
+            Command = command,
+            Arguments = arguments is null ? null : AgentProtocol.ToJsonElement(arguments)
         };
         await _process.StandardInput.WriteAsync(AgentProtocol.SerializeRequestLine(request)).ConfigureAwait(false);
         await _process.StandardInput.FlushAsync().ConfigureAwait(false);
@@ -196,7 +239,7 @@ internal sealed class AgentProcess : IAsyncDisposable
         var stderr = await _stderr.ConfigureAwait(false);
         Assert.True(
             _process.ExitCode == 97,
-            $"The {_definition.Runtime} crash command exited with code {_process.ExitCode}; expected 97. stderr: {stderr}");
+            $"The {_definition.Runtime} {command} command exited with code {_process.ExitCode}; expected 97. stderr: {stderr}");
     }
 
     public async ValueTask DisposeAsync()

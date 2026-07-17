@@ -262,7 +262,7 @@ public sealed class LockFreeChurnIntegrationTests
         int slotCount,
         int participantRecordCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             MaxValueBytes,

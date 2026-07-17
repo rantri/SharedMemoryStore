@@ -1,6 +1,13 @@
 {
   "format_version": 1,
   "protocol": {
+    "creatable_layouts": [
+      "2.0"
+    ],
+    "readable_layouts": [
+      "2.0"
+    ],
+    "noncurrent_mapping_policy": "reject-before-payload-access",
     "layout_major": 2,
     "layout_minor": 0,
     "resource_protocol": 2,
@@ -10,9 +17,17 @@
     "byte_order": "little",
     "required_architecture": "x86_64",
     "atomic_width": 8,
+    "atomic_alignment": 8,
+    "acquire_load_order": "acquire",
+    "release_store_order": "release",
     "rmw_order": "sequentially-consistent",
     "required_features": 7,
-    "incompatible_draft_required_feature_masks": [0, 1, 3],
+    "optional_features": 0,
+    "incompatible_draft_required_feature_masks": [
+      0,
+      1,
+      3
+    ],
     "required_feature_bits": {
       "versioned_empty_spill_summary": 1,
       "publication_intent": 2,
@@ -20,22 +35,100 @@
     }
   },
   "records": {
-    "store_header": { "size": 512, "alignment": 64, "fields": { "pid_namespace_id": 264, "pid_namespace_mode": 272 } },
+    "store_header": {
+      "size": 512,
+      "alignment": 64,
+      "fields": {
+        "magic": 0,
+        "layout_major_version": 4,
+        "layout_minor_version": 6,
+        "header_length": 8,
+        "resource_protocol_version": 12,
+        "required_features": 16,
+        "optional_features": 24,
+        "total_bytes": 32,
+        "store_id": 40,
+        "control": 48,
+        "sequence": 56,
+        "slot_count": 64,
+        "lease_record_count": 68,
+        "participant_record_count": 72,
+        "max_key_bytes": 76,
+        "max_descriptor_bytes": 80,
+        "max_value_bytes": 84,
+        "participant_index_bits": 88,
+        "participant_generation_bits": 92,
+        "participant_offset": 96,
+        "participant_length": 104,
+        "participant_stride": 112,
+        "primary_lane_count": 116,
+        "primary_bucket_count": 120,
+        "primary_bucket_stride": 124,
+        "primary_directory_offset": 128,
+        "primary_directory_length": 136,
+        "overflow_directory_offset": 144,
+        "overflow_directory_length": 152,
+        "overflow_stride": 160,
+        "lease_stride": 164,
+        "lease_registry_offset": 168,
+        "lease_registry_length": 176,
+        "slot_metadata_stride": 184,
+        "key_stride": 188,
+        "slot_metadata_offset": 192,
+        "slot_metadata_length": 200,
+        "key_storage_offset": 208,
+        "key_storage_length": 216,
+        "descriptor_stride": 224,
+        "payload_stride": 228,
+        "descriptor_storage_offset": 232,
+        "descriptor_storage_length": 240,
+        "payload_storage_offset": 248,
+        "payload_storage_length": 256,
+        "pid_namespace_id": 264,
+        "pid_namespace_mode": 272
+      }
+    },
     "participant": {
       "size": 64,
-      "fields": { "control": 0, "identity_kind": 8, "reserved": 12, "process_start_value": 16, "open_sequence": 24, "pid_namespace_id": 32 }
+      "alignment": 64,
+      "fields": {
+        "control": 0,
+        "identity_kind": 8,
+        "reserved": 12,
+        "process_start_value": 16,
+        "open_sequence": 24,
+        "pid_namespace_id": 32
+      }
     },
     "primary_directory_bucket": {
       "size": 128,
-      "fields": { "spill_summary": 0, "mutation": 8, "lanes": 16 },
-      "lane_count": 8
+      "alignment": 64,
+      "lane_count": 8,
+      "fields": {
+        "spill_summary": 0,
+        "mutation": 8,
+        "lanes": 16
+      }
+    },
+    "overflow_binding": {
+      "size": 8,
+      "alignment": 8,
+      "fields": {
+        "binding": 0
+      }
     },
     "lease": {
       "size": 64,
-      "fields": { "control": 0, "slot_binding": 8, "acquire_sequence": 16 }
+      "alignment": 64,
+      "fields": {
+        "control": 0,
+        "slot_binding": 8,
+        "acquire_sequence": 16
+      }
     },
     "value_slot": {
       "size": 128,
+      "alignment": 64,
       "fields": {
         "control": 0,
         "directory_binding": 8,
@@ -54,16 +147,405 @@
       }
     }
   },
+  "states": {
+    "store": {
+      "initializing": 1,
+      "ready": 2,
+      "corrupt": 3,
+      "unsupported": 4
+    },
+    "participant": {
+      "free": 0,
+      "registering": 1,
+      "active": 2,
+      "closing": 3,
+      "recovering": 4,
+      "reclaiming": 5,
+      "retired": 6
+    },
+    "slot": {
+      "free": 0,
+      "initializing": 1,
+      "reserved": 2,
+      "published": 3,
+      "remove_requested": 4,
+      "aborting": 5,
+      "reclaiming": 6,
+      "retired": 7
+    },
+    "lease": {
+      "free": 0,
+      "claiming": 1,
+      "active": 2,
+      "releasing": 3,
+      "recovering": 4,
+      "retired": 5
+    },
+    "publication_intent": {
+      "none": 0,
+      "explicit_reservation": 1,
+      "atomic_publication": 2
+    },
+    "identity_kind": {
+      "unknown": 0,
+      "windows_process_creation_file_time": 1,
+      "linux_proc_start_ticks": 2
+    },
+    "pid_namespace_mode": {
+      "recovery_enabled": 1,
+      "mixed_or_unproven": 2
+    }
+  },
+  "open_modes": {
+    "create_new": 0,
+    "open_existing": 1,
+    "create_or_open": 2
+  },
+  "statuses": {
+    "open": {
+      "success": 0,
+      "already_exists": 1,
+      "not_found": 2,
+      "invalid_options": 3,
+      "incompatible_layout": 4,
+      "unsupported_platform": 5,
+      "insufficient_capacity": 6,
+      "access_denied": 7,
+      "mapping_failed": 8,
+      "store_busy": 9,
+      "operation_canceled": 10,
+      "participant_table_full": 11
+    },
+    "operation": {
+      "success": 0,
+      "duplicate_key": 1,
+      "not_found": 2,
+      "key_too_large": 3,
+      "value_too_large": 4,
+      "descriptor_too_large": 5,
+      "store_full": 6,
+      "lease_table_full": 7,
+      "invalid_lease": 8,
+      "lease_already_released": 9,
+      "remove_pending": 10,
+      "unsupported_platform": 11,
+      "store_disposed": 12,
+      "corrupt_store": 13,
+      "access_denied": 14,
+      "unknown_failure": 15,
+      "invalid_reservation": 16,
+      "reservation_incomplete": 17,
+      "reservation_already_completed": 18,
+      "reservation_write_out_of_range": 19,
+      "invalid_key": 20,
+      "store_busy": 21,
+      "operation_canceled": 22
+    }
+  },
+  "codec_vectors": {
+    "participant_token": [
+      {
+        "name": "default-first",
+        "valid": true,
+        "encoded_hex": "0000000000000081",
+        "parts": {
+          "participant_record_count": 64,
+          "record_index": 0,
+          "generation": 1
+        }
+      },
+      {
+        "name": "terminal-generation-last",
+        "valid": true,
+        "encoded_hex": "000000000fffffc0",
+        "parts": {
+          "participant_record_count": 64,
+          "record_index": 63,
+          "generation": 2097151
+        }
+      },
+      {
+        "name": "zero-generation",
+        "valid": false,
+        "encoded_hex": "0000000000000001",
+        "reason": "zero_generation"
+      },
+      {
+        "name": "out-of-range-index",
+        "valid": false,
+        "encoded_hex": "00000000000000c1",
+        "reason": "out_of_range"
+      }
+    ],
+    "participant_control": [
+      {
+        "name": "active-owner",
+        "valid": true,
+        "encoded_hex": "000000150000000a",
+        "parts": {
+          "participant_record_count": 64,
+          "state": 2,
+          "incarnation": 1,
+          "process_id": 42
+        }
+      },
+      {
+        "name": "terminal-retired",
+        "valid": true,
+        "encoded_hex": "0000000000fffffe",
+        "parts": {
+          "participant_record_count": 64,
+          "state": 6,
+          "incarnation": 2097151,
+          "process_id": 0
+        }
+      },
+      {
+        "name": "reserved-bit",
+        "valid": false,
+        "encoded_hex": "800000150000000a",
+        "reason": "reserved_bits_nonzero"
+      },
+      {
+        "name": "active-without-owner",
+        "valid": false,
+        "encoded_hex": "000000000000000a",
+        "reason": "invalid_owner"
+      }
+    ],
+    "slot_control": [
+      {
+        "name": "reserved-owner",
+        "valid": true,
+        "encoded_hex": "000008100000000a",
+        "parts": {
+          "state": 2,
+          "generation": 1,
+          "participant_token": 129
+        }
+      },
+      {
+        "name": "terminal-retired",
+        "valid": true,
+        "encoded_hex": "0000000fffffffff",
+        "parts": {
+          "state": 7,
+          "generation": 8589934591,
+          "participant_token": 0
+        }
+      },
+      {
+        "name": "zero-generation",
+        "valid": false,
+        "encoded_hex": "0000081000000002",
+        "reason": "zero_generation"
+      },
+      {
+        "name": "published-with-owner",
+        "valid": false,
+        "encoded_hex": "000008100000000b",
+        "reason": "invalid_owner"
+      }
+    ],
+    "lease_control": [
+      {
+        "name": "active-owner",
+        "valid": true,
+        "encoded_hex": "000008100000000a",
+        "parts": {
+          "state": 2,
+          "generation": 1,
+          "participant_token": 129
+        }
+      },
+      {
+        "name": "terminal-retired",
+        "valid": true,
+        "encoded_hex": "0000000ffffffffd",
+        "parts": {
+          "state": 5,
+          "generation": 8589934591,
+          "participant_token": 0
+        }
+      },
+      {
+        "name": "invalid-state",
+        "valid": false,
+        "encoded_hex": "000000000000000e",
+        "reason": "invalid_state"
+      },
+      {
+        "name": "active-without-owner",
+        "valid": false,
+        "encoded_hex": "000000000000000a",
+        "reason": "invalid_owner"
+      }
+    ],
+    "binding": [
+      {
+        "name": "first-slot",
+        "valid": true,
+        "encoded_hex": "0000000080000001",
+        "parts": {
+          "slot_index": 0,
+          "generation": 1
+        }
+      },
+      {
+        "name": "terminal-maximum",
+        "valid": true,
+        "encoded_hex": "ffffffffffffffff",
+        "parts": {
+          "slot_index": 2147483646,
+          "generation": 8589934591
+        }
+      },
+      {
+        "name": "zero-generation",
+        "valid": false,
+        "encoded_hex": "0000000000000001",
+        "reason": "zero_generation"
+      },
+      {
+        "name": "zero-index-plus-one",
+        "valid": false,
+        "encoded_hex": "0000000080000000",
+        "reason": "out_of_range"
+      }
+    ],
+    "spill_summary": [
+      {
+        "name": "initial-empty",
+        "valid": true,
+        "encoded_hex": "0000000000000000",
+        "parts": {
+          "initial_empty": true
+        }
+      },
+      {
+        "name": "terminal-present",
+        "valid": true,
+        "encoded_hex": "003fffffffffffff",
+        "parts": {
+          "slot_index": 1048574,
+          "generation": 8589934591,
+          "present": true
+        }
+      },
+      {
+        "name": "reserved-bit",
+        "valid": false,
+        "encoded_hex": "0060000000100001",
+        "reason": "reserved_bits_nonzero"
+      },
+      {
+        "name": "present-zero-generation",
+        "valid": false,
+        "encoded_hex": "0020000000000001",
+        "reason": "zero_generation"
+      }
+    ],
+    "directory_location": [
+      {
+        "name": "none",
+        "valid": true,
+        "encoded_hex": "0000000000000000",
+        "parts": {
+          "kind": 0,
+          "index": 0,
+          "generation": 0
+        }
+      },
+      {
+        "name": "terminal-overflow",
+        "valid": true,
+        "encoded_hex": "01fffffffffffffe",
+        "parts": {
+          "kind": 2,
+          "index": 4194303,
+          "generation": 8589934591
+        }
+      },
+      {
+        "name": "reserved-bit",
+        "valid": false,
+        "encoded_hex": "0200000001000001",
+        "reason": "reserved_bits_nonzero"
+      },
+      {
+        "name": "primary-zero-generation",
+        "valid": false,
+        "encoded_hex": "0000000000000001",
+        "reason": "zero_generation"
+      }
+    ],
+    "directory_operation": [
+      {
+        "name": "none",
+        "valid": true,
+        "encoded_hex": "0000000000000000",
+        "parts": {
+          "intent": 0,
+          "phase": 0,
+          "target_kind": 0,
+          "target_index": 0,
+          "generation": 0
+        }
+      },
+      {
+        "name": "terminal-insert-complete",
+        "valid": true,
+        "encoded_hex": "3fffffffffffffd5",
+        "parts": {
+          "intent": 1,
+          "phase": 5,
+          "target_kind": 2,
+          "target_index": 4194303,
+          "generation": 8589934591
+        }
+      },
+      {
+        "name": "reserved-bit",
+        "valid": false,
+        "encoded_hex": "4000000020000005",
+        "reason": "reserved_bits_nonzero"
+      },
+      {
+        "name": "invalid-intent-state",
+        "valid": false,
+        "encoded_hex": "0000000020000003",
+        "reason": "invalid_state"
+      }
+    ]
+  },
   "binding": {
-    "slot_index_plus_one": { "least_bit": 0, "bit_count": 31 },
-    "slot_generation": { "least_bit": 31, "bit_count": 33 },
+    "slot_index_plus_one": {
+      "least_bit": 0,
+      "bit_count": 31
+    },
+    "slot_generation": {
+      "least_bit": 31,
+      "bit_count": 33
+    },
     "empty": "0000000000000000"
   },
   "spill_summary": {
-    "slot_index_plus_one": { "least_bit": 0, "bit_count": 20 },
-    "slot_generation": { "least_bit": 20, "bit_count": 33 },
-    "present": { "bit": 53, "meaning": "one_requires_overflow_scan" },
-    "reserved_bits": [54, 63],
+    "slot_index_plus_one": {
+      "least_bit": 0,
+      "bit_count": 20
+    },
+    "slot_generation": {
+      "least_bit": 20,
+      "bit_count": 33
+    },
+    "present": {
+      "bit": 53,
+      "meaning": "one_requires_overflow_scan"
+    },
+    "reserved_bits": [
+      54,
+      63
+    ],
     "initial_empty": "0000000000000000",
     "slot_index_constraint": "slot_index < header.slot_count",
     "clear_transition": "Present(X) -> Empty(X) by exact full-word CAS",
@@ -81,53 +563,117 @@
     "participant_id_offset": 32,
     "windows_id": 0,
     "linux_source": "/proc/self/ns/pid numeric token",
-    "modes": { "recovery_enabled": 1, "mixed_or_unproven": 2 },
+    "modes": {
+      "recovery_enabled": 1,
+      "mixed_or_unproven": 2
+    },
     "mixed_transition": "release-store before the differing or unproven opener's first Registering CAS",
     "registering_recovery_in_mixed": "unsupported",
     "active_recovery_in_mixed": "requires exact per-record namespace proof"
   },
   "directory_location": {
-    "kind_bits": [0, 1],
-    "index_bits": [2, 23],
-    "slot_generation_bits": [24, 56],
-    "reserved_bits": [57, 63],
-    "kinds": { "none": 0, "primary": 1, "overflow": 2 }
+    "kind_bits": [
+      0,
+      1
+    ],
+    "index_bits": [
+      2,
+      23
+    ],
+    "slot_generation_bits": [
+      24,
+      56
+    ],
+    "reserved_bits": [
+      57,
+      63
+    ],
+    "kinds": {
+      "none": 0,
+      "primary": 1,
+      "overflow": 2
+    }
   },
   "directory_operation": {
-    "intent_bits": [0, 1],
-    "phase_bits": [2, 4],
-    "target_kind_bits": [5, 6],
-    "target_index_bits": [7, 28],
-    "slot_generation_bits": [29, 61],
-    "reserved_bits": [62, 63],
-    "intents": { "none": 0, "insert": 1, "unlink": 2 },
-    "phases": { "none": 0, "prepared": 1, "target_selected": 2, "binding_changed": 3, "rejected": 4, "complete": 5 }
-  },
-  "states": {
-    "participant": { "free": 0, "registering": 1, "active": 2, "closing": 3, "recovering": 4, "reclaiming": 5, "retired": 6 },
-    "slot": { "free": 0, "initializing": 1, "reserved": 2, "published": 3, "remove_requested": 4, "aborting": 5, "reclaiming": 6, "retired": 7 },
-    "lease": { "free": 0, "claiming": 1, "active": 2, "releasing": 3, "recovering": 4, "retired": 5 }
+    "intent_bits": [
+      0,
+      1
+    ],
+    "phase_bits": [
+      2,
+      4
+    ],
+    "target_kind_bits": [
+      5,
+      6
+    ],
+    "target_index_bits": [
+      7,
+      28
+    ],
+    "slot_generation_bits": [
+      29,
+      61
+    ],
+    "reserved_bits": [
+      62,
+      63
+    ],
+    "intents": {
+      "none": 0,
+      "insert": 1,
+      "unlink": 2
+    },
+    "phases": {
+      "none": 0,
+      "prepared": 1,
+      "target_selected": 2,
+      "binding_changed": 3,
+      "rejected": 4,
+      "complete": 5
+    }
   },
   "publication_intent": {
     "field_offset": 52,
-    "values": { "none": 0, "explicit_reservation": 1, "atomic_publication": 2 },
+    "values": {
+      "none": 0,
+      "explicit_reservation": 1,
+      "atomic_publication": 2
+    },
     "metadata_ready_marker": "current-generation directory_operation Insert/Prepared release publication",
-    "marker_precedes": ["canonical_bucket_mutation", "directory_cell_binding"],
+    "marker_precedes": [
+      "canonical_bucket_mutation",
+      "directory_cell_binding"
+    ],
     "pre_metadata_initializing": "directory_operation is zero and no current-generation mutation or directory-cell reference exists",
     "unreferenced_cleanup_of_pre_metadata_claim_interprets_intent": false,
     "current_reference_without_marker": "corrupt_store",
     "unknown_discoverable_intent": "corrupt_store",
-    "ignored_states": ["free", "retired", "initializing_pre_metadata"],
+    "ignored_states": [
+      "free",
+      "retired",
+      "initializing_pre_metadata"
+    ],
     "explicit_reservation_ordering": "Initializing -> Reserved",
     "atomic_publication_ordering": "Reserved -> Published",
     "duplicate_witnesses": {
-      "explicit_reservation": ["reserved", "published", "remove_requested"],
-      "atomic_publication": ["published", "remove_requested"]
+      "explicit_reservation": [
+        "reserved",
+        "published",
+        "remove_requested"
+      ],
+      "atomic_publication": [
+        "published",
+        "remove_requested"
+      ]
     }
   },
   "capacity_outcomes": {
     "store_full_basis": "all_value_slots_non_free",
-    "tentative_states_consume_capacity": ["initializing", "reserved_atomic_publication"],
+    "tentative_states_consume_capacity": [
+      "initializing",
+      "reserved_atomic_publication"
+    ],
     "initial_same_key_lookup_precedes_candidate_claim": true,
     "candidate_claim_precedes_final_same_key_arbitration": true,
     "duplicate_key_precedence_over_store_full": false
@@ -140,6 +686,548 @@
     "slot_count_max": 1048575,
     "participant_record_count_min": 1,
     "participant_record_count_max": 1048575,
-    "byte_storage_alignment": 8
-  }
+    "byte_storage_alignment": 8,
+    "limits": {
+      "slot_count": {
+        "min": 1,
+        "max": 1048575
+      },
+      "participant_record_count": {
+        "min": 1,
+        "max": 1048575
+      },
+      "lease_record_count": {
+        "min": 1
+      },
+      "max_key_bytes": {
+        "min": 1
+      },
+      "max_descriptor_bytes": {
+        "min": 0
+      },
+      "max_value_bytes": {
+        "min": 1
+      }
+    },
+    "valid_vectors": [
+      {
+        "name": "minimum",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "expected": {
+          "header_length": 512,
+          "participant_index_bits": 1,
+          "participant_generation_bits": 27,
+          "participant_stride": 64,
+          "participant_offset": 512,
+          "participant_length": 64,
+          "primary_lane_count": 32,
+          "primary_bucket_count": 4,
+          "primary_bucket_stride": 128,
+          "primary_directory_offset": 576,
+          "primary_directory_length": 512,
+          "overflow_stride": 8,
+          "overflow_directory_offset": 1088,
+          "overflow_directory_length": 8,
+          "lease_stride": 64,
+          "lease_registry_offset": 1152,
+          "lease_registry_length": 64,
+          "slot_metadata_stride": 128,
+          "slot_metadata_offset": 1216,
+          "slot_metadata_length": 128,
+          "key_stride": 8,
+          "key_storage_offset": 1344,
+          "key_storage_length": 8,
+          "descriptor_stride": 8,
+          "descriptor_storage_offset": 1352,
+          "descriptor_storage_length": 8,
+          "payload_stride": 8,
+          "payload_storage_offset": 1360,
+          "payload_storage_length": 8,
+          "required_bytes": 1368
+        }
+      },
+      {
+        "name": "unaligned-strides",
+        "input": {
+          "slot_count": 3,
+          "lease_record_count": 5,
+          "participant_record_count": 64,
+          "max_key_bytes": 31,
+          "max_descriptor_bytes": 17,
+          "max_value_bytes": 129
+        },
+        "expected": {
+          "header_length": 512,
+          "participant_index_bits": 7,
+          "participant_generation_bits": 21,
+          "participant_stride": 64,
+          "participant_offset": 512,
+          "participant_length": 4096,
+          "primary_lane_count": 32,
+          "primary_bucket_count": 4,
+          "primary_bucket_stride": 128,
+          "primary_directory_offset": 4608,
+          "primary_directory_length": 512,
+          "overflow_stride": 8,
+          "overflow_directory_offset": 5120,
+          "overflow_directory_length": 24,
+          "lease_stride": 64,
+          "lease_registry_offset": 5184,
+          "lease_registry_length": 320,
+          "slot_metadata_stride": 128,
+          "slot_metadata_offset": 5504,
+          "slot_metadata_length": 384,
+          "key_stride": 32,
+          "key_storage_offset": 5888,
+          "key_storage_length": 96,
+          "descriptor_stride": 24,
+          "descriptor_storage_offset": 5984,
+          "descriptor_storage_length": 72,
+          "payload_stride": 136,
+          "payload_storage_offset": 6056,
+          "payload_storage_length": 408,
+          "required_bytes": 6464
+        }
+      },
+      {
+        "name": "cache-line-boundaries",
+        "input": {
+          "slot_count": 8,
+          "lease_record_count": 16,
+          "participant_record_count": 255,
+          "max_key_bytes": 8,
+          "max_descriptor_bytes": 8,
+          "max_value_bytes": 8
+        },
+        "expected": {
+          "header_length": 512,
+          "participant_index_bits": 8,
+          "participant_generation_bits": 20,
+          "participant_stride": 64,
+          "participant_offset": 512,
+          "participant_length": 16320,
+          "primary_lane_count": 32,
+          "primary_bucket_count": 4,
+          "primary_bucket_stride": 128,
+          "primary_directory_offset": 16832,
+          "primary_directory_length": 512,
+          "overflow_stride": 8,
+          "overflow_directory_offset": 17344,
+          "overflow_directory_length": 64,
+          "lease_stride": 64,
+          "lease_registry_offset": 17408,
+          "lease_registry_length": 1024,
+          "slot_metadata_stride": 128,
+          "slot_metadata_offset": 18432,
+          "slot_metadata_length": 1024,
+          "key_stride": 8,
+          "key_storage_offset": 19456,
+          "key_storage_length": 64,
+          "descriptor_stride": 8,
+          "descriptor_storage_offset": 19520,
+          "descriptor_storage_length": 64,
+          "payload_stride": 8,
+          "payload_storage_offset": 19584,
+          "payload_storage_length": 64,
+          "required_bytes": 19648
+        }
+      },
+      {
+        "name": "maximum-counts",
+        "input": {
+          "slot_count": 1048575,
+          "lease_record_count": 1,
+          "participant_record_count": 1048575,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "expected": {
+          "header_length": 512,
+          "participant_index_bits": 20,
+          "participant_generation_bits": 8,
+          "participant_stride": 64,
+          "participant_offset": 512,
+          "participant_length": 67108800,
+          "primary_lane_count": 4194304,
+          "primary_bucket_count": 524288,
+          "primary_bucket_stride": 128,
+          "primary_directory_offset": 67109312,
+          "primary_directory_length": 67108864,
+          "overflow_stride": 8,
+          "overflow_directory_offset": 134218176,
+          "overflow_directory_length": 8388600,
+          "lease_stride": 64,
+          "lease_registry_offset": 142606784,
+          "lease_registry_length": 64,
+          "slot_metadata_stride": 128,
+          "slot_metadata_offset": 142606848,
+          "slot_metadata_length": 134217600,
+          "key_stride": 8,
+          "key_storage_offset": 276824448,
+          "key_storage_length": 8388600,
+          "descriptor_stride": 8,
+          "descriptor_storage_offset": 285213048,
+          "descriptor_storage_length": 8388600,
+          "payload_stride": 8,
+          "payload_storage_offset": 293601648,
+          "payload_storage_length": 8388600,
+          "required_bytes": 301990248
+        }
+      }
+    ],
+    "invalid_vectors": [
+      {
+        "name": "slot-zero",
+        "input": {
+          "slot_count": 0,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "slot-over-limit",
+        "input": {
+          "slot_count": 1048576,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "participant-zero",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 0,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "participant-over-limit",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1048576,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "lease-zero",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 0,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "key-zero",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 0,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "descriptor-negative",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": -1,
+          "max_value_bytes": 1
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "value-zero",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 1,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 0
+        },
+        "error": "invalid_argument"
+      },
+      {
+        "name": "key-stride-overflow",
+        "input": {
+          "slot_count": 1,
+          "lease_record_count": 1,
+          "participant_record_count": 1,
+          "max_key_bytes": 2147483647,
+          "max_descriptor_bytes": 0,
+          "max_value_bytes": 1
+        },
+        "error": "arithmetic_overflow"
+      }
+    ]
+  },
+  "hash_vectors": [
+    {
+      "name": "empty",
+      "bytes_hex": "",
+      "valid_store_key": false,
+      "expected_hash_hex": "cbf29ce484222325"
+    },
+    {
+      "name": "single-zero",
+      "bytes_hex": "00",
+      "valid_store_key": true,
+      "expected_hash_hex": "af63bd4c8601b7df"
+    },
+    {
+      "name": "single-ff",
+      "bytes_hex": "ff",
+      "valid_store_key": true,
+      "expected_hash_hex": "af64724c8602eb6e"
+    },
+    {
+      "name": "hello-ascii",
+      "bytes_hex": "68656c6c6f",
+      "valid_store_key": true,
+      "expected_hash_hex": "a430d84680aabd0b"
+    },
+    {
+      "name": "binary-with-high-bits",
+      "bytes_hex": "0001ff80",
+      "valid_store_key": true,
+      "expected_hash_hex": "4653dd7f9a76930d"
+    },
+    {
+      "name": "utf8-cafe-emoji",
+      "bytes_hex": "636166c3a9f09f9880",
+      "valid_store_key": true,
+      "expected_hash_hex": "ab0ae80e9faaf1f4"
+    }
+  ],
+  "exact_key_vectors": [
+    {
+      "name": "identical-binary",
+      "left_hex": "0001ff80",
+      "right_hex": "0001ff80",
+      "shared_hash_hex": "4653dd7f9a76930d",
+      "equal": true
+    },
+    {
+      "name": "same-prefix-different-tail",
+      "left_hex": "61626300",
+      "right_hex": "61626301",
+      "shared_hash_hex": "3d59814a86c4b857",
+      "hash_mode": "injected_shared_hash",
+      "equal": false
+    },
+    {
+      "name": "injected-hash-collision-exact-key-check",
+      "left_hex": "10203040",
+      "right_hex": "10203041",
+      "shared_hash_hex": "7b9e9e8b0a9c7f11",
+      "hash_mode": "injected_shared_hash",
+      "equal": false
+    }
+  ],
+  "resource_name_vectors": {
+    "windows": [
+      {
+        "name": "simple-with-dot",
+        "public_name": "sms.compatibility",
+        "region_name": "sms.compatibility",
+        "synchronization_name": "Local\\SharedMemoryStore-sms_compatibility"
+      },
+      {
+        "name": "separator",
+        "public_name": "store/name",
+        "region_name": "store/name",
+        "synchronization_name": "Local\\SharedMemoryStore-store_name"
+      },
+      {
+        "name": "sanitized-collision-kept-distinct",
+        "public_name": "store?name",
+        "region_name": "store?name",
+        "synchronization_name": "Local\\SharedMemoryStore-store_name"
+      },
+      {
+        "name": "global-scope",
+        "public_name": "Global\\sms.compatibility",
+        "region_name": "Global\\sms.compatibility",
+        "synchronization_name": "Global\\SharedMemoryStore-Global_sms_compatibility"
+      }
+    ],
+    "linux": [
+      {
+        "name": "simple-with-dot",
+        "public_name": "sms.compatibility",
+        "sha256_prefix_hex": "251220bcba0b63e6",
+        "fragment": "sms-sms.compatibility-251220bcba0b63e6",
+        "files": {
+          "region": "sms-sms.compatibility-251220bcba0b63e6.region",
+          "synchronization": "sms-sms.compatibility-251220bcba0b63e6.lock",
+          "owners": "sms-sms.compatibility-251220bcba0b63e6.owners",
+          "lifecycle": "sms-sms.compatibility-251220bcba0b63e6.lifecycle"
+        },
+        "owner_token": "00112233445566778899aabbccddeeff",
+        "owner_anchor": "sms-sms.compatibility-251220bcba0b63e6.owners.anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-sms.compatibility-251220bcba0b63e6.owners.released.00112233445566778899aabbccddeeff.ready"
+      },
+      {
+        "name": "separator",
+        "public_name": "store/name",
+        "sha256_prefix_hex": "549a0c43d4d76e02",
+        "fragment": "sms-store_name-549a0c43d4d76e02",
+        "files": {
+          "region": "sms-store_name-549a0c43d4d76e02.region",
+          "synchronization": "sms-store_name-549a0c43d4d76e02.lock",
+          "owners": "sms-store_name-549a0c43d4d76e02.owners",
+          "lifecycle": "sms-store_name-549a0c43d4d76e02.lifecycle"
+        },
+        "owner_token": "00112233445566778899aabbccddeeff",
+        "owner_anchor": "sms-store_name-549a0c43d4d76e02.owners.anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-store_name-549a0c43d4d76e02.owners.released.00112233445566778899aabbccddeeff.ready"
+      },
+      {
+        "name": "sanitized-collision-kept-distinct",
+        "public_name": "store?name",
+        "sha256_prefix_hex": "0f08216b745495cd",
+        "fragment": "sms-store_name-0f08216b745495cd",
+        "files": {
+          "region": "sms-store_name-0f08216b745495cd.region",
+          "synchronization": "sms-store_name-0f08216b745495cd.lock",
+          "owners": "sms-store_name-0f08216b745495cd.owners",
+          "lifecycle": "sms-store_name-0f08216b745495cd.lifecycle"
+        },
+        "owner_token": "00112233445566778899aabbccddeeff",
+        "owner_anchor": "sms-store_name-0f08216b745495cd.owners.anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-store_name-0f08216b745495cd.owners.released.00112233445566778899aabbccddeeff.ready"
+      },
+      {
+        "name": "global-scope",
+        "public_name": "Global\\sms.compatibility",
+        "sha256_prefix_hex": "54e26013eb7f992d",
+        "fragment": "sms-Global_sms.compatibility-54e26013eb7f992d",
+        "files": {
+          "region": "sms-Global_sms.compatibility-54e26013eb7f992d.region",
+          "synchronization": "sms-Global_sms.compatibility-54e26013eb7f992d.lock",
+          "owners": "sms-Global_sms.compatibility-54e26013eb7f992d.owners",
+          "lifecycle": "sms-Global_sms.compatibility-54e26013eb7f992d.lifecycle"
+        },
+        "owner_token": "00112233445566778899aabbccddeeff",
+        "owner_anchor": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.released.00112233445566778899aabbccddeeff.ready"
+      }
+    ]
+  },
+  "offline_fixtures": [
+    {
+      "state": "empty",
+      "binary_path": "offline/empty.bin",
+      "snapshot_path": "offline/empty.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "cb79100a78b0bd2774f897fb3a14fe607b1815433a821095e7e8f4afcb3dae88",
+      "snapshot_sha256_hex": "63ddcfbc41d4b86ebd49e9ccca55a030fcd193c432a35448ebba249f6cdc6ae3",
+      "offline_only": true
+    },
+    {
+      "state": "reserved",
+      "binary_path": "offline/reserved.bin",
+      "snapshot_path": "offline/reserved.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "707bf81a121ac71847cf1db62e47ba4132b54532302c3245249cce9e3cb0e1f2",
+      "snapshot_sha256_hex": "487dfb979e174fb70dc6b8a4845753bb08d604f496ba189e29ecdbcb75427ec3",
+      "offline_only": true
+    },
+    {
+      "state": "published",
+      "binary_path": "offline/published.bin",
+      "snapshot_path": "offline/published.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "c4b60b315fb693d97e1a7249d64ed91e9ab7362283db3829c50856d4c0cc98aa",
+      "snapshot_sha256_hex": "e4c613cb4ec6b1c46bda7463d38b162118c0a50c9987d4075fed60444e9a5c6a",
+      "offline_only": true
+    },
+    {
+      "state": "leased",
+      "binary_path": "offline/leased.bin",
+      "snapshot_path": "offline/leased.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "860c6afbbb6c0c6af390de733892f298a85cb401b70b27a23812438ae5972c17",
+      "snapshot_sha256_hex": "187c1bce530f3dc795cc35173e6c6c07cd046aa896e79dff85e5534df7a48023",
+      "offline_only": true
+    },
+    {
+      "state": "pending-removal",
+      "binary_path": "offline/pending-removal.bin",
+      "snapshot_path": "offline/pending-removal.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "135556cc6dad90ce80740e1223511c2a737f88fc0a6bf38c9bca8c178caefc2f",
+      "snapshot_sha256_hex": "b13025c1c24987b998615df59f9c06445e703be515bce7381634accde79b797b",
+      "offline_only": true
+    },
+    {
+      "state": "spilled",
+      "binary_path": "offline/spilled.bin",
+      "snapshot_path": "offline/spilled.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "23e16a926444d8622e215fb930eb281b0cca3b083c1833ec60528b9e6a69ee61",
+      "snapshot_sha256_hex": "88f71aedc97c369fa3feaad3f40b7121d2f20316438766f23964e5b7a57c3d1c",
+      "offline_only": true
+    },
+    {
+      "state": "recovering",
+      "binary_path": "offline/recovering.bin",
+      "snapshot_path": "offline/recovering.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "2df0b376361fa035d2c0cbc5e73efbd121424ae508bba7b0db2c77e732a31f29",
+      "snapshot_sha256_hex": "f5ec55551d76f8dcf2044d1a650ba240e268063faa6e2a4d7cece1f23f7edfc0",
+      "offline_only": true
+    },
+    {
+      "state": "reclaimed",
+      "binary_path": "offline/reclaimed.bin",
+      "snapshot_path": "offline/reclaimed.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "477152b88495ee712e228cb210acee6801ff01a298857c12e9f53cd7af0e20f9",
+      "snapshot_sha256_hex": "afe9bf336e2a7edfbfdb94457164283b656194bcefebf4c4e5d114ae0db3e807",
+      "offline_only": true
+    },
+    {
+      "state": "corrupt",
+      "binary_path": "offline/corrupt.bin",
+      "snapshot_path": "offline/corrupt.json",
+      "byte_length": 1368,
+      "binary_sha256_hex": "ffc6c00706eaf815366338726ddea93b6e4daa4989d02f7d56bf1400dece7b4f",
+      "snapshot_sha256_hex": "e82e7840b90df13576a168748a1487e499c4494e11f396e370e358a4b232c42c",
+      "offline_only": true
+    }
+  ]
 }

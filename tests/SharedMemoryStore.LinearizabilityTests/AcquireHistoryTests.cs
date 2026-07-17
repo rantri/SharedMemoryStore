@@ -133,7 +133,7 @@ public sealed class AcquireHistoryTests
 
     private static Store CreateStore()
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-acquire-history-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,

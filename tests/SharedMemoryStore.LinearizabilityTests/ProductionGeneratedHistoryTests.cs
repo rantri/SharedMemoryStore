@@ -880,7 +880,6 @@ public sealed class ProductionGeneratedHistoryTests
     {
         var options = new SharedMemoryStoreOptions
         {
-            Profile = source.Profile,
             Name = source.Name,
             OpenMode = openMode,
             TotalBytes = source.TotalBytes,
@@ -922,7 +921,7 @@ public sealed class ProductionGeneratedHistoryTests
         int leaseCount,
         OpenMode openMode,
         bool enableLeaseRecovery = false) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             $"sms-generated-{prefix}-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 8,

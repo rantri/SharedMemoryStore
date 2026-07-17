@@ -85,7 +85,7 @@ public sealed class LockFreePidNamespaceIntegrationTests
         && RuntimeInformation.ProcessArchitecture == Architecture.X64;
 
     private static SharedMemoryStoreOptions Options(string name, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 32,

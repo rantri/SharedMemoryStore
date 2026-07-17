@@ -6,13 +6,17 @@ from ._native import (
     ABI_VERSION,
     LAYOUT_MAJOR_VERSION,
     LAYOUT_MINOR_VERSION,
-    RESOURCE_NAMING_VERSION,
+    OPTIONAL_FEATURES,
+    REQUIRED_FEATURES,
+    RESOURCE_PROTOCOL_VERSION,
     native_library_path,
 )
 from .enums import OpenMode, StoreOpenStatus, StoreStatus
 from .store import (
+    CancellationSource,
     DiagnosticsSnapshot,
     MemoryStore,
+    ProtocolInfo,
     RecoveryReport,
     StoreOptions,
     ValueLease,
@@ -22,19 +26,23 @@ from .store import (
 )
 
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "__version__",
     "ABI_VERSION",
     "LAYOUT_MAJOR_VERSION",
     "LAYOUT_MINOR_VERSION",
-    "RESOURCE_NAMING_VERSION",
+    "RESOURCE_PROTOCOL_VERSION",
+    "REQUIRED_FEATURES",
+    "OPTIONAL_FEATURES",
     "OpenMode",
     "StoreOpenStatus",
     "StoreStatus",
+    "CancellationSource",
     "WaitOptions",
     "StoreOptions",
+    "ProtocolInfo",
     "RecoveryReport",
     "DiagnosticsSnapshot",
     "MemoryStore",

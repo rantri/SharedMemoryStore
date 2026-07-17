@@ -5,6 +5,54 @@ chronological order.
 
 ## Unreleased
 
+## 3.0.0 - 2026-07-16
+
+### Breaking changes
+
+- NuGet `SharedMemoryStore` now creates and reads only SMS2 layout `2.0`,
+  resource protocol `2`, required-feature mask `7`, and optional-feature mask
+  `0`.
+- Removed the alternate layout selector, compatibility creator, fallback
+  engine, and retired mapped-record surface. Ordinary
+  `SharedMemoryStoreOptions.Create(...)` and `CalculateRequiredBytes(...)` are
+  the only managed sizing and creation helpers.
+- A noncurrent, unknown, or malformed mapping is rejected with
+  `IncompatibleLayout` before key, descriptor, payload, slot, lease, or
+  participant projection. There is no in-place conversion.
+
+### Added
+
+- Completed independent native `SharedMemoryStore` `1.0.0` and Python
+  `shared-memory-store` `1.0.0` distributions on the same SMS2 protocol.
+- Advanced the fixed-width native boundary to C ABI `2.0`, including
+  participant-aware layout sizing, protocol identity, cancellation, expanded
+  diagnostics, lifecycle operations, and ownership-safe opaque tokens.
+- Added complete C++, Python, and nine ordered .NET/C++/Python interoperability
+  coverage for publication, reservations, leases, removal/reuse, recovery,
+  participant capacity, diagnostics, corruption rejection, and held-cold-lock
+  progress.
+
+### Changed
+
+- Hot publish, segmented publish, reserve, commit, abort, acquire, release,
+  remove, reclaim, recovery help, and diagnostics use mapped lock-free atomics
+  and bounded helping; OS synchronization is limited to cold create/open/close
+  coordination.
+- Managed diagnostics now expose the canonical five-field protocol identity,
+  SMS2 participant and directory state, and local retry/help/token/recovery
+  telemetry without obsolete tombstone or compaction fields.
+- Updated NuGet metadata and XML documentation for version `3.0.0`, CMake
+  metadata for version `1.0.0`/ABI `2.0`, and Python metadata for version
+  `1.0.0`/required ABI `2.0`.
+
+### Migration
+
+- Stop writers and readers, drain leases and reservations, close every handle,
+  remove or replace the noncurrent physical store, create a fresh SMS2 store,
+  and republish values from an application-owned authoritative source.
+- A side-by-side cutover must use a distinct public store name. Current clients
+  do not read an old mapping as a migration source.
+
 ## 2.0.0 - 2026-07-13
 
 ### Added

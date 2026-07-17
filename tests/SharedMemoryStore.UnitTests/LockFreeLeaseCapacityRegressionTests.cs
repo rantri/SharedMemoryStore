@@ -423,7 +423,7 @@ public sealed class LockFreeLeaseCapacityRegressionTests
         OpenMode openMode,
         int leaseRecordCount,
         int slotCount) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 1,

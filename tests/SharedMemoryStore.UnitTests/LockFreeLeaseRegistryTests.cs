@@ -162,7 +162,7 @@ public sealed class LockFreeLeaseRegistryTests
             throw new PlatformNotSupportedException("The lock-free profile is qualified only on Windows/Linux x64.");
         }
 
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-lease-registry-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,
@@ -174,7 +174,7 @@ public sealed class LockFreeLeaseRegistryTests
         var status = Store.TryCreateOrOpen(options, out var store);
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<Store>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         return result;
     }
 

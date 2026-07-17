@@ -20,6 +20,7 @@ public sealed class AgentLifecycleTests
                 maxDescriptorBytes = 8,
                 maxKeyBytes = 8,
                 leaseRecordCount = 4,
+                participantRecordCount = 2,
                 enableLeaseRecovery = true
             }),
             Request("2", "publish", new
@@ -77,6 +78,8 @@ public sealed class AgentLifecycleTests
         Assert.Equal(requests.Length, responses.Length);
         Assert.All(responses, response => Assert.True(response.Ok));
         Assert.Equal("Success", responses[0].Status.Name);
+        Assert.Equal(2, responses[0].Result!.Value.GetProperty("participantRecordCount").GetInt32());
+        AssertProtocolIdentity(responses[0].Result!.Value.GetProperty("protocolInfo"));
         Assert.Equal("Success", responses[1].Status.Name);
         Assert.Equal(new byte[] { 7, 0, 9 }, DecodeResult(responses[2], "value"));
         Assert.Equal("RemovePending", responses[3].Status.Name);
@@ -95,4 +98,13 @@ public sealed class AgentLifecycleTests
 
     private static byte[] DecodeResult(AgentResponse response, string property) =>
         AgentProtocol.DecodeBytes(response.Result!.Value.GetProperty(property).GetString()!);
+
+    private static void AssertProtocolIdentity(System.Text.Json.JsonElement protocol)
+    {
+        Assert.Equal(2, protocol.GetProperty("layoutMajorVersion").GetInt32());
+        Assert.Equal(0, protocol.GetProperty("layoutMinorVersion").GetInt32());
+        Assert.Equal(2, protocol.GetProperty("resourceProtocolVersion").GetInt32());
+        Assert.Equal(7UL, protocol.GetProperty("requiredFeatures").GetUInt64());
+        Assert.Equal(0UL, protocol.GetProperty("optionalFeatures").GetUInt64());
+    }
 }

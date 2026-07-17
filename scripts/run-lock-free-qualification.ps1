@@ -28,7 +28,8 @@ if (-not $ValidateOnly) {
     }
 }
 $runStartedUtc = [DateTimeOffset]::UtcNow
-$configPath = Join-Path $root 'specs/009-lock-free-publish-read/qualification-config.json'
+$runStartedMonotonic = [Diagnostics.Stopwatch]::GetTimestamp()
+$configPath = Join-Path $root 'specs/010-lock-free-only-multilang/qualification-config.json'
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $selected = $config.tiers.$Tier
 if ($null -eq $selected) {
@@ -85,6 +86,103 @@ function Get-FileSha256 {
         return $null
     }
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+
+function Assert-InteropArtifactEvidence {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][int64]$ExpectedValueCount,
+        [Parameter(Mandatory)][int64]$ExpectedLifecycleCycles)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Interoperability artifact evidence is missing: '$Path'."
+    }
+    $report = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 8
+    if ([int64]$report.schemaVersion -ne 1 `
+        -or [string]$report.mode -cne 'host' `
+        -or -not [bool]$report.stressEnabled `
+        -or [int64]$report.orderedRuntimeCells -ne 9 `
+        -or [int64]$report.stressValueCount -ne $ExpectedValueCount `
+        -or [int64]$report.stressLifecycleCycleCount -ne $ExpectedLifecycleCycles `
+        -or -not [bool]$report.artifactsPrevalidated `
+        -or [string]$report.sourceCommit -cne [string]$repositoryProvenance.commit `
+        -or [string]$report.sourceWorkingTreeState -cne 'clean') {
+        throw 'Interoperability evidence does not bind the clean qualification revision and configured nine-cell/mixed-runtime counts.'
+    }
+    $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $canonical = [Collections.Generic.List[string]]::new()
+    $seen = [Collections.Generic.HashSet[string]]::new(
+        $(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
+    foreach ($artifact in @($report.artifacts)) {
+        $recordedPath = [string]$artifact.path
+        $fullPath = if ([IO.Path]::IsPathFullyQualified($recordedPath)) {
+            [IO.Path]::GetFullPath($recordedPath)
+        }
+        else {
+            [IO.Path]::GetFullPath((Join-Path $root $recordedPath))
+        }
+        if (-not $fullPath.StartsWith($artifactRoot, $comparison) `
+            -or -not $seen.Add($fullPath) `
+            -or -not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw "Interoperability artifact path is outside artifacts, duplicated, or missing: '$recordedPath'."
+        }
+        $item = Get-Item -LiteralPath $fullPath -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 `
+            -or [int64]$artifact.length -ne [int64]$item.Length `
+            -or [string]$artifact.sha256 -notmatch '^[0-9A-F]{64}$' `
+            -or [string]$artifact.sha256 -cne (Get-FileSha256 $fullPath)) {
+            throw "Interoperability artifact hash/length/link proof failed for '$recordedPath'."
+        }
+        $canonical.Add("$recordedPath|$($artifact.length)|$($artifact.sha256)")
+    }
+    if ($canonical.Count -lt 3) {
+        throw 'Interoperability artifact evidence contains too few installed/package artifacts.'
+    }
+    $canonical.Sort([StringComparer]::Ordinal)
+    $digest = Get-StringSha256 (@($canonical) -join "`n")
+    if ([string]$report.artifactSetSha256 -cne $digest) {
+        throw 'Interoperability artifact-set digest does not match its exact rows.'
+    }
+    return [pscustomobject][ordered]@{
+        evidencePath = [IO.Path]::GetRelativePath($root, $Path)
+        evidenceSha256 = Get-FileSha256 $Path
+        artifactCount = $canonical.Count
+        artifactSetSha256 = $digest
+    }
+}
+
+function Assert-DockerInteropEvidence {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][int64]$ExpectedValueCount,
+        [Parameter(Mandatory)][int64]$ExpectedLifecycleCycles)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Docker interoperability evidence is missing: '$Path'."
+    }
+    $report = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 8
+    $dockerfile = Join-Path $root 'tests/SharedMemoryStore.InteropTests/Dockerfile'
+    if ([int64]$report.schemaVersion -ne 1 `
+        -or [string]$report.mode -cne 'docker' `
+        -or -not [bool]$report.stressEnabled `
+        -or [int64]$report.orderedRuntimeCells -ne 9 `
+        -or [int64]$report.stressValueCount -ne $ExpectedValueCount `
+        -or [int64]$report.stressLifecycleCycleCount -ne $ExpectedLifecycleCycles `
+        -or -not [bool]$report.artifactBuildPerformed `
+        -or [string]$report.sourceCommit -cne [string]$repositoryProvenance.commit `
+        -or [string]$report.sourceWorkingTreeState -cne 'clean' `
+        -or [string]$report.dockerImageId -notmatch '^sha256:[0-9a-f]{64}$' `
+        -or [string]$report.dockerfileSha256 -cne (Get-FileSha256 $dockerfile)) {
+        throw 'Docker interoperability evidence does not bind the clean revision, Dockerfile, image id, and configured stress counts.'
+    }
+    return [pscustomobject][ordered]@{
+        evidencePath = [IO.Path]::GetRelativePath($root, $Path)
+        evidenceSha256 = Get-FileSha256 $Path
+        dockerImageId = [string]$report.dockerImageId
+    }
 }
 
 function Invoke-TextCommand {
@@ -418,6 +516,7 @@ $repositoryProvenance = Get-RepositoryProvenance
 $completionProvenance = $null
 $testedAssemblyManifest = @()
 $completionAssemblyManifest = @()
+$interopArtifactEvidencePath = $null
 
 function Assert-KnownProvenance {
     param(
@@ -820,6 +919,7 @@ function Invoke-BoundedStep {
 
     $result = [ordered]@{
         name = $Name
+        required = $true
         command = $FileName + ' ' + ($Arguments -join ' ')
         startedUtc = $startedUtc
         elapsedSeconds = $stopwatch.Elapsed.TotalSeconds
@@ -860,6 +960,7 @@ function Add-EvidenceResult {
 
     $results.Add([pscustomobject][ordered]@{
         name = $Name
+        required = $true
         command = $null
         startedUtc = [DateTimeOffset]::UtcNow
         elapsedSeconds = 0
@@ -1160,9 +1261,9 @@ function Get-ChurnQualificationTestContract {
     }
     $method = $match.Groups['method'].Value
     $namespacePattern = '(?m)^[ \t]*namespace[ \t]+' +
-        [regex]::Escape($churnTestNamespace) + ';[ \t]*$'
+        [regex]::Escape($churnTestNamespace) + ';[ \t]*\r?$'
     $classPattern = '(?m)^[ \t]*public[ \t]+sealed[ \t]+class[ \t]+' +
-        [regex]::Escape($churnTestClass) + '[ \t]*$'
+        [regex]::Escape($churnTestClass) + '[ \t]*\r?$'
     $methodDeclarationPattern = '^[ \t]*\[Fact\][ \t]*\r?\n' +
         '(?:[ \t]*\[[^\r\n]+\][ \t]*\r?\n)*' +
         '[ \t]*public[ \t]+(?:async[ \t]+)?(?:void|Task(?:<[^>\r\n]+>)?)[ \t]+' +
@@ -1194,8 +1295,8 @@ function Assert-QualificationConfiguration {
     if (-not $ValidateOnly -and $repositoryProvenance.workingTreeState -ne 'clean') {
         throw 'Executable qualification requires a clean working tree.'
     }
-    if ((Get-StrictInt64 $config 'schemaVersion' 'qualification config' 5 5) -ne 5) {
-        throw "Qualification config schemaVersion must be 5."
+    if ((Get-StrictInt64 $config 'schemaVersion' 'qualification config' 6 6) -ne 6) {
+        throw "Qualification config schemaVersion must be the SMS2-only schema 6."
     }
     if ($Configuration -ne 'Release' -and -not $ValidateOnly) {
         throw "Qualification evidence must be built in Release; '$Configuration' is diagnostic-only."
@@ -1208,6 +1309,8 @@ function Assert-QualificationConfiguration {
         'productionRaceRepetitionsPerFamily',
         'churnCycles',
         'recoveryCases',
+        'interopValueCount',
+        'interopLifecycleCycleCount',
         'performanceWarmupSeconds',
         'performanceDurationSeconds',
         'performanceDurationBoundGraceSeconds',
@@ -1271,35 +1374,38 @@ function Assert-QualificationConfiguration {
     Assert-ExactStringSet 'productionRaceFamilies' @($config.completionEvidence.productionRaceFamilies) @(
         'publish-publish', 'publish-reserve', 'reserve-reserve', 'commit-acquire',
         'acquire-remove', 'release-reclaim', 'recovery-live-lease', 'disposal-operation')
-    Assert-ExactStringSet 'performance profiles' @($config.performanceMatrix.profiles) @('Legacy', 'LockFree')
-    Assert-ExactStringSet 'count-bound performance profiles' @($config.performanceMatrix.countBoundProfiles) @('LockFree')
-    Assert-ExactStringSet 'lock-free-only performance scenarios' @($config.performanceMatrix.lockFreeOnlyScenarios) @('sticky-overflow-miss')
-    $linuxTiny = Get-RequiredPropertyValue $config 'linuxTinyPerformance' 'qualification config'
+    if ((Get-StrictString $config.performanceMatrix 'protocol' 'qualification config performanceMatrix') -cne 'Sms2') {
+        throw 'performanceMatrix.protocol must be Sms2.'
+    }
+    $tiny = Get-RequiredPropertyValue $config 'tinyPerformance' 'qualification config'
     $expectedLinuxTinyProperties = @(
-        'mode', 'profiles', 'scenarios', 'processCounts', 'syncKeysPerWorker',
+        'mode', 'protocol', 'scenarios', 'processCounts', 'syncKeysPerWorker',
         'syncMaximumWorkerCount', 'syncCanonicalBucketCount', 'syncKeyCatalogSha256',
-        'syncKeyCanonicalBucketAssignments', 'minimumThroughputRatio',
-        'maximumUncontendedP99Ratio', 'maximumScaleP99Ratio',
-        'maximumP99Microseconds', 'maximumStallMicroseconds')
-    if ((@($linuxTiny.PSObject.Properties.Name) -join ',') -cne ($expectedLinuxTinyProperties -join ',')) {
-        throw "linuxTinyPerformance properties must be exactly [$($expectedLinuxTinyProperties -join ', ')]."
+        'syncKeyCanonicalBucketAssignments', 'minimumEightProcessOperationsPerSecond',
+        'maximumScaleP99Ratio', 'maximumEightProcessP99MicrosecondsByPlatform',
+        'maximumStallMicroseconds')
+    if ((@($tiny.PSObject.Properties.Name) -join ',') -cne ($expectedLinuxTinyProperties -join ',')) {
+        throw "tinyPerformance properties must be exactly [$($expectedLinuxTinyProperties -join ', ')]."
     }
-    if ((Get-StrictString $linuxTiny 'mode' 'qualification config linuxTinyPerformance') -cne 'sync') {
-        throw 'linuxTinyPerformance.mode must be sync.'
+    if ((Get-StrictString $tiny 'mode' 'qualification config tinyPerformance') -cne 'sync' `
+        -or (Get-StrictString $tiny 'protocol' 'qualification config tinyPerformance') -cne 'Sms2') {
+        throw 'tinyPerformance must select sync mode and the sole Sms2 protocol.'
     }
-    Assert-ExactStringSet 'linuxTinyPerformance profiles' @($linuxTiny.profiles) @('Legacy', 'LockFree')
-    Assert-ExactStringSet 'linuxTinyPerformance scenarios' @($linuxTiny.scenarios) @('acquire-release', 'publish-remove')
-    [void](Assert-LinuxTinySyncTopology $linuxTiny 'qualification config linuxTinyPerformance')
-    $linuxProcessCounts = @($linuxTiny.processCounts)
+    Assert-ExactStringSet 'tinyPerformance scenarios' @($tiny.scenarios) @('acquire-release', 'publish-remove')
+    [void](Assert-LinuxTinySyncTopology $tiny 'qualification config tinyPerformance')
+    $linuxProcessCounts = @($tiny.processCounts)
+    $p99ByPlatform = Get-RequiredPropertyValue $tiny `
+        'maximumEightProcessP99MicrosecondsByPlatform' 'qualification config tinyPerformance'
     if ($linuxProcessCounts.Count -ne 2 `
         -or -not (Test-IsIntegerNumber $linuxProcessCounts[0]) -or [int64]$linuxProcessCounts[0] -ne 1 `
         -or -not (Test-IsIntegerNumber $linuxProcessCounts[1]) -or [int64]$linuxProcessCounts[1] -ne 8 `
-        -or (Get-StrictDouble $linuxTiny 'minimumThroughputRatio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
-        -or (Get-StrictDouble $linuxTiny 'maximumUncontendedP99Ratio' 'qualification config linuxTinyPerformance' 1 1) -ne 1 `
-        -or (Get-StrictDouble $linuxTiny 'maximumScaleP99Ratio' 'qualification config linuxTinyPerformance' 3 3) -ne 3 `
-        -or (Get-StrictDouble $linuxTiny 'maximumP99Microseconds' 'qualification config linuxTinyPerformance' 10 10) -ne 10 `
-        -or (Get-StrictDouble $linuxTiny 'maximumStallMicroseconds' 'qualification config linuxTinyPerformance' 10000 10000) -ne 10000) {
-        throw 'linuxTinyPerformance must require process counts [1,8], LF1/Legacy1 p99<=1, LF8/Legacy8 throughput>=1, LF8/LF1 p99<=3, LF8 p99<=10us, and every raw lock-free stall<=10000us.'
+        -or (@($p99ByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
+        -or (Get-StrictDouble $p99ByPlatform 'windows-x64' 'qualification config tinyPerformance p99 limits' 25 25) -ne 25 `
+        -or (Get-StrictDouble $p99ByPlatform 'linux-x64' 'qualification config tinyPerformance p99 limits' 10 10) -ne 10 `
+        -or (Get-StrictDouble $tiny 'minimumEightProcessOperationsPerSecond' 'qualification config tinyPerformance' 100000 100000) -ne 100000 `
+        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3 `
+        -or (Get-StrictDouble $tiny 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000) -ne 10000) {
+        throw 'tinyPerformance must require the absolute Sms2 gates: [1,8] processes, >=100000 8-process ops/s, <=3 scale ratio, <=25us Windows/<=10us Linux 8-process p99, and <=10000us raw stall.'
     }
     if ((Get-StrictInt64 $config.tiers.release 'performanceWarmupSeconds' 'qualification config release tier' 10 10) -ne 10 `
         -or (Get-StrictInt64 $config.tiers.release 'performanceDurationSeconds' 'qualification config release tier' 60 60) -ne 60 `
@@ -1351,6 +1457,19 @@ function Assert-QualificationConfiguration {
         throw "Qualification tier '$Tier' must execute at least one recovery case for each of the $($checkpointCatalog.Count) canonical checkpoints."
     }
 
+    $minimumInteropValues = if ($Tier -eq 'pr') { 100 } else { 1000 }
+    $minimumInteropLifecycleCycles = switch ($Tier) {
+        'pr' { 1000; break }
+        'nightly' { 10000; break }
+        'release' { 125000; break }
+    }
+    if ((Get-StrictInt64 $selected 'interopValueCount' "qualification tier '$Tier'" 1 100000) `
+            -lt $minimumInteropValues `
+        -or (Get-StrictInt64 $selected 'interopLifecycleCycleCount' "qualification tier '$Tier'" 1 1000000) `
+            -lt $minimumInteropLifecycleCycles) {
+        throw "Qualification tier '$Tier' does not meet its installed-artifact interoperability counts ($minimumInteropValues values per ordered cell; $minimumInteropLifecycleCycles mixed-runtime lifecycle cycles)."
+    }
+
     if ($Tier -eq 'release') {
         $releaseMinimums = [ordered]@{
             checkerHistoryRepetitionsPerFamily = 10000
@@ -1358,6 +1477,8 @@ function Assert-QualificationConfiguration {
             productionRaceRepetitionsPerFamily = 1000000
             churnCycles = 100000000
             recoveryCases = 10000
+            interopValueCount = 1000
+            interopLifecycleCycleCount = 125000
             performanceWarmupSeconds = 10
             performanceDurationSeconds = 60
             performanceDurationBoundGraceSeconds = 60
@@ -2136,7 +2257,8 @@ function Get-ExpectedReleaseOsRows {
         'architecture', 'atomic', 'raw', 'no-lock-held', 'no-lock-linux-strace',
         'linux-tiny-performance',
         'crash-checkpoint-kill', 'crash-linux-sigstop', 'crash-linux-docker-pause',
-        'release-tests', 'native', 'python', 'docker', 'sample-6', 'sample-12', 'pack')
+        'release-tests', 'native', 'python', 'host-interop', 'docker', 'docker-interop',
+        'sample-6', 'sample-12', 'pack')
     $requirements = [ordered]@{}
     foreach ($name in $allNames) {
         $requirements[$name] = $true
@@ -2192,7 +2314,7 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         throw "Linux OS evidence '$EvidencePath' lacks its required passing linux-tiny-performance row."
     }
     $expectedCommandTokens = @(
-        'SharedMemoryStore.SyncProbe.csproj', '--mode sync', '--profile both',
+        'SharedMemoryStore.SyncProbe.csproj', '--mode sync',
         '--scenario acquire-release,publish-remove', '--process-counts 1,8',
         '--warmup 10', '--duration 60', '--trials 3')
     foreach ($token in $expectedCommandTokens) {
@@ -2237,9 +2359,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     }
 
     $raw = Get-Content -LiteralPath $actualRawPath -Raw | ConvertFrom-Json -Depth 30
-    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 8 8) -ne 8 `
-        -or (Get-StrictInt64 $raw 'minimumCompatibleSchemaVersion' 'Linux tiny performance raw report' 8 8) -ne 8) {
-        throw 'Linux tiny performance raw report must be exact schema 8/minimum-compatible 8.'
+    if ((Get-StrictInt64 $raw 'schemaVersion' 'Linux tiny performance raw report' 9 9) -ne 9 `
+        -or (Get-StrictInt64 $raw 'minimumCompatibleSchemaVersion' 'Linux tiny performance raw report' 9 9) -ne 9) {
+        throw 'Linux tiny performance raw report must be exact SMS2-only schema 9/minimum-compatible 9.'
     }
     [void](Get-StrictString $raw 'schemaCompatibility' 'Linux tiny performance raw report')
     $environment = Get-RequiredPropertyValue $raw 'environment' 'Linux tiny performance raw report'
@@ -2292,12 +2414,11 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     [void](Assert-LinuxTinySyncTopology $configuration 'Linux tiny performance configuration')
     Assert-BenchmarkScenarioStoreDimensions `
         $configuration @('acquire-release', 'publish-remove') 'Linux tiny performance configuration'
-    if ((@($configuration.profiles) -join ',') -cne 'Legacy,LockFree' `
-        -or (@($configuration.countBoundProfiles) -join ',') -cne 'LockFree' `
+    if ((Get-StrictString $configuration 'protocol' 'Linux tiny performance configuration') -cne 'Sms2' `
         -or (@($configuration.scenarios) -join ',') -cne 'acquire-release,publish-remove' `
         -or (@($configuration.scenarioProcessCounts.PSObject.Properties.Name) -join ',') -cne
             'acquire-release,publish-remove') {
-        throw 'Linux tiny performance raw profile/scenario matrix is not exact.'
+        throw 'Linux tiny performance raw Sms2/scenario matrix is not exact.'
     }
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
         $counts = @($configuration.scenarioProcessCounts.$scenario)
@@ -2310,32 +2431,31 @@ function Assert-LinuxTinyOsPerformanceEvidence {
 
     $runs = @($raw.runs)
     $summaries = @($raw.summary)
-    if ($runs.Count -ne 24 -or $summaries.Count -ne 8) {
-        throw "Linux tiny performance raw matrix must contain 24 runs and 8 summaries, actual=$($runs.Count)/$($summaries.Count)."
+    if ($runs.Count -ne 12 -or $summaries.Count -ne 4) {
+        throw "Linux tiny performance raw matrix must contain 12 Sms2 runs and 4 summaries, actual=$($runs.Count)/$($summaries.Count)."
     }
     $expectedRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $expectedSummaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($profile in @('Legacy', 'LockFree')) {
-        foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            foreach ($processCount in @(1, 8)) {
-                [void]$expectedSummaryKeys.Add("$profile|$scenario|$processCount")
-                foreach ($trial in 1..3) {
-                    [void]$expectedRunKeys.Add("$profile|$scenario|$processCount|$trial")
-                }
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        foreach ($processCount in @(1, 8)) {
+            [void]$expectedSummaryKeys.Add("Sms2|$scenario|$processCount")
+            foreach ($trial in 1..3) {
+                [void]$expectedRunKeys.Add("Sms2|$scenario|$processCount|$trial")
             }
         }
     }
     $actualRunKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($run in $runs) {
-        $context = "Linux tiny run $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
-        $profile = Get-StrictString $run 'profile' $context
+        $context = "Linux tiny run $($run.protocol)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
+        $protocol = Get-StrictString $run 'protocol' $context
+        if ($protocol -cne 'Sms2') { throw "$context does not identify the sole Sms2 protocol." }
         $scenario = Get-StrictString $run 'scenario' $context
         $processCount = Get-StrictInt64 $run 'processCount' $context 1 8
         if ($processCount -notin @(1, 8)) {
             throw "$context has an unsupported process count."
         }
         $trial = Get-StrictInt64 $run 'trial' $context 1 3
-        $key = "$profile|$scenario|$processCount|$trial"
+        $key = "$protocol|$scenario|$processCount|$trial"
         if (-not $expectedRunKeys.Contains($key) -or -not $actualRunKeys.Add($key)) {
             throw "$context is unexpected or duplicated."
         }
@@ -2382,10 +2502,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         [void](Get-StrictDouble $run 'earlyP99Microseconds' $context 0 [double]::MaxValue -Positive)
         [void](Get-StrictDouble $run 'lateP99Microseconds' $context 0 [double]::MaxValue -Positive)
         if ($p50 -gt $p95 -or $p95 -gt $p99 -or $p99 -gt $maximum `
-            -or ($profile -ceq 'LockFree' -and $maximum -gt
-                (Get-StrictDouble $config.linuxTinyPerformance 'maximumStallMicroseconds' `
-                    'qualification config linuxTinyPerformance' 10000 10000))) {
-            throw "$context violates p99/maximum ordering or the every-run 10000us lock-free stall gate."
+            -or $maximum -gt (Get-StrictDouble $config.tinyPerformance 'maximumStallMicroseconds' `
+                'qualification config tinyPerformance' 10000 10000)) {
+            throw "$context violates p99/maximum ordering or the every-run 10000us Sms2 stall gate."
         }
         $assigned = @($run.assignedProcessors)
         if ($assigned.Count -ne $processCount `
@@ -2447,19 +2566,20 @@ function Assert-LinuxTinyOsPerformanceEvidence {
 
     $actualSummaryKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($summary in $summaries) {
-        $context = "Linux tiny summary $($summary.profile)/$($summary.scenario)/$($summary.processCount)"
-        $profile = Get-StrictString $summary 'profile' $context
+        $context = "Linux tiny summary $($summary.protocol)/$($summary.scenario)/$($summary.processCount)"
+        $protocol = Get-StrictString $summary 'protocol' $context
+        if ($protocol -cne 'Sms2') { throw "$context does not identify the sole Sms2 protocol." }
         $scenario = Get-StrictString $summary 'scenario' $context
         $processCount = Get-StrictInt64 $summary 'processCount' $context 1 8
         if ($processCount -notin @(1, 8)) {
             throw "$context has an unsupported process count."
         }
-        $key = "$profile|$scenario|$processCount"
+        $key = "$protocol|$scenario|$processCount"
         if (-not $expectedSummaryKeys.Contains($key) -or -not $actualSummaryKeys.Add($key)) {
             throw "$context is unexpected or duplicated."
         }
         $matching = @($runs | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $processCount
+            [string]$_.protocol -ceq $protocol -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $processCount
         })
         if ($matching.Count -ne 3 -or (Get-StrictInt64 $summary 'totalFailures' $context 0 0) -ne 0) {
             throw "$context does not summarize exactly three correctness-clean trials."
@@ -2496,41 +2616,29 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         throw 'Linux tiny performance summary tuple set is incomplete.'
     }
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $legacyOne = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        $sms2One = @($summaries | Where-Object {
+            [string]$_.protocol -ceq 'Sms2' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
         })[0]
-        $lockFreeOne = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 1
+        $sms2Eight = @($summaries | Where-Object {
+            [string]$_.protocol -ceq 'Sms2' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
         })[0]
-        $legacyEight = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'Legacy' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
-        })[0]
-        $lockFreeEight = @($summaries | Where-Object {
-            [string]$_.profile -ceq 'LockFree' -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq 8
-        })[0]
-        $legacyOneP99 = Get-StrictDouble $legacyOne 'medianP99Microseconds' "$scenario legacy/1p summary" 0 [double]::MaxValue -Positive
-        $lockFreeOneP99 = Get-StrictDouble $lockFreeOne 'medianP99Microseconds' "$scenario lock-free/1p summary" 0 [double]::MaxValue -Positive
-        $legacyEightRate = Get-StrictDouble $legacyEight 'medianApiCallsPerSecond' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
-        $lockFreeEightRate = Get-StrictDouble $lockFreeEight 'medianApiCallsPerSecond' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
-        $lockFreeEightP99 = Get-StrictDouble $lockFreeEight 'medianP99Microseconds' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
-        $uncontendedP99Ratio = $lockFreeOneP99 / $legacyOneP99
-        $throughputRatio = $lockFreeEightRate / $legacyEightRate
-        $scaleP99Ratio = $lockFreeEightP99 / $lockFreeOneP99
-        if (-not [double]::IsFinite($uncontendedP99Ratio) `
-            -or $uncontendedP99Ratio -gt [double]$config.linuxTinyPerformance.maximumUncontendedP99Ratio `
-            -or -not [double]::IsFinite($throughputRatio) `
-            -or $throughputRatio -lt [double]$config.linuxTinyPerformance.minimumThroughputRatio `
-            -or -not [double]::IsFinite($scaleP99Ratio) `
-            -or $scaleP99Ratio -gt [double]$config.linuxTinyPerformance.maximumScaleP99Ratio `
-            -or $lockFreeEightP99 -gt [double]$config.linuxTinyPerformance.maximumP99Microseconds) {
-            throw "Linux tiny performance '$scenario' gate failed: uncontendedP99Ratio=$uncontendedP99Ratio throughputRatio=$throughputRatio scaleP99Ratio=$scaleP99Ratio lockFreeEightP99Microseconds=$lockFreeEightP99."
+        $sms2OneP99 = Get-StrictDouble $sms2One 'medianP99Microseconds' "$scenario Sms2/1p summary" 0 [double]::MaxValue -Positive
+        $sms2EightRate = Get-StrictDouble $sms2Eight 'medianApiCallsPerSecond' "$scenario Sms2/8p summary" 0 [double]::MaxValue -Positive
+        $sms2EightP99 = Get-StrictDouble $sms2Eight 'medianP99Microseconds' "$scenario Sms2/8p summary" 0 [double]::MaxValue -Positive
+        $scaleP99Ratio = $sms2EightP99 / $sms2OneP99
+        if (-not [double]::IsFinite($scaleP99Ratio) `
+            -or $scaleP99Ratio -gt [double]$config.tinyPerformance.maximumScaleP99Ratio `
+            -or $sms2EightRate -lt [double]$config.tinyPerformance.minimumEightProcessOperationsPerSecond `
+            -or $sms2EightP99 -gt [double]$config.tinyPerformance.maximumEightProcessP99MicrosecondsByPlatform.'linux-x64') {
+            throw "Linux tiny performance '$scenario' absolute gate failed: Sms2EightOpsPerSecond=$sms2EightRate scaleP99Ratio=$scaleP99Ratio Sms2EightP99Microseconds=$sms2EightP99."
         }
     }
     $declared = Get-RequiredPropertyValue $performance 'validation' 'Linux tiny performance row evidence'
     $expectedDeclaredProperties = @(
-        'schemaVersion', 'runCount', 'summaryCount', 'warmupSeconds', 'durationSeconds',
-        'trials', 'processCounts', 'minimumThroughputRatio', 'maximumUncontendedP99Ratio',
-        'maximumScaleP99Ratio', 'maximumP99Microseconds', 'maximumStallMicroseconds', 'metrics')
+        'schemaVersion', 'protocol', 'runCount', 'summaryCount', 'warmupSeconds', 'durationSeconds',
+        'trials', 'processCounts', 'minimumEightProcessOperationsPerSecond',
+        'maximumScaleP99Ratio', 'maximumEightProcessP99Microseconds',
+        'maximumStallMicroseconds', 'metrics')
     if ((@($declared.PSObject.Properties.Name) -join ',') -cne ($expectedDeclaredProperties -join ',')) {
         throw 'Linux tiny performance row declared validation has unexpected properties or property order.'
     }
@@ -2538,41 +2646,42 @@ function Assert-LinuxTinyOsPerformanceEvidence {
     if ($declaredProcessCounts.Count -ne 2 `
         -or -not (Test-IsIntegerNumber $declaredProcessCounts[0]) -or [int64]$declaredProcessCounts[0] -ne 1 `
         -or -not (Test-IsIntegerNumber $declaredProcessCounts[1]) -or [int64]$declaredProcessCounts[1] -ne 8 `
-        -or (Get-StrictInt64 $declared 'schemaVersion' 'Linux tiny declared validation' 2 2) -ne 2 `
-        -or (Get-StrictInt64 $declared 'runCount' 'Linux tiny declared validation' 24 24) -ne 24 `
-        -or (Get-StrictInt64 $declared 'summaryCount' 'Linux tiny declared validation' 8 8) -ne 8 `
+        -or (Get-StrictInt64 $declared 'schemaVersion' 'Linux tiny declared validation' 3 3) -ne 3 `
+        -or (Get-StrictString $declared 'protocol' 'Linux tiny declared validation') -cne 'Sms2' `
+        -or (Get-StrictInt64 $declared 'runCount' 'Linux tiny declared validation' 12 12) -ne 12 `
+        -or (Get-StrictInt64 $declared 'summaryCount' 'Linux tiny declared validation' 4 4) -ne 4 `
         -or (Get-StrictInt64 $declared 'warmupSeconds' 'Linux tiny declared validation' 10 10) -ne 10 `
         -or (Get-StrictInt64 $declared 'durationSeconds' 'Linux tiny declared validation' 60 60) -ne 60 `
         -or (Get-StrictInt64 $declared 'trials' 'Linux tiny declared validation' 3 3) -ne 3 `
-        -or (Get-StrictDouble $declared 'minimumThroughputRatio' 'Linux tiny declared validation' 1 1) -ne 1 `
-        -or (Get-StrictDouble $declared 'maximumUncontendedP99Ratio' 'Linux tiny declared validation' 1 1) -ne 1 `
+        -or (Get-StrictDouble $declared 'minimumEightProcessOperationsPerSecond' 'Linux tiny declared validation' 100000 100000) -ne 100000 `
         -or (Get-StrictDouble $declared 'maximumScaleP99Ratio' 'Linux tiny declared validation' 3 3) -ne 3 `
-        -or (Get-StrictDouble $declared 'maximumP99Microseconds' 'Linux tiny declared validation' 10 10) -ne 10 `
+        -or (Get-StrictDouble $declared 'maximumEightProcessP99Microseconds' 'Linux tiny declared validation' 10 10) -ne 10 `
         -or (Get-StrictDouble $declared 'maximumStallMicroseconds' 'Linux tiny declared validation' 10000 10000) -ne 10000) {
         throw 'Linux tiny performance row declared validation does not match the recomputed gate.'
     }
     $declaredMetrics = @($declared.metrics)
-    if ($declaredMetrics.Count -ne 8) {
-        throw 'Linux tiny performance row must declare exactly eight recomputable metric rows.'
+    if ($declaredMetrics.Count -ne 4) {
+        throw 'Linux tiny performance row must declare exactly four recomputable Sms2 metric rows.'
     }
     $actualDeclaredMetricKeys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($metric in $declaredMetrics) {
-        $metricContext = "Linux tiny declared metric $($metric.profile)/$($metric.scenario)/$($metric.processCount)"
-        $profile = Get-StrictString $metric 'profile' $metricContext
+        $metricContext = "Linux tiny declared metric $($metric.protocol)/$($metric.scenario)/$($metric.processCount)"
+        $protocol = Get-StrictString $metric 'protocol' $metricContext
+        if ($protocol -cne 'Sms2') { throw "$metricContext does not identify Sms2." }
         $scenario = Get-StrictString $metric 'scenario' $metricContext
         $metricProcessCount = Get-StrictInt64 $metric 'processCount' $metricContext 1 8
         if ($metricProcessCount -notin @(1, 8)) {
             throw "$metricContext has an unsupported process count."
         }
-        $metricKey = "$profile|$scenario|$metricProcessCount"
+        $metricKey = "$protocol|$scenario|$metricProcessCount"
         if (-not $expectedSummaryKeys.Contains($metricKey) -or -not $actualDeclaredMetricKeys.Add($metricKey)) {
             throw "$metricContext is unexpected or duplicated."
         }
         $matchingSummary = @($summaries | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
+            [string]$_.protocol -ceq $protocol -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
         })
         $matchingRuns = @($runs | Where-Object {
-            [string]$_.profile -ceq $profile -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
+            [string]$_.protocol -ceq $protocol -and [string]$_.scenario -ceq $scenario -and [int64]$_.processCount -eq $metricProcessCount
         })
         if ($matchingSummary.Count -ne 1 -or $matchingRuns.Count -ne 3) {
             throw "$metricContext does not identify one exact recomputed summary tuple."
@@ -2601,18 +2710,12 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $rawPath = Join-Path $treeRoot 'linux-tiny-performance.json'
     $runs = [Collections.Generic.List[object]]::new()
     $summaries = [Collections.Generic.List[object]]::new()
-    foreach ($profile in @('Legacy', 'LockFree')) {
-        foreach ($scenario in @('acquire-release', 'publish-remove')) {
-            foreach ($processCount in @(1, 8)) {
-                $api = if ($profile -ceq 'Legacy') { 1000.0 } else { 1100.0 }
-                $p99 = if ($processCount -eq 1) {
-                    if ($profile -ceq 'Legacy') { 5.0 } else { 4.0 }
-                }
-                else {
-                    if ($profile -ceq 'Legacy') { 3.0 } else { 8.0 }
-                }
-                $maximum = if ($profile -ceq 'Legacy') { 500.0 } else { 9000.0 }
-                [int64]$cycles = if ($profile -ceq 'Legacy') { 30000 } else { 33000 }
+    foreach ($scenario in @('acquire-release', 'publish-remove')) {
+        foreach ($processCount in @(1, 8)) {
+                $api = 110000.0
+                $p99 = if ($processCount -eq 1) { 4.0 } else { 8.0 }
+                $maximum = 9000.0
+                [int64]$cycles = 3300000
                 [int64]$operations = $cycles * 2
                 [int64]$workerCycle = $cycles / $processCount
                 [int64]$windowSamples = [int64]$processCount * 1024
@@ -2628,7 +2731,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
                 }
                 foreach ($trial in 1..3) {
                     $runs.Add([pscustomobject][ordered]@{
-                        Profile = $profile; Scenario = $scenario; ProcessCount = $processCount; Trial = $trial
+                        Protocol = 'Sms2'; Scenario = $scenario; ProcessCount = $processCount; Trial = $trial
                         ReaderProcessCount = $(if ($scenario -ceq 'acquire-release') { $processCount } else { 0 })
                         PublisherProcessCount = $(if ($scenario -ceq 'publish-remove') { $processCount } else { 0 })
                         ObserverProcessCount = 0; Cycles = $cycles; Operations = $operations
@@ -2654,15 +2757,14 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
                     }
                 }
                 $summaries.Add([pscustomobject][ordered]@{
-                    Profile = $profile; Scenario = $scenario; ProcessCount = $processCount
+                    Protocol = 'Sms2'; Scenario = $scenario; ProcessCount = $processCount
                     MedianApiCallsPerSecond = $api; MedianP99Microseconds = $p99
                     MedianMaxMicroseconds = $maximum; TotalFailures = 0; StatusHistogram = $summaryHistogram
                 })
             }
-        }
     }
     $raw = [pscustomobject][ordered]@{
-        SchemaVersion = 8
+        SchemaVersion = 9
         Environment = [pscustomobject][ordered]@{
             RepositoryCommit = 'synthetic'; RepositoryWorkingTreeState = 'clean'
             SharedMemoryStoreAssemblySha256 = ('A' * 64); ProbeAssemblySha256 = ('B' * 64)
@@ -2673,8 +2775,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         }
         Configuration = [pscustomobject][ordered]@{
             Mode = 'sync'; DurationSeconds = 60; DurationBoundGraceSeconds = 60
-            Trials = 3; Profiles = @('Legacy', 'LockFree')
-            CountBoundProfiles = @('LockFree')
+            Trials = 3; Protocol = 'Sms2'
             Scenarios = @('acquire-release', 'publish-remove')
             ScenarioProcessCounts = [pscustomobject][ordered]@{
                 'acquire-release' = @(1, 8); 'publish-remove' = @(1, 8)
@@ -2691,14 +2792,14 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             }
             WarmupCycles = 0; WarmupSeconds = 10; AffinityRequested = $true
             SamplingInterval = 64; MaxLatencySamplesPerWorker = 65536
-            SyncKeysPerWorker = [int]$config.linuxTinyPerformance.syncKeysPerWorker
-            SyncMaximumWorkerCount = [int]$config.linuxTinyPerformance.syncMaximumWorkerCount
-            SyncCanonicalBucketCount = [int]$config.linuxTinyPerformance.syncCanonicalBucketCount
-            SyncKeyCatalogSha256 = [string]$config.linuxTinyPerformance.syncKeyCatalogSha256
-            SyncKeyCanonicalBucketAssignments = @($config.linuxTinyPerformance.syncKeyCanonicalBucketAssignments)
+            SyncKeysPerWorker = [int]$config.tinyPerformance.syncKeysPerWorker
+            SyncMaximumWorkerCount = [int]$config.tinyPerformance.syncMaximumWorkerCount
+            SyncCanonicalBucketCount = [int]$config.tinyPerformance.syncCanonicalBucketCount
+            SyncKeyCatalogSha256 = [string]$config.tinyPerformance.syncKeyCatalogSha256
+            SyncKeyCanonicalBucketAssignments = @($config.tinyPerformance.syncKeyCanonicalBucketAssignments)
         }
-        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 8
-        SchemaCompatibility = 'synthetic Schema v8 release-runner verifier self-test'
+        Runs = @($runs); Summary = @($summaries); MinimumCompatibleSchemaVersion = 9
+        SchemaCompatibility = 'synthetic Schema v9 Sms2-only release-runner verifier self-test'
     }
     $raw | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $rawRelativePath = [IO.Path]::GetRelativePath($root, $rawPath)
@@ -2710,12 +2811,12 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $declaredMetrics = @($summaries | ForEach-Object {
         $summary = $_
         $matchingRuns = @($runs | Where-Object {
-            [string]$_.Profile -ceq [string]$summary.Profile `
+            [string]$_.Protocol -ceq [string]$summary.Protocol `
                 -and [string]$_.Scenario -ceq [string]$summary.Scenario `
                 -and [int64]$_.ProcessCount -eq [int64]$summary.ProcessCount
         })
         [pscustomobject][ordered]@{
-            profile = [string]$summary.Profile
+            protocol = [string]$summary.Protocol
             scenario = [string]$summary.Scenario
             processCount = [int64]$summary.ProcessCount
             medianApiCallsPerSecond = [double]$summary.MedianApiCallsPerSecond
@@ -2745,14 +2846,14 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             })
         results = @([pscustomobject][ordered]@{
             name = 'linux-tiny-performance'; required = $true; status = 'pass'
-            command = 'dotnet SharedMemoryStore.SyncProbe.csproj --mode sync --profile both --scenario acquire-release,publish-remove --process-counts 1,8 --warmup 10 --duration 60 --trials 3'
+            command = 'dotnet SharedMemoryStore.SyncProbe.csproj --mode sync --scenario acquire-release,publish-remove --process-counts 1,8 --warmup 10 --duration 60 --trials 3'
             performanceEvidence = [pscustomobject][ordered]@{
                 schemaVersion = 1; reportPath = $rawRelativePath; reportSha256 = $rawManifest.sha256
                 validation = [pscustomobject][ordered]@{
-                    schemaVersion = 2; runCount = 24; summaryCount = 8
+                    schemaVersion = 3; protocol = 'Sms2'; runCount = 12; summaryCount = 4
                     warmupSeconds = 10; durationSeconds = 60; trials = 3; processCounts = @(1, 8)
-                    minimumThroughputRatio = 1.0; maximumUncontendedP99Ratio = 1.0
-                    maximumScaleP99Ratio = 3.0; maximumP99Microseconds = 10.0
+                    minimumEightProcessOperationsPerSecond = 100000.0
+                    maximumScaleP99Ratio = 3.0; maximumEightProcessP99Microseconds = 10.0
                     maximumStallMicroseconds = 10000.0; metrics = $declaredMetrics
                 }
             }
@@ -2777,12 +2878,12 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $assertions++
 
     $tampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $tamperedLockFreeRun = @($tampered.Runs | Where-Object {
-        [string]$_.Profile -ceq 'LockFree' `
+    $tamperedSms2Run = @($tampered.Runs | Where-Object {
+        [string]$_.Protocol -ceq 'Sms2' `
             -and [string]$_.Scenario -ceq 'acquire-release' `
             -and [int64]$_.ProcessCount -eq 1
     })[0]
-    $tamperedLockFreeRun.MaxMicroseconds = 10001.0
+    $tamperedSms2Run.MaxMicroseconds = 10001.0
     $tampered | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $rawPath
     $tamperedHash = Get-FileSha256 $rawPath
     $osReport.results[0].performanceEvidence.reportSha256 = $tamperedHash
@@ -2791,7 +2892,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $rejected = $false
     try { [void](Assert-LinuxTinyOsPerformanceEvidence $osReport $reportPath) } catch { $rejected = $true }
     if (-not $rejected) {
-        throw 'Linux OS performance verifier self-test accepted an over-limit raw lock-free stall.'
+        throw 'Linux OS performance verifier self-test accepted an over-limit raw Sms2 stall.'
     }
     $assertions++
 
@@ -2857,11 +2958,11 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
         'Linux OS performance verifier self-test accepted incorrect store dimensions.'
     $assertions++
 
-    $countPolicyTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    $countPolicyTampered.Configuration.CountBoundProfiles = @('Legacy')
-    $countPolicyOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-    & $assertRawTamperRejected $countPolicyTampered $countPolicyOsReport `
-        'Linux OS performance verifier self-test accepted a swapped count-bound profile policy.'
+    $protocolTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $protocolTampered.Configuration.Protocol = 'Sms1'
+    $protocolOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    & $assertRawTamperRejected $protocolTampered $protocolOsReport `
+        'Linux OS performance verifier self-test accepted a non-SMS2 report protocol.'
     $assertions++
 
     $targetTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
@@ -2879,34 +2980,9 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
     $assertions++
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $uncontendedTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-        foreach ($run in @($uncontendedTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
-                -and [string]$_.Scenario -ceq $scenario `
-                -and [int64]$_.ProcessCount -eq 1
-        })) {
-            $run.P99Microseconds = 6.0
-            $run.EarlyP99Microseconds = 6.0
-            $run.LateP99Microseconds = 6.0
-        }
-        @($uncontendedTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
-                -and [string]$_.Scenario -ceq $scenario `
-                -and [int64]$_.ProcessCount -eq 1
-        })[0].MedianP99Microseconds = 6.0
-        $uncontendedOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
-        @($uncontendedOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
-            [string]$_.profile -ceq 'LockFree' `
-                -and [string]$_.scenario -ceq $scenario `
-                -and [int64]$_.processCount -eq 1
-        })[0].medianP99Microseconds = 6.0
-        & $assertRawTamperRejected $uncontendedTampered $uncontendedOsReport `
-            "Linux OS performance verifier self-test accepted an over-limit '$scenario' uncontended p99 ratio."
-        $assertions++
-
         $scaleTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($scaleTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 1
         })) {
@@ -2915,13 +2991,13 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             $run.LateP99Microseconds = 2.0
         }
         @($scaleTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 1
         })[0].MedianP99Microseconds = 2.0
         $scaleOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         @($scaleOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
-            [string]$_.profile -ceq 'LockFree' `
+            [string]$_.protocol -ceq 'Sms2' `
                 -and [string]$_.scenario -ceq $scenario `
                 -and [int64]$_.processCount -eq 1
         })[0].medianP99Microseconds = 2.0
@@ -2931,7 +3007,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
 
         $absoluteTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($absoluteTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })) {
@@ -2940,13 +3016,13 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             $run.LateP99Microseconds = 11.0
         }
         @($absoluteTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })[0].MedianP99Microseconds = 11.0
         $absoluteOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         @($absoluteOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
-            [string]$_.profile -ceq 'LockFree' `
+            [string]$_.protocol -ceq 'Sms2' `
                 -and [string]$_.scenario -ceq $scenario `
                 -and [int64]$_.processCount -eq 8
         })[0].medianP99Microseconds = 11.0
@@ -2956,7 +3032,7 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
 
         $throughputTampered = $raw | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         foreach ($run in @($throughputTampered.Runs | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
         })) {
@@ -2965,18 +3041,18 @@ function Invoke-LinuxTinyOsPerformanceVerifierSelfTest {
             $run.ApiCallsPerSecond = [double]$run.Operations / 120.0
         }
         @($throughputTampered.Summary | Where-Object {
-            [string]$_.Profile -ceq 'LockFree' `
+            [string]$_.Protocol -ceq 'Sms2' `
                 -and [string]$_.Scenario -ceq $scenario `
                 -and [int64]$_.ProcessCount -eq 8
-        })[0].MedianApiCallsPerSecond = 550.0
+        })[0].MedianApiCallsPerSecond = 55000.0
         $throughputOsReport = $osReport | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         @($throughputOsReport.results[0].performanceEvidence.validation.metrics | Where-Object {
-            [string]$_.profile -ceq 'LockFree' `
+            [string]$_.protocol -ceq 'Sms2' `
                 -and [string]$_.scenario -ceq $scenario `
                 -and [int64]$_.processCount -eq 8
-        })[0].medianApiCallsPerSecond = 550.0
+        })[0].medianApiCallsPerSecond = 55000.0
         & $assertRawTamperRejected $throughputTampered $throughputOsReport `
-            "Linux OS performance verifier self-test accepted an under-limit '$scenario' 8-process throughput ratio."
+            "Linux OS performance verifier self-test accepted under-limit '$scenario' absolute 8-process throughput."
         $assertions++
     }
 
@@ -3133,6 +3209,62 @@ function Assert-OsResultCommandEvidence {
     return $true
 }
 
+function Assert-OsInteropArtifactEvidence {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][ValidateSet('host', 'docker')][string]$Mode,
+        [Parameter(Mandatory)]$OsReport,
+        [Parameter(Mandatory)][int64]$ExpectedValueCount,
+        [Parameter(Mandatory)][int64]$ExpectedLifecycleCycles)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "OS $Mode interoperability artifact evidence is missing: '$Path'."
+    }
+    $evidence = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -Depth 8
+    if ([int64]$evidence.schemaVersion -ne 1 `
+        -or [string]$evidence.mode -cne $Mode `
+        -or -not [bool]$evidence.stressEnabled `
+        -or [int64]$evidence.orderedRuntimeCells -ne 9 `
+        -or [int64]$evidence.stressValueCount -ne $ExpectedValueCount `
+        -or [int64]$evidence.stressLifecycleCycleCount -ne $ExpectedLifecycleCycles `
+        -or ($Mode -eq 'docker' -and -not [bool]$evidence.artifactBuildPerformed) `
+        -or ($Mode -eq 'host' -and -not [bool]$evidence.artifactsPrevalidated) `
+        -or [string]$evidence.sourceCommit -cne [string]$OsReport.provenance.repositoryCommit `
+        -or [string]$evidence.sourceWorkingTreeState -cne 'clean' `
+        -or [string]$evidence.scriptSha256 -cne (Get-FileSha256 (Join-Path $root 'scripts/validate-interoperability.ps1'))) {
+        throw "OS $Mode interoperability evidence does not bind the exact clean source and configured stress matrix."
+    }
+    if ($Mode -eq 'docker') {
+        if ([string]$evidence.dockerImageId -notmatch '^sha256:[0-9a-f]{64}$' `
+            -or [string]$evidence.dockerfileSha256 -cne
+                (Get-FileSha256 (Join-Path $root 'tests/SharedMemoryStore.InteropTests/Dockerfile'))) {
+            throw 'OS Docker interoperability evidence does not bind its exact image id and Dockerfile.'
+        }
+        return
+    }
+
+    $canonical = [Collections.Generic.List[string]]::new()
+    $paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($artifact in @($evidence.artifacts)) {
+        $artifactPath = [string]$artifact.path
+        if ([IO.Path]::IsPathFullyQualified($artifactPath) `
+            -or $artifactPath.Replace('\', '/') -cnotmatch '^artifacts/.+' `
+            -or -not $paths.Add($artifactPath) `
+            -or [int64]$artifact.length -lt 0 `
+            -or [string]$artifact.sha256 -notmatch '^[0-9A-F]{64}$') {
+            throw "OS host interoperability artifact manifest has an invalid row '$artifactPath'."
+        }
+        $canonical.Add("$artifactPath|$($artifact.length)|$($artifact.sha256)")
+    }
+    if ($canonical.Count -lt 3) {
+        throw 'OS host interoperability artifact manifest contains too few installed/package artifacts.'
+    }
+    $canonical.Sort([StringComparer]::Ordinal)
+    if ([string]$evidence.artifactSetSha256 -cne (Get-StringSha256 (@($canonical) -join "`n"))) {
+        throw 'OS host interoperability artifact-set digest does not match its exact rows.'
+    }
+}
+
 function Assert-ExactReleaseOsRows {
     param(
         [Parameter(Mandatory)]$Report,
@@ -3189,6 +3321,36 @@ function Assert-ExactReleaseOsRows {
     if ($unexpected.Count -ne 0) {
         throw "Release OS evidence '$EvidencePath' has unexpected rows: $($unexpected.name -join ',')."
     }
+
+    $hostInteropRow = @($rows | Where-Object { [string]$_.name -ceq 'host-interop' })[0]
+    foreach ($token in @(
+        'validate-interoperability.ps1', '-SkipBuild', '-ArtifactsPrevalidated', '-Stress',
+        "-StressValueCount $($config.tiers.release.interopValueCount)",
+        "-StressLifecycleCycleCount $($config.tiers.release.interopLifecycleCycleCount)")) {
+        if ([string]$hostInteropRow.command -cnotlike "*$token*") {
+            throw "Release OS host-interop evidence does not bind required command token '$token'."
+        }
+    }
+    $dockerInteropRow = @($rows | Where-Object { [string]$_.name -ceq 'docker-interop' })[0]
+    foreach ($token in @(
+        'validate-interoperability.ps1', '-Docker', '-Stress',
+        '-StressValueCount 1000', '-StressLifecycleCycleCount 10000')) {
+        if ([string]$dockerInteropRow.command -cnotlike "*$token*") {
+            throw "Release OS docker-interop evidence does not bind required command token '$token'."
+        }
+    }
+
+    $osEvidenceRoot = Join-Path `
+        (Split-Path -Parent ([IO.Path]::GetFullPath($EvidencePath))) `
+        ([IO.Path]::GetFileNameWithoutExtension($EvidencePath) + '.evidence')
+    Assert-OsInteropArtifactEvidence `
+        (Join-Path $osEvidenceRoot 'host-interop-artifacts.json') `
+        'host' $Report `
+        ([int64]$config.tiers.release.interopValueCount) `
+        ([int64]$config.tiers.release.interopLifecycleCycleCount)
+    Assert-OsInteropArtifactEvidence `
+        (Join-Path $osEvidenceRoot 'docker-interop-artifacts.json') `
+        'docker' $Report 1000 10000
 
     $cleanRow = @($rows | Where-Object { [string]$_.name -ceq 'clean' })[0]
     $preclean = Get-RequiredPropertyValue $cleanRow 'preclean' "OS evidence '$EvidencePath' clean row"
@@ -3576,7 +3738,7 @@ function Invoke-OsEvidenceManifestVerifierSelfTest {
     $assertions++
 
     $escapedReport = $report | ConvertTo-Json -Depth 10 | ConvertFrom-Json
-    $escapedReport.evidenceManifest[0].path = 'specs/009-lock-free-publish-read/qualification-config.json'
+    $escapedReport.evidenceManifest[0].path = 'specs/010-lock-free-only-multilang/qualification-config.json'
     $rejected = $false
     try { [void](Assert-OsEvidenceTree $escapedReport $reportPath) } catch { $rejected = $true }
     if (-not $rejected) { throw 'OS evidence verifier self-test accepted an out-of-root manifest path.' }
@@ -4134,13 +4296,13 @@ function Assert-SuspensionEvidence {
 }
 
 function Get-ProbeSummaryRow {
-    param($Report, [string]$Profile, [string]$Scenario, [int]$ProcessCount)
+    param($Report, [string]$Protocol, [string]$Scenario, [int]$ProcessCount)
 
     $rows = @($Report.summary | Where-Object {
-        $_.profile -ceq $Profile -and $_.scenario -ceq $Scenario -and [int]$_.processCount -eq $ProcessCount
+        $_.protocol -ceq $Protocol -and $_.scenario -ceq $Scenario -and [int]$_.processCount -eq $ProcessCount
     })
     if ($rows.Count -ne 1) {
-        Fail-StepValidation 'sync-probe' "Missing unique probe summary row $Profile/$Scenario/$ProcessCount."
+        Fail-StepValidation 'sync-probe' "Missing unique probe summary row $Protocol/$Scenario/$ProcessCount."
     }
     return $rows[0]
 }
@@ -4158,20 +4320,12 @@ function Get-ExpectedProbeTuples {
 
     $tuples = [Collections.Generic.List[object]]::new()
     foreach ($scenario in $scenarios.GetEnumerator()) {
-        $profiles = if ($scenario.Key -in @($config.performanceMatrix.lockFreeOnlyScenarios)) {
-            @('LockFree')
-        }
-        else {
-            @($config.performanceMatrix.profiles | ForEach-Object { [string]$_ })
-        }
-        foreach ($profile in $profiles) {
-            foreach ($processCount in @($scenario.Value)) {
-                $tuples.Add([pscustomobject]@{
-                    profile = $profile
-                    scenario = $scenario.Key
-                    processCount = [int]$processCount
-                })
-            }
+        foreach ($processCount in @($scenario.Value)) {
+            $tuples.Add([pscustomobject]@{
+                protocol = 'Sms2'
+                scenario = $scenario.Key
+                processCount = [int]$processCount
+            })
         }
     }
     return @($tuples)
@@ -4191,33 +4345,33 @@ function Assert-ExactProbeMatrix {
 
     foreach ($tuple in $expectedTuples) {
         $summaryRows = @($Report.summary | Where-Object {
-            $_.profile -ceq $tuple.profile `
+            $_.protocol -ceq $tuple.protocol `
                 -and $_.scenario -ceq $tuple.scenario `
                 -and [int]$_.processCount -eq $tuple.processCount
         })
         if ($summaryRows.Count -ne 1) {
-            Fail-StepValidation 'sync-probe' "Expected one summary row for $($tuple.profile)/$($tuple.scenario)/$($tuple.processCount)."
+            Fail-StepValidation 'sync-probe' "Expected one summary row for $($tuple.protocol)/$($tuple.scenario)/$($tuple.processCount)."
         }
         foreach ($trial in (1..([int]$selected.performanceTrials))) {
             $runRows = @($Report.runs | Where-Object {
-                $_.profile -ceq $tuple.profile `
+                $_.protocol -ceq $tuple.protocol `
                     -and $_.scenario -ceq $tuple.scenario `
                     -and [int]$_.processCount -eq $tuple.processCount `
                     -and [int]$_.trial -eq $trial
             })
             if ($runRows.Count -ne 1) {
-                Fail-StepValidation 'sync-probe' "Expected one run for $($tuple.profile)/$($tuple.scenario)/$($tuple.processCount)/trial-$trial."
+                Fail-StepValidation 'sync-probe' "Expected one run for $($tuple.protocol)/$($tuple.scenario)/$($tuple.processCount)/trial-$trial."
             }
         }
     }
 
     foreach ($run in @($Report.runs)) {
         if (@($expectedTuples | Where-Object {
-            $_.profile -ceq $run.profile `
+            $_.protocol -ceq $run.protocol `
                 -and $_.scenario -ceq $run.scenario `
                 -and [int]$_.processCount -eq [int]$run.processCount
         }).Count -ne 1) {
-            Fail-StepValidation 'sync-probe' "Unexpected performance row $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)."
+            Fail-StepValidation 'sync-probe' "Unexpected performance row $($run.protocol)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)."
         }
     }
     return $expectedRunCount
@@ -4412,15 +4566,15 @@ function Assert-ProbeConfigurationEvidence {
         Fail-StepValidation 'sync-probe' 'Performance report must identify time-based warmup with warmupCycles=0.'
     }
     [void](Get-StrictString $configuration 'affinityPolicy' 'sync probe configuration')
-    $legacySemantics = Get-StrictString $configuration 'legacyFullPayloadCopiesFieldSemantics' 'sync probe configuration'
-    if ($legacySemantics -ne ('Retained for v3-v5 readers. Consult FullPayloadCopyCountIsInstrumented and ' +
+    $copySemantics = Get-StrictString $configuration 'fullPayloadCopiesFieldSemantics' 'sync probe configuration'
+    if ($copySemantics -ne ('Consult FullPayloadCopyCountIsInstrumented and ' +
         'FullPayloadCopyEvidenceKind before interpreting the value as a measured event count.')) {
-        Fail-StepValidation 'sync-probe' 'Performance report does not declare the legacy copy field as non-authoritative.'
+        Fail-StepValidation 'sync-probe' 'Performance report does not declare the copy evidence field semantics.'
     }
 
-    Assert-ExactStringSet 'performance report profiles' @($configuration.profiles) @($config.performanceMatrix.profiles)
-    Assert-ExactStringSet 'performance report count-bound profiles' `
-        @($configuration.countBoundProfiles) @($config.performanceMatrix.countBoundProfiles)
+    if ((Get-StrictString $configuration 'protocol' 'sync probe configuration') -cne 'Sms2') {
+        Fail-StepValidation 'sync-probe' 'Performance report must identify exactly the Sms2 protocol.'
+    }
     $expectedScenarioCounts = [ordered]@{}
     foreach ($property in $config.performanceMatrix.shortScenarios.PSObject.Properties) {
         $expectedScenarioCounts[$property.Name] = @($property.Value | ForEach-Object { [int]$_ })
@@ -4481,13 +4635,12 @@ function Assert-ProbeRunCompletionEvidence {
         [Parameter(Mandatory)][string]$Context,
         [Parameter(Mandatory)][int64]$DurationSeconds,
         [Parameter(Mandatory)][int64]$MixedOperationTarget,
-        [Parameter(Mandatory)][int64]$LargeFrameTarget,
-        [Parameter(Mandatory)][string[]]$CountBoundProfiles)
+        [Parameter(Mandatory)][int64]$LargeFrameTarget)
 
-    $profile = Get-StrictString $Run 'profile' $Context
+    $protocol = Get-StrictString $Run 'protocol' $Context
     $scenario = Get-StrictString $Run 'scenario' $Context
-    if ($profile -cnotin @('Legacy', 'LockFree')) {
-        throw "$Context has noncanonical profile identity '$profile'."
+    if ($protocol -cne 'Sms2') {
+        throw "$Context has noncanonical protocol identity '$protocol'."
     }
     if ($scenario -cnotin @(
         'acquire-release', 'publish-remove', 'same-key-read', 'distributed-key-read',
@@ -4500,17 +4653,16 @@ function Assert-ProbeRunCompletionEvidence {
         throw "$Context cannot be both operation-bound and frame-bound."
     }
 
-    $isCountBoundProfile = $profile -cin $CountBoundProfiles
-    [int64]$expectedOperationTarget = if ($scenario -ceq 'mixed-churn' -and $isCountBoundProfile) {
+    [int64]$expectedOperationTarget = if ($scenario -ceq 'mixed-churn') {
         $MixedOperationTarget
     }
     else { 0 }
-    [int64]$expectedFrameTarget = if ($scenario -ceq 'large-ingest' -and $isCountBoundProfile) {
+    [int64]$expectedFrameTarget = if ($scenario -ceq 'large-ingest') {
         $LargeFrameTarget
     }
     else { 0 }
     if ($operationTarget -ne $expectedOperationTarget -or $frameTarget -ne $expectedFrameTarget) {
-        throw "$Context does not match the configured profile-aware count-bound policy."
+        throw "$Context does not match the configured SMS2 scenario completion policy."
     }
 
     if ($scenario -ceq 'sticky-overflow-miss') {
@@ -4545,59 +4697,58 @@ function Invoke-ProbeCompletionVerifierSelfTest {
     [int64]$duration = Get-StrictInt64 $selected 'performanceDurationSeconds' "tier '$Tier'" 1 [int32]::MaxValue
     [int64]$mixedTarget = Get-StrictInt64 $selected 'mixedOperations' "tier '$Tier'" 1 [int64]::MaxValue
     [int64]$frameTarget = Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue
-    [string[]]$countBoundProfiles = @($config.performanceMatrix.countBoundProfiles | ForEach-Object { [string]$_ })
-    $legacy = [pscustomobject][ordered]@{
-        profile = 'Legacy'; scenario = 'mixed-churn'; operationTarget = 0; frameTarget = 0
+    $durationRow = [pscustomobject][ordered]@{
+        protocol = 'Sms2'; scenario = 'acquire-release'; operationTarget = 0; frameTarget = 0
         operations = 1; frames = 0; measuredSeconds = [double]$duration
         earlySampleCount = 1; lateSampleCount = 1
     }
-    $lockFreeMixed = [pscustomobject][ordered]@{
-        profile = 'LockFree'; scenario = 'mixed-churn'; operationTarget = $mixedTarget; frameTarget = 0
+    $sms2Mixed = [pscustomobject][ordered]@{
+        protocol = 'Sms2'; scenario = 'mixed-churn'; operationTarget = $mixedTarget; frameTarget = 0
         operations = $mixedTarget; frames = 0; measuredSeconds = 1.0
         earlySampleCount = 1; lateSampleCount = 1
     }
-    $lockFreeLarge = [pscustomobject][ordered]@{
-        profile = 'LockFree'; scenario = 'large-ingest'; operationTarget = 0; frameTarget = $frameTarget
+    $sms2Large = [pscustomobject][ordered]@{
+        protocol = 'Sms2'; scenario = 'large-ingest'; operationTarget = 0; frameTarget = $frameTarget
         operations = 1; frames = $frameTarget; measuredSeconds = 1.0
         earlySampleCount = 1; lateSampleCount = 1
     }
-    foreach ($row in @($legacy, $lockFreeMixed, $lockFreeLarge)) {
+    foreach ($row in @($durationRow, $sms2Mixed, $sms2Large)) {
         Assert-ProbeRunCompletionEvidence $row 'completion verifier self-test' `
-            $duration $mixedTarget $frameTarget $countBoundProfiles
+            $duration $mixedTarget $frameTarget
     }
     [int]$assertions = 3
 
     $mutations = @(
         @{ message = 'one-below configured mixed target'; apply = {
             param($row) $row.operationTarget = $mixedTarget - 1
-        }; source = $lockFreeMixed },
+        }; source = $sms2Mixed },
         @{ message = 'one-below completed mixed operations'; apply = {
             param($row) $row.operations = $mixedTarget - 1
-        }; source = $lockFreeMixed },
-        @{ message = 'Legacy count target inheritance'; apply = {
+        }; source = $sms2Mixed },
+        @{ message = 'count target on duration scenario'; apply = {
             param($row) $row.operationTarget = $mixedTarget
-        }; source = $legacy },
-        @{ message = 'profile target swap'; apply = {
+        }; source = $durationRow },
+        @{ message = 'scenario target swap'; apply = {
             param($row) $row.operationTarget = 0; $row.frameTarget = $frameTarget
-        }; source = $lockFreeMixed },
+        }; source = $sms2Mixed },
         @{ message = 'simultaneous operation and frame targets'; apply = {
             param($row) $row.frameTarget = $frameTarget
-        }; source = $lockFreeMixed },
+        }; source = $sms2Mixed },
         @{ message = 'short duration row'; apply = {
             param($row) $row.measuredSeconds = [double]$duration - 0.001
-        }; source = $legacy },
+        }; source = $durationRow },
         @{ message = 'missing operation target metadata'; apply = {
             param($row) $row.PSObject.Properties.Remove('operationTarget')
-        }; source = $lockFreeMixed },
+        }; source = $sms2Mixed },
         @{ message = 'one-below completed frame target'; apply = {
             param($row) $row.frames = $frameTarget - 1
-        }; source = $lockFreeLarge },
-        @{ message = 'noncanonical profile casing'; apply = {
-            param($row) $row.profile = 'lockfree'
-        }; source = $lockFreeMixed },
+        }; source = $sms2Large },
+        @{ message = 'noncanonical protocol casing'; apply = {
+            param($row) $row.protocol = 'sms2'
+        }; source = $sms2Mixed },
         @{ message = 'noncanonical scenario casing'; apply = {
             param($row) $row.scenario = 'Mixed-Churn'
-        }; source = $lockFreeMixed }
+        }; source = $sms2Mixed }
     )
     foreach ($mutation in $mutations) {
         $row = $mutation.source | ConvertTo-Json -Depth 5 | ConvertFrom-Json
@@ -4605,7 +4756,7 @@ function Invoke-ProbeCompletionVerifierSelfTest {
         $rejected = $false
         try {
             Assert-ProbeRunCompletionEvidence $row 'completion verifier negative self-test' `
-                $duration $mixedTarget $frameTarget $countBoundProfiles
+                $duration $mixedTarget $frameTarget
         }
         catch {
             $rejected = $true
@@ -4624,8 +4775,8 @@ function Assert-ProbeRowNumericEvidence {
     $logicalProcessorCount = Get-StrictInt64 $Report.environment 'logicalProcessorCount' `
         'sync probe environment' 1 [int32]::MaxValue
     foreach ($run in @($Report.runs)) {
-        $context = "probe run $($run.profile)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
-        foreach ($property in @('profile', 'scenario', 'qualification', 'fullPayloadCopyEvidenceKind', 'allocationMeasurementScope')) {
+        $context = "probe run $($run.protocol)/$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
+        foreach ($property in @('protocol', 'scenario', 'qualification', 'fullPayloadCopyEvidenceKind', 'allocationMeasurementScope')) {
             [void](Get-StrictString $run $property $context)
         }
         $allowedQualifications = if ($run.scenario -ceq 'sticky-overflow-miss') {
@@ -4657,8 +4808,7 @@ function Assert-ProbeRowNumericEvidence {
             Assert-ProbeRunCompletionEvidence $run $context `
                 (Get-StrictInt64 $selected 'performanceDurationSeconds' "tier '$Tier'" 1 [int32]::MaxValue) `
                 (Get-StrictInt64 $selected 'mixedOperations' "tier '$Tier'" 1 [int64]::MaxValue) `
-                (Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue) `
-                ([string[]]@($config.performanceMatrix.countBoundProfiles | ForEach-Object { [string]$_ }))
+                (Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue)
         }
         catch {
             Fail-StepValidation 'sync-probe' $_.Exception.Message
@@ -4830,8 +4980,8 @@ function Assert-ProbeRowNumericEvidence {
     }
 
     foreach ($summary in @($Report.summary)) {
-        $context = "probe summary $($summary.profile)/$($summary.scenario)/$($summary.processCount)"
-        foreach ($property in @('profile', 'scenario')) {
+        $context = "probe summary $($summary.protocol)/$($summary.scenario)/$($summary.processCount)"
+        foreach ($property in @('protocol', 'scenario')) {
             [void](Get-StrictString $summary $property $context)
         }
         [void](Get-StrictInt64 $summary 'processCount' $context 1 [int32]::MaxValue)
@@ -4903,9 +5053,9 @@ function Assert-ProbeSummaryConsistency {
     }
 
     foreach ($summary in @($Report.summary)) {
-        $context = "probe summary $($summary.profile)/$($summary.scenario)/$($summary.processCount)"
+        $context = "probe summary $($summary.protocol)/$($summary.scenario)/$($summary.processCount)"
         $runs = @($Report.runs | Where-Object {
-            $_.profile -ceq $summary.profile -and $_.scenario -ceq $summary.scenario `
+            $_.protocol -ceq $summary.protocol -and $_.scenario -ceq $summary.scenario `
                 -and $_.processCount -eq $summary.processCount
         })
         if ($runs.Count -ne [int]$selected.performanceTrials) {
@@ -4963,11 +5113,11 @@ function Assert-SyncProbeEvidence {
     param([Parameter(Mandatory)][string]$Path)
 
     $report = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 8 8) -ne 8 `
-        -or (Get-StrictInt64 $report 'minimumCompatibleSchemaVersion' 'sync probe report' 8 8) -ne 8 `
-        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v8' `
+    if ((Get-StrictInt64 $report 'schemaVersion' 'sync probe report' 9 9) -ne 9 `
+        -or (Get-StrictInt64 $report 'minimumCompatibleSchemaVersion' 'sync probe report' 9 9) -ne 9 `
+        -or (Get-StrictString $report 'schemaCompatibility' 'sync probe report') -notmatch 'Schema v9' `
         -or @($report.runs).Count -eq 0) {
-        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable schema v8 with nonempty runs.'
+        Fail-StepValidation 'sync-probe' 'Sync probe report must be exact executable SMS2-only schema v9 with nonempty runs.'
     }
     Assert-ProbeEnvironmentEvidence $report
     Assert-ProbeConfigurationEvidence $report
@@ -4991,7 +5141,7 @@ function Assert-SyncProbeEvidence {
     foreach ($run in @($report.runs)) {
         $participants = [int64]$run.readerProcessCount + [int64]$run.publisherProcessCount + [int64]$run.observerProcessCount
         if ([int64]$run.affinityAppliedCount -ne $participants -or $run.oversubscribed) {
-            Mark-StepNotQualified 'sync-probe' "Incomplete affinity or oversubscription in $($run.profile)/$($run.scenario)/$($run.processCount)."
+            Mark-StepNotQualified 'sync-probe' "Incomplete affinity or oversubscription in $($run.protocol)/$($run.scenario)/$($run.processCount)."
             return
         }
     }
@@ -5010,80 +5160,52 @@ function Assert-SyncProbeEvidence {
         Fail-StepValidation 'sync-probe' 'Release rows were smoke-only or lacked the release warmup/duration/frame target.'
     }
     foreach ($scenario in @('same-key-read', 'distributed-key-read')) {
-        $one = Get-ProbeSummaryRow $report 'LockFree' $scenario 1
-        $six = Get-ProbeSummaryRow $report 'LockFree' $scenario 6
-        $twelve = Get-ProbeSummaryRow $report 'LockFree' $scenario 12
-        $minimumSix = if ($scenario -eq 'same-key-read') { 4.0 } else { 4.5 }
-        $minimumTwelve = if ($scenario -eq 'same-key-read') { 7.0 } else { 8.0 }
-        $oneRate = Get-StrictDouble $one 'medianApiCallsPerSecond' "$scenario one-reader summary" 0 [double]::MaxValue -Positive
-        $sixRate = Get-StrictDouble $six 'medianApiCallsPerSecond' "$scenario six-reader summary" 0 [double]::MaxValue -Positive
-        $twelveRate = Get-StrictDouble $twelve 'medianApiCallsPerSecond' "$scenario twelve-reader summary" 0 [double]::MaxValue -Positive
-        Assert-AtLeast 'sync-probe' "${scenario}-6-reader-scaling" `
-            ($sixRate / $oneRate) $minimumSix
-        Assert-AtLeast 'sync-probe' "${scenario}-12-reader-scaling" `
-            ($twelveRate / $oneRate) $minimumTwelve
+        $twelve = Get-ProbeSummaryRow $report 'Sms2' $scenario 12
+        [void](Get-StrictDouble $twelve 'medianApiCallsPerSecond' `
+            "$scenario twelve-reader summary" 0 [double]::MaxValue -Positive)
     }
-
-    $brokerOne = Get-ProbeSummaryRow $report 'LockFree' 'broker-directed' 1
-    $brokerTwelve = Get-ProbeSummaryRow $report 'LockFree' 'broker-directed' 12
-    $brokerOneRate = Get-StrictDouble $brokerOne 'medianFramesPerSecond' 'broker one-reader summary' 0 [double]::MaxValue -Positive
-    $brokerTwelveRate = Get-StrictDouble $brokerTwelve 'medianFramesPerSecond' 'broker twelve-reader summary' 0 [double]::MaxValue -Positive
-    Assert-AtLeast 'sync-probe' 'broker-12-reader-publication-rate' `
-        ($brokerTwelveRate / $brokerOneRate) 0.8
+    $brokerTwelve = Get-ProbeSummaryRow $report 'Sms2' 'broker-directed' 12
+    [void](Get-StrictDouble $brokerTwelve 'medianFramesPerSecond' `
+        'broker twelve-reader summary' 0 [double]::MaxValue -Positive)
 
     foreach ($scenario in @('acquire-release', 'publish-remove')) {
-        $legacyEight = Get-ProbeSummaryRow $report 'Legacy' $scenario 8
-        $lockFreeEight = Get-ProbeSummaryRow $report 'LockFree' $scenario 8
-        $legacyEightRate = Get-StrictDouble $legacyEight 'medianApiCallsPerSecond' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
-        $lockFreeEightRate = Get-StrictDouble $lockFreeEight 'medianApiCallsPerSecond' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
-        $legacyEightP99 = Get-StrictDouble $legacyEight 'medianP99Microseconds' "$scenario legacy/8p summary" 0 [double]::MaxValue -Positive
-        $lockFreeEightP99 = Get-StrictDouble $lockFreeEight 'medianP99Microseconds' "$scenario lock-free/8p summary" 0 [double]::MaxValue -Positive
-        if ($IsWindows) {
-            Assert-AtLeast 'sync-probe' "${scenario}-windows-throughput" `
-                ($lockFreeEightRate / $legacyEightRate) 4.0
-            Assert-AtMost 'sync-probe' "${scenario}-windows-p99" `
-                ($lockFreeEightP99 / $legacyEightP99) 0.2
-        }
-        elseif ($IsLinux) {
-            $legacyOne = Get-ProbeSummaryRow $report 'Legacy' $scenario 1
-            $lockFreeOne = Get-ProbeSummaryRow $report 'LockFree' $scenario 1
-            $legacyOneP99 = Get-StrictDouble $legacyOne 'medianP99Microseconds' "$scenario legacy/1p summary" 0 [double]::MaxValue -Positive
-            $lockFreeOneP99 = Get-StrictDouble $lockFreeOne 'medianP99Microseconds' "$scenario lock-free/1p summary" 0 [double]::MaxValue -Positive
-            Assert-AtMost 'sync-probe' "${scenario}-linux-uncontended-p99-ratio" `
-                ($lockFreeOneP99 / $legacyOneP99) `
-                (Get-StrictDouble $config.linuxTinyPerformance 'maximumUncontendedP99Ratio' `
-                    'qualification config linuxTinyPerformance' 1 1)
-            Assert-AtLeast 'sync-probe' "${scenario}-linux-8p-throughput-ratio" `
-                ($lockFreeEightRate / $legacyEightRate) `
-                (Get-StrictDouble $config.linuxTinyPerformance 'minimumThroughputRatio' `
-                    'qualification config linuxTinyPerformance' 1 1)
-            Assert-AtMost 'sync-probe' "${scenario}-linux-scale-p99-ratio" `
-                ($lockFreeEightP99 / $lockFreeOneP99) `
-                (Get-StrictDouble $config.linuxTinyPerformance 'maximumScaleP99Ratio' `
-                    'qualification config linuxTinyPerformance' 3 3)
-            Assert-AtMost 'sync-probe' "${scenario}-linux-8p-p99-us" `
-                $lockFreeEightP99 `
-                (Get-StrictDouble $config.linuxTinyPerformance 'maximumP99Microseconds' `
-                    'qualification config linuxTinyPerformance' 10 10)
-            foreach ($run in @($report.runs | Where-Object {
-                [string]$_.profile -ceq 'LockFree' `
-                    -and [string]$_.scenario -ceq $scenario `
-                    -and [int64]$_.processCount -in @(1, 8)
-            })) {
-                Assert-AtMost 'sync-probe' "${scenario}-linux-max-stall-us-$($run.processCount)p-trial-$($run.trial)" `
-                    (Get-StrictDouble $run 'maxMicroseconds' "$scenario lock-free/$($run.processCount)p trial-$($run.trial)" 0 [double]::MaxValue) `
-                    (Get-StrictDouble $config.linuxTinyPerformance 'maximumStallMicroseconds' `
-                        'qualification config linuxTinyPerformance' 10000 10000)
-            }
-        }
-        else {
+        if (-not ($IsWindows -or $IsLinux)) {
             Mark-StepNotQualified 'sync-probe' 'SC006 supports only Windows-x64 and Linux-x64.'
             return
+        }
+        $platformId = if ($IsWindows) { 'windows-x64' } else { 'linux-x64' }
+        $sms2One = Get-ProbeSummaryRow $report 'Sms2' $scenario 1
+        $sms2Eight = Get-ProbeSummaryRow $report 'Sms2' $scenario 8
+        $sms2OneP99 = Get-StrictDouble $sms2One 'medianP99Microseconds' "$scenario Sms2/1p summary" 0 [double]::MaxValue -Positive
+        $sms2EightRate = Get-StrictDouble $sms2Eight 'medianApiCallsPerSecond' "$scenario Sms2/8p summary" 0 [double]::MaxValue -Positive
+        $sms2EightP99 = Get-StrictDouble $sms2Eight 'medianP99Microseconds' "$scenario Sms2/8p summary" 0 [double]::MaxValue -Positive
+        Assert-AtLeast 'sync-probe' "${scenario}-${platformId}-8p-operations-per-second" `
+            $sms2EightRate `
+            (Get-StrictDouble $config.tinyPerformance 'minimumEightProcessOperationsPerSecond' `
+                'qualification config tinyPerformance' 100000 100000)
+        Assert-AtMost 'sync-probe' "${scenario}-${platformId}-scale-p99-ratio" `
+            ($sms2EightP99 / $sms2OneP99) `
+            (Get-StrictDouble $config.tinyPerformance 'maximumScaleP99Ratio' `
+                'qualification config tinyPerformance' 3 3)
+        Assert-AtMost 'sync-probe' "${scenario}-${platformId}-8p-p99-us" `
+            $sms2EightP99 `
+            (Get-StrictDouble $config.tinyPerformance.maximumEightProcessP99MicrosecondsByPlatform `
+                $platformId 'qualification config tinyPerformance p99 limits' `
+                $(if ($IsWindows) { 25 } else { 10 }) $(if ($IsWindows) { 25 } else { 10 }))
+        foreach ($run in @($report.runs | Where-Object {
+            [string]$_.protocol -ceq 'Sms2' `
+                -and [string]$_.scenario -ceq $scenario `
+                -and [int64]$_.processCount -in @(1, 8)
+        })) {
+            Assert-AtMost 'sync-probe' "${scenario}-${platformId}-max-stall-us-$($run.processCount)p-trial-$($run.trial)" `
+                (Get-StrictDouble $run 'maxMicroseconds' "$scenario Sms2/$($run.processCount)p trial-$($run.trial)" 0 [double]::MaxValue) `
+                (Get-StrictDouble $config.tinyPerformance 'maximumStallMicroseconds' `
+                    'qualification config tinyPerformance' 10000 10000)
         }
     }
 
     $zeroCopyRuns = @($report.runs | Where-Object {
-        $_.profile -ceq 'LockFree' -and $_.scenario -cin @('broker-directed', 'large-ingest')
+        $_.protocol -ceq 'Sms2' -and $_.scenario -cin @('broker-directed', 'large-ingest')
     })
     foreach ($run in $zeroCopyRuns) {
         $context = "$($run.scenario)/$($run.processCount)/trial-$($run.trial)"
@@ -5102,7 +5224,7 @@ function Assert-SyncProbeEvidence {
             (Get-StrictInt64 $selected 'largeFrames' "tier '$Tier'" 1 [int64]::MaxValue)
     }
 
-    foreach ($run in @($report.runs | Where-Object { $_.profile -ceq 'LockFree' -and $_.scenario -ceq 'mixed-churn' })) {
+    foreach ($run in @($report.runs | Where-Object { $_.protocol -ceq 'Sms2' -and $_.scenario -ceq 'mixed-churn' })) {
         $context = "mixed-churn trial $($run.trial)"
         $operations = Get-StrictInt64 $run 'operations' $context 1 [int64]::MaxValue
         $earlyP99 = Get-StrictDouble $run 'earlyP99Microseconds' $context 0 [double]::MaxValue -Positive
@@ -5168,9 +5290,9 @@ try {
                 'invalid-recovery/disposal witnesses=rejected')
         $probeCompletionAssertions = Invoke-ProbeCompletionVerifierSelfTest
         Add-EvidenceResult 'sync-probe-completion-verifier-self-test' 'passed' `
-            'profile-aware-duration-operation-frame-positive-and-negative-cases-passed' @(
+            'sms2-scenario-duration-operation-frame-positive-and-negative-cases-passed' @(
                 "assertions=$probeCompletionAssertions",
-                'duration-bound Legacy plus count-bound LockFree mixed/large rows accepted',
+                'duration-bound Sms2 plus count-bound Sms2 mixed/large rows accepted',
                 'below-target/config-swap/dual-target/short-duration/missing-target cases rejected')
         $osManifestAssertions = Invoke-OsEvidenceManifestVerifierSelfTest
         Add-EvidenceResult 'os-evidence-manifest-verifier-self-test' 'passed' `
@@ -5184,13 +5306,17 @@ try {
         Add-EvidenceResult 'linux-tiny-os-performance-verifier-self-test' 'passed' `
             'exact-raw-matrix-positive-and-integrity-negative-cases-passed' @(
                 "assertions=$linuxPerformanceAssertions",
-                'exact 24-run/8-summary schema/config/tuple/correctness/affinity/median/schema2-metric evidence=accepted',
-                'uncontended/throughput/scale/absolute p99 gate breaches plus over-limit stall/duplicate metric/impossible affinity/incoherent cycle/corruption evidence=rejected') @(
+                'exact 12-run/4-summary schema9 Sms2/config/tuple/correctness/affinity/median/schema3-metric evidence=accepted',
+                'absolute throughput/scale/p99 gate breaches plus over-limit stall/duplicate metric/impossible affinity/incoherent cycle/corruption evidence=rejected') @(
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'linux-tiny-os-performance-self-test.json')),
                     [IO.Path]::GetRelativePath($root, (Join-Path $runRoot 'linux-tiny-os-performance-self-test.evidence/linux-tiny-performance.json')))
         $requiredInputs = @(
             'SharedMemoryStore.slnx',
+            'scripts/finalize-lock-free-qualification.ps1',
             'scripts/validate-lock-free-os.ps1',
+            'scripts/validate-interoperability.ps1',
+            'scripts/validate-docker-shared-memory.ps1',
+            'tests/SharedMemoryStore.InteropTests/Dockerfile',
             'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj',
             'tests/SharedMemoryStore.LinearizabilityTests/SharedMemoryStore.LinearizabilityTests.csproj',
             'tests/SharedMemoryStore.IntegrationTests/SharedMemoryStore.IntegrationTests.csproj',
@@ -5352,9 +5478,76 @@ try {
             '-Configuration', $Configuration)
         Set-StepValidation 'package-consumption' 'passed' 'isolated-cache-package-consumption-pass' @(
             'pack=passed',
-            'legacy-consumer=passed',
-            'lock-free-consumer=passed',
+            'sms2-managed-consumer=passed',
+            'one-protocol-api-surface=passed',
             'nuget-cache=isolated-per-run')
+
+        # PR and nightly evidence must not depend on a separate CI job whose
+        # artifacts are absent from this immutable evidence tree. Release uses
+        # the stricter host and Docker rows embedded in command=all OS evidence.
+        if ($Tier -ne 'release') {
+            $interopWorkRoot = Join-Path $outputRoot ($runId + '.interop-work')
+            if (Test-Path -LiteralPath $interopWorkRoot) {
+                throw "Refusing to reuse qualification interoperability work '$interopWorkRoot'."
+            }
+            $interopBuild = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-build'))
+            $interopInstall = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'native-install'))
+            $interopPython = [IO.Path]::GetRelativePath($root, (Join-Path $interopWorkRoot 'python'))
+            $interopArtifactEvidencePath = Join-Path $runRoot 'interoperability-artifacts.json'
+            Invoke-BoundedStep 'interoperability' $powershell @(
+                '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
+                '-Configuration', $Configuration,
+                '-BuildDirectory', $interopBuild,
+                '-InstallDirectory', $interopInstall,
+                '-PythonArtifactsDirectory', $interopPython,
+                '-Stress',
+                '-StressValueCount', [string]$selected.interopValueCount,
+                '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
+                '-EvidencePath', $interopArtifactEvidencePath)
+            $interopEvidence = Assert-InteropArtifactEvidence `
+                $interopArtifactEvidencePath `
+                ([int64]$selected.interopValueCount) `
+                ([int64]$selected.interopLifecycleCycleCount)
+            Set-StepValidation 'interoperability' 'passed' 'installed-artifact-nine-cell-and-mixed-runtime-pass' @(
+                'orderedRuntimeCells=9',
+                "valuesPerCell=$($selected.interopValueCount)",
+                "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
+                "artifactCount=$($interopEvidence.artifactCount)",
+                "artifactSetSha256=$($interopEvidence.artifactSetSha256)",
+                "artifactEvidence=$($interopEvidence.evidencePath)",
+                "artifactEvidenceSha256=$($interopEvidence.evidenceSha256)",
+                'nativeInstallConsumer=passed',
+                'pythonWheelAndSdistConsumers=passed')
+
+            if ($Tier -eq 'nightly' -and $IsLinux) {
+                Invoke-BoundedStep 'docker-shared-memory' $powershell @(
+                    '-NoProfile', '-File', 'scripts/validate-docker-shared-memory.ps1',
+                    '-Profile', 'All', '-Configuration', $Configuration)
+                Set-StepValidation 'docker-shared-memory' 'passed' `
+                    'same-host-container-lifecycle-owner-and-cleanup-pass' @(
+                        'namespaceIdentity=passed', 'ownerAnchorsAndMarkers=passed',
+                        'abruptRecovery=passed', 'composeCleanup=passed')
+                Invoke-BoundedStep 'docker-interoperability' $powershell @(
+                    '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
+                    '-Configuration', $Configuration,
+                    '-Docker', '-Stress',
+                    '-StressValueCount', [string]$selected.interopValueCount,
+                    '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
+                    '-EvidencePath', (Join-Path $runRoot 'docker-interoperability-artifacts.json'))
+                $dockerInteropEvidence = Assert-DockerInteropEvidence `
+                    (Join-Path $runRoot 'docker-interoperability-artifacts.json') `
+                    ([int64]$selected.interopValueCount) `
+                    ([int64]$selected.interopLifecycleCycleCount)
+                Set-StepValidation 'docker-interoperability' 'passed' `
+                    'installed-container-artifact-nine-cell-and-mixed-runtime-pass' @(
+                        'orderedRuntimeCells=9',
+                        "valuesPerCell=$($selected.interopValueCount)",
+                        "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
+                        "dockerImageId=$($dockerInteropEvidence.dockerImageId)",
+                        "artifactEvidence=$($dockerInteropEvidence.evidencePath)",
+                        "artifactEvidenceSha256=$($dockerInteropEvidence.evidenceSha256)")
+            }
+        }
 
         if ($SkipOsValidation) {
             Add-EvidenceResult 'dual-platform-os-evidence' 'not-qualified' 'os-validation-skipped' @(
@@ -5397,8 +5590,6 @@ try {
                 'run', '-c', $Configuration, '--no-build', '--no-restore',
                 '--project', 'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj', '--',
                 '--mode', [string]$selected.performanceMode,
-                '--profile', 'both',
-                '--count-bound-profiles', 'v2',
                 '--warmup', [string]$selected.performanceWarmupSeconds,
                 '--duration', [string]$selected.performanceDurationSeconds,
                 '--duration-bound-grace', [string]$selected.performanceDurationBoundGraceSeconds,
@@ -5416,7 +5607,6 @@ try {
                 'run', '-c', $Configuration, '--no-build', '--no-restore',
                 '--project', 'benchmarks/SharedMemoryStore.SyncProbe/SharedMemoryStore.SyncProbe.csproj', '--',
                 '--mode', 'suspension',
-                '--profile', 'v2',
                 '--warmup', [string]$selected.suspensionWarmupSeconds,
                 '--suspension-baseline-seconds', [string]$selected.suspensionBaselineSeconds,
                 '--suspension-pause-seconds', [string]$selected.suspensionPauseSeconds,
@@ -5430,6 +5620,12 @@ try {
             $notQualifiedReasons.Add('performance: skipped by -SkipPerformance')
         }
 
+        if ($null -ne $interopArtifactEvidencePath) {
+            [void](Assert-InteropArtifactEvidence `
+                $interopArtifactEvidencePath `
+                ([int64]$selected.interopValueCount) `
+                ([int64]$selected.interopLifecycleCycleCount))
+        }
         $revalidatedOsEvidenceCount = Assert-AcceptedOsEvidenceStable
         $completionAssemblyManifest = @(Get-TestedAssemblyManifest)
         Assert-AssemblyManifestStable $testedAssemblyManifest $completionAssemblyManifest
@@ -5449,6 +5645,7 @@ catch {
     throw
 }
 finally {
+    $runCompletedMonotonic = [Diagnostics.Stopwatch]::GetTimestamp()
     if ($null -eq $completionProvenance) {
         $completionProvenance = Get-RepositoryProvenance
     }
@@ -5462,13 +5659,15 @@ finally {
     }
     $dotnetInfo = @($results | Where-Object name -eq 'dotnet-info' | Select-Object -First 1)
     $summary = [ordered]@{
-        schemaVersion = 4
+        schemaVersion = 5
+        contractRevision = 1
         tier = $Tier
         runId = $runId
         validationOnly = [bool]$ValidateOnly
         configuration = $Configuration
         platform = if ($IsWindows) { 'windows-' + [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant() } elseif ($IsLinux) { 'linux-' + [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant() } else { 'unsupported' }
         overallStatus = $overallStatus
+        controllerExitCode = if ($overallStatus -in @('passed', 'validation-only')) { 0 } elseif ($overallStatus -eq 'not-qualified') { 2 } else { 1 }
         failure = $failureMessage
         notQualifiedReasons = $notQualifiedReasons
         startedUtc = $runStartedUtc
@@ -5476,6 +5675,7 @@ finally {
         provenance = $repositoryProvenance
         completionProvenance = $completionProvenance
         testedAssemblies = $testedAssemblyManifest
+        testedArtifacts = $testedAssemblyManifest
         completionTestedAssemblies = $completionAssemblyManifest
         host = [ordered]@{
             operatingSystem = [Runtime.InteropServices.RuntimeInformation]::OSDescription
@@ -5501,6 +5701,17 @@ finally {
             configurationSha256 = Get-FileSha256 $configPath
             solutionSha256 = Get-FileSha256 (Join-Path $root 'SharedMemoryStore.slnx')
         }
+        protocolManifest = [ordered]@{
+            path = 'protocol/fixtures/v2.0/manifest.json'
+            sha256 = Get-FileSha256 (Join-Path $root 'protocol/fixtures/v2.0/manifest.json')
+            layoutPath = 'protocol/layout-v2.0.md'
+            layoutSha256 = Get-FileSha256 (Join-Path $root 'protocol/layout-v2.0.md')
+            resourceNamingPath = 'protocol/resource-naming-v2.md'
+            resourceNamingSha256 = Get-FileSha256 (Join-Path $root 'protocol/resource-naming-v2.md')
+        }
+        skips = @()
+        startedAtMonotonic = $runStartedMonotonic
+        completedAtMonotonic = $runCompletedMonotonic
         seed = [int]$config.seed
         boundedOperationSlackMilliseconds = [int]$config.boundedOperationSlackMilliseconds
         requiredLeakAssertions = $config.requiredLeakAssertions

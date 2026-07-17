@@ -4,8 +4,9 @@ SharedMemoryStore keeps the core package focused on the concrete `MemoryStore`
 API. The package does not add hosting, dependency injection, logging,
 health-check, options-framework, or telemetry dependencies.
 
-Diagnostics integration boundaries are defined by
-[diagnostics-integration-contract.md](../specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md).
+Diagnostics integration boundaries are defined by the current
+[public API contract](../specs/010-lock-free-only-multilang/contracts/public-api.md)
+and [Diagnostics](diagnostics.md).
 
 ## When To Add A Wrapper
 

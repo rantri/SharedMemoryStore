@@ -18,19 +18,21 @@ public sealed class LockFreePackageContractTests
         var document = XDocument.Parse(project);
         XElement propertyGroup = Assert.Single(document.Root!.Elements("PropertyGroup"));
 
-        Assert.Equal("2.0.0", propertyGroup.Element("Version")?.Value);
-        Assert.Equal(new Version(2, 0, 0, 0), StoreAssembly.GetName().Version);
+        Assert.Equal("3.0.0", propertyGroup.Element("Version")?.Value);
+        Assert.Equal(new Version(3, 0, 0, 0), StoreAssembly.GetName().Version);
 
         string releaseNotes = propertyGroup.Element("PackageReleaseNotes")?.Value ?? string.Empty;
         Assert.Contains("layout 2.0", releaseNotes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("resource protocol 2", releaseNotes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("legacy", releaseNotes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("default", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("one lock-free", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("protocol", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("removed", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("migration", releaseNotes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("lock-free", releaseNotes, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("C++", releaseNotes, StringComparison.Ordinal);
         Assert.Contains("Python", releaseNotes, StringComparison.Ordinal);
-        Assert.Contains("layout 1.2", releaseNotes, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("no in-place", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("drain", releaseNotes, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("recreat", releaseNotes, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void AssertEveryAdditiveLockFreePublicSymbolHasPackagedXmlDocumentation()
@@ -38,24 +40,17 @@ public sealed class LockFreePackageContractTests
         IReadOnlyDictionary<string, string> members = LoadDocumentationMembers();
         string[] expectedMembers =
         [
-            "T:SharedMemoryStore.StoreProfile",
-            "F:SharedMemoryStore.StoreProfile.Legacy",
-            "F:SharedMemoryStore.StoreProfile.LockFree",
-            "P:SharedMemoryStore.SharedMemoryStoreOptions.Profile",
             "P:SharedMemoryStore.SharedMemoryStoreOptions.ParticipantRecordCount",
-            "M:SharedMemoryStore.SharedMemoryStoreOptions.CalculateRequiredBytes(SharedMemoryStore.StoreProfile,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32)",
-            "M:SharedMemoryStore.SharedMemoryStoreOptions.CreateLockFree(System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,SharedMemoryStore.OpenMode,System.Boolean)",
+            "M:SharedMemoryStore.SharedMemoryStoreOptions.CalculateRequiredBytes(System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32)",
+            "M:SharedMemoryStore.SharedMemoryStoreOptions.Create(System.String,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,SharedMemoryStore.OpenMode,System.Boolean)",
             "T:SharedMemoryStore.StoreProtocolInfo",
-            "P:SharedMemoryStore.StoreProtocolInfo.Profile",
             "P:SharedMemoryStore.StoreProtocolInfo.LayoutMajorVersion",
             "P:SharedMemoryStore.StoreProtocolInfo.LayoutMinorVersion",
             "P:SharedMemoryStore.StoreProtocolInfo.ResourceProtocolVersion",
             "P:SharedMemoryStore.StoreProtocolInfo.RequiredFeatures",
             "P:SharedMemoryStore.StoreProtocolInfo.OptionalFeatures",
-            "P:SharedMemoryStore.MemoryStore.Profile",
             "P:SharedMemoryStore.MemoryStore.ProtocolInfo",
             "F:SharedMemoryStore.StoreOpenStatus.ParticipantTableFull",
-            "P:SharedMemoryStore.DiagnosticsSnapshot.Profile",
             "P:SharedMemoryStore.DiagnosticsSnapshot.ProtocolInfo",
             "P:SharedMemoryStore.DiagnosticsSnapshot.InitializingSlotCount",
             "P:SharedMemoryStore.DiagnosticsSnapshot.ReservedSlotCount",
@@ -105,12 +100,8 @@ public sealed class LockFreePackageContractTests
         IReadOnlyDictionary<string, string> members = LoadDocumentationMembers();
 
         AssertContainsAll(
-            members["F:SharedMemoryStore.StoreProfile.LockFree"],
-            "lock-free",
-            "wait-free");
-        AssertContainsAll(
             members["P:SharedMemoryStore.SharedMemoryStoreOptions.ParticipantRecordCount"],
-            "layout-v2",
+            "participant",
             "handle",
             "64");
         AssertContainsAll(
@@ -119,9 +110,9 @@ public sealed class LockFreePackageContractTests
             "package");
         AssertContainsAll(
             members["T:SharedMemoryStore.StoreWaitOptions"],
-            "legacy",
-            "lock-free",
-            "local");
+            "local",
+            "retry",
+            "backoff");
         AssertContainsAll(
             members["F:SharedMemoryStore.StoreStatus.RemovePending"],
             "logically absent",
@@ -129,8 +120,7 @@ public sealed class LockFreePackageContractTests
             "physical reclamation");
         AssertContainsAll(
             members["F:SharedMemoryStore.StoreStatus.StoreBusy"],
-            "legacy",
-            "lock-free",
+            "bounded",
             "local retry");
         AssertContainsAll(
             members["F:SharedMemoryStore.StoreStatus.OperationCanceled"],
@@ -138,7 +128,7 @@ public sealed class LockFreePackageContractTests
         AssertContainsAll(
             members["M:SharedMemoryStore.MemoryStore.TryRemove(System.ReadOnlySpan{System.Byte},SharedMemoryStore.StoreWaitOptions)"],
             "logically absent",
-            "RemovePending",
+            "live lease",
             "physical");
         AssertContainsAll(
             members["T:SharedMemoryStore.ValueReservation"],

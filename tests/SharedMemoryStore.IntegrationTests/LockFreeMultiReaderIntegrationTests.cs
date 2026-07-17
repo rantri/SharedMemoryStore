@@ -143,7 +143,7 @@ public sealed class LockFreeMultiReaderIntegrationTests
 
     private static MemoryStore CreateStore(string name)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,

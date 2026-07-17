@@ -2,7 +2,6 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Threading;
 using SharedMemoryStore.IntegrationTests.TestSupport;
-using SharedMemoryStore.Layout;
 
 namespace SharedMemoryStore.IntegrationTests;
 
@@ -12,13 +11,9 @@ public sealed class RolloverStressIntegrationTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task BoundarySeededStoreCompletesOneMillionMixedOperationsAfterRollover()
+    public async Task StoreCompletesOneMillionMixedOperationsUnderConcurrency()
     {
         using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options(slotCount: 16, maxValueBytes: 4, maxKeyBytes: 4, leaseRecordCount: 16));
-        store.SetSlotSearchCursorForTesting(int.MaxValue - 2);
-        store.SetLeaseSearchCursorForTesting(int.MaxValue - 2);
-        store.SetSlotLifecycleForTesting(0, new SlotLifecycleId(int.MaxValue, 0));
-
         Assert.Equal(StoreStatus.Success, store.TryPublish(Key(1), [1]));
         Assert.Equal(StoreStatus.Success, store.TryAcquire(Key(1), out var boundaryLease));
         var staleLease = boundaryLease;
@@ -161,7 +156,7 @@ public sealed class RolloverStressIntegrationTests
 
         if (status == StoreStatus.UnknownFailure)
         {
-            throw new InvalidOperationException("Operation returned UnknownFailure during rollover stress.");
+            throw new InvalidOperationException("Operation returned UnknownFailure during concurrency stress.");
         }
     }
 

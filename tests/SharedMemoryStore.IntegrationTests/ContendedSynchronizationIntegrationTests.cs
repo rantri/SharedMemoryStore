@@ -7,11 +7,11 @@ public sealed class ContendedSynchronizationIntegrationTests
 {
     [Fact]
     [Trait("Category", "ContendedSynchronization")]
-    public void NoWaitOpenAndPublishReturnBusyWhenStoreMutexIsHeld()
+    public void HeldColdSynchronizationBlocksOpenButNotHotPublish()
     {
         var options = IntegrationStoreFactory.Options();
         using var store = IntegrationStoreFactory.Create(options);
-        using var synchronization = PlatformCapabilityProbe.HoldStoreSynchronization(options.Name);
+        using var coldSynchronization = PlatformCapabilityProbe.HoldStoreSynchronization(options.Name);
 
         var openOptions = new SharedMemoryStoreOptions
         {
@@ -22,6 +22,7 @@ public sealed class ContendedSynchronizationIntegrationTests
             MaxDescriptorBytes = options.MaxDescriptorBytes,
             MaxKeyBytes = options.MaxKeyBytes,
             LeaseRecordCount = options.LeaseRecordCount,
+            ParticipantRecordCount = options.ParticipantRecordCount,
             EnableLeaseRecovery = options.EnableLeaseRecovery,
             TotalBytes = options.TotalBytes
         };
@@ -44,7 +45,9 @@ public sealed class ContendedSynchronizationIntegrationTests
 
         Assert.True(publishDone.Wait(TimeSpan.FromSeconds(1)));
         Assert.True(openDone.Wait(TimeSpan.FromSeconds(1)));
-        Assert.Equal(StoreStatus.StoreBusy, publishResult);
+        publishThread.Join();
+        openThread.Join();
+        Assert.Equal(StoreStatus.Success, publishResult);
         Assert.Equal(StoreOpenStatus.StoreBusy, openResult);
     }
 }

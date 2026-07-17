@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 6,
+  "seed": 1592590848,
+  "tiers": {
+    "pr": {
+      "stepTimeoutSeconds": 900,
+      "checkerHistoryRepetitionsPerFamily": 1024,
+      "productionHistoryCountPerFamily": 2,
+      "productionRaceRepetitionsPerFamily": 1024,
+      "churnCycles": 10000,
+      "recoveryCases": 67,
+      "interopValueCount": 100,
+      "interopLifecycleCycleCount": 1000,
+      "performanceMode": "all",
+      "performanceWarmupSeconds": 2,
+      "performanceDurationSeconds": 3,
+      "performanceDurationBoundGraceSeconds": 60,
+      "performanceTrials": 1,
+      "mixedOperations": 100000,
+      "largeFrames": 100,
+      "largeFrameBytes": 1363148,
+      "suspensionBaselineSeconds": 1,
+      "suspensionPauseSeconds": 1,
+      "suspensionWarmupSeconds": 1,
+      "directoryGenerationStressRepetitions": 50
+    },
+    "nightly": {
+      "stepTimeoutSeconds": 7200,
+      "checkerHistoryRepetitionsPerFamily": 10000,
+      "productionHistoryCountPerFamily": 8,
+      "productionRaceRepetitionsPerFamily": 1000000,
+      "churnCycles": 10000000,
+      "recoveryCases": 10000,
+      "interopValueCount": 1000,
+      "interopLifecycleCycleCount": 10000,
+      "performanceMode": "all",
+      "performanceWarmupSeconds": 2,
+      "performanceDurationSeconds": 10,
+      "performanceDurationBoundGraceSeconds": 60,
+      "performanceTrials": 1,
+      "mixedOperations": 10000000,
+      "largeFrames": 10000,
+      "largeFrameBytes": 1363148,
+      "suspensionBaselineSeconds": 3,
+      "suspensionPauseSeconds": 5,
+      "suspensionWarmupSeconds": 2,
+      "directoryGenerationStressRepetitions": 24000
+    },
+    "release": {
+      "stepTimeoutSeconds": 21600,
+      "checkerHistoryRepetitionsPerFamily": 10000,
+      "productionHistoryCountPerFamily": 16,
+      "productionRaceRepetitionsPerFamily": 1000000,
+      "churnCycles": 100000000,
+      "recoveryCases": 10000,
+      "interopValueCount": 1000,
+      "interopLifecycleCycleCount": 125000,
+      "performanceMode": "full",
+      "performanceWarmupSeconds": 10,
+      "performanceDurationSeconds": 60,
+      "performanceDurationBoundGraceSeconds": 60,
+      "performanceTrials": 3,
+      "mixedOperations": 100000000,
+      "largeFrames": 100000,
+      "largeFrameBytes": 1363148,
+      "suspensionBaselineSeconds": 10,
+      "suspensionPauseSeconds": 30,
+      "suspensionWarmupSeconds": 10,
+      "directoryGenerationStressRepetitions": 1000000
+    }
+  },
+  "boundedOperationSlackMilliseconds": 250,
+  "suspensionMinimumHealthyThroughputRatio": 0.9,
+  "requiredLeakAssertions": [
+    {
+      "id": "slot-owner-count=0",
+      "evidenceStep": "churn",
+      "testNameContains": "LockFreeChurnIntegrationTests.CollisionHeavyMultiProcessRemoveReuseRestoresCapacityAndKeepsLateLatencyBounded",
+      "assertedState": "ActiveReservationCount, InitializingSlotCount, ReservedSlotCount, ReclaimingSlotCount, and every directory occupancy are zero; FreeSlotCount equals SlotCount"
+    },
+    {
+      "id": "lease-owner-count=0",
+      "evidenceStep": "churn",
+      "testNameContains": "LockFreeChurnIntegrationTests.CollisionHeavyMultiProcessRemoveReuseRestoresCapacityAndKeepsLateLatencyBounded",
+      "assertedState": "ActiveLeaseCount is zero and FreeSlotCount equals SlotCount after the final lifecycle"
+    },
+    {
+      "id": "unreferenced-stale-participant-count=0",
+      "evidenceStep": "recovery",
+      "testNameContains": "LockFreeCrashRecoveryIntegrationTests.EveryCanonicalCheckpointCanBeKilledRecoveredAndFilledToCapacity",
+      "assertedState": "every terminated checkpoint participant is recovered and the complete participant, slot, and lease capacity can be reclaimed"
+    }
+  ],
+  "completionEvidence": {
+    "referenceModelFamilies": [
+      "publish-publish",
+      "publish-reserve",
+      "reserve-reserve",
+      "commit-acquire",
+      "acquire-remove",
+      "release-reclaim",
+      "recovery-live-action",
+      "disposal-operation",
+      "participant-capacity",
+      "value-capacity",
+      "lease-capacity",
+      "cancellation",
+      "stale-token"
+    ],
+    "productionHistoryFamilies": [
+      "publish-publish",
+      "publish-reserve",
+      "reserve-reserve",
+      "commit-acquire",
+      "acquire-remove",
+      "release-reclaim",
+      "recovery-live-lease",
+      "disposal-operation"
+    ],
+    "productionRaceFamilies": [
+      "publish-publish",
+      "publish-reserve",
+      "reserve-reserve",
+      "commit-acquire",
+      "acquire-remove",
+      "release-reclaim",
+      "recovery-live-lease",
+      "disposal-operation"
+    ]
+  },
+  "performanceMatrix": {
+    "protocol": "Sms2",
+    "shortScenarios": {
+      "acquire-release": [1, 2, 4, 8, 12],
+      "publish-remove": [1, 2, 4, 8, 12],
+      "same-key-read": [1, 2, 4, 6, 8, 12],
+      "distributed-key-read": [1, 2, 4, 6, 8, 12]
+    },
+    "releaseOnlyScenarios": {
+      "broker-directed": [1, 12],
+      "mixed-churn": [12],
+      "large-ingest": [1, 12],
+      "sticky-overflow-miss": [1]
+    }
+  },
+  "tinyPerformance": {
+    "mode": "sync",
+    "protocol": "Sms2",
+    "scenarios": ["acquire-release", "publish-remove"],
+    "processCounts": [1, 8],
+    "syncKeysPerWorker": 2,
+    "syncMaximumWorkerCount": 12,
+    "syncCanonicalBucketCount": 16,
+    "syncKeyCatalogSha256": "9A7E93EB1382F2665155971C64C10D4C29039916CD9E314DB72B9906549656D2",
+    "syncKeyCanonicalBucketAssignments": [
+      0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
+      6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11
+    ],
+    "minimumEightProcessOperationsPerSecond": 100000.0,
+    "maximumScaleP99Ratio": 3.0,
+    "maximumEightProcessP99MicrosecondsByPlatform": {
+      "windows-x64": 25.0,
+      "linux-x64": 10.0
+    },
+    "maximumStallMicroseconds": 10000.0
+  },
+  "suspensionCheckpointIds": [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+    29, 30, 31, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+    46, 47, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+    62, 63, 65, 66, 67
+  ],
+  "platforms": ["windows-x64", "linux-x64"]
+}

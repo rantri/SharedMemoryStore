@@ -8,18 +8,16 @@ for (var i = 0; i < frame.Length; i++)
 }
 
 var descriptor = new FrameDescriptor(Width: 1280, Height: 720, PixelBytes: frame.Length, TimestampTicks: DateTime.UtcNow.Ticks).ToBytes();
-var options = new SharedMemoryStoreOptions
-{
-    Name = $"sms-frame-{Guid.NewGuid():N}",
-    OpenMode = OpenMode.CreateOrOpen,
-    SlotCount = 2,
-    MaxValueBytes = frame.Length,
-    MaxDescriptorBytes = descriptor.Length,
-    MaxKeyBytes = 16,
-    LeaseRecordCount = 4,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(2, frame.Length, descriptor.Length, 16, 4)
-};
+var options = SharedMemoryStoreOptions.Create(
+    name: $"sms-frame-{Guid.NewGuid():N}",
+    slotCount: 2,
+    maxValueBytes: frame.Length,
+    maxDescriptorBytes: descriptor.Length,
+    maxKeyBytes: 16,
+    leaseRecordCount: 4,
+    participantRecordCount: 4,
+    openMode: OpenMode.CreateNew,
+    enableLeaseRecovery: true);
 
 var openStatus = MemoryStore.TryCreateOrOpen(options, out var store);
 if (openStatus != StoreOpenStatus.Success || store is null)
@@ -30,6 +28,12 @@ if (openStatus != StoreOpenStatus.Success || store is null)
 
 using (store)
 {
+    if (store.ProtocolInfo != new StoreProtocolInfo(2, 0, 2, 7, 0))
+    {
+        Console.WriteLine($"unexpected protocol: {store.ProtocolInfo}");
+        return 2;
+    }
+
     var frameKey = new byte[] { 1 };
     var otherKey = new byte[] { 2 };
 
@@ -37,14 +41,14 @@ using (store)
     Console.WriteLine(publishFrame);
     if (publishFrame != StoreStatus.Success)
     {
-        return 2;
+        return 3;
     }
 
     var firstAcquire = store.TryAcquire(frameKey, out var firstReader);
     Console.WriteLine(firstAcquire);
     if (firstAcquire != StoreStatus.Success)
     {
-        return 3;
+        return 4;
     }
 
     var secondAcquire = store.TryAcquire(frameKey, out var secondReader);
@@ -52,7 +56,7 @@ using (store)
     if (secondAcquire != StoreStatus.Success)
     {
         firstReader.Dispose();
-        return 4;
+        return 5;
     }
 
     var parsed = FrameDescriptor.FromBytes(firstReader.DescriptorSpan);
@@ -64,7 +68,7 @@ using (store)
     {
         firstReader.Dispose();
         secondReader.Dispose();
-        return 5;
+        return 6;
     }
 
     firstReader.Dispose();
@@ -74,14 +78,14 @@ using (store)
     Console.WriteLine(publishOther);
     if (publishOther != StoreStatus.Success)
     {
-        return 6;
+        return 7;
     }
 
     var acquireOther = store.TryAcquire(otherKey, out var other);
     Console.WriteLine(acquireOther);
     if (acquireOther != StoreStatus.Success)
     {
-        return 7;
+        return 8;
     }
 
     Console.WriteLine($"non-frame bytes: {other.ValueLength}");

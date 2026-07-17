@@ -1,172 +1,138 @@
 # Shared Resource Protocol 2
 
-Resource protocol 2 changes synchronization participation without changing
-the physical identity derived from a public store name. This deliberate reuse
-makes layout 1.2 and layout 2.0 discover one another and fail closed rather
-than creating two unrelated stores under one name.
+Resource protocol 2 defines the physical identity, cold synchronization,
+ownership evidence, and cleanup used by every SMS2 implementation. Hot store
+operations never enter these operating-system synchronization resources.
 
-## Physical resources
+Public names are nonblank strings of 1 through 240 UTF-16 code units, contain
+no NUL, and are encoded as strict UTF-8 without Unicode normalization. The
+canonical vectors are in [the v2 manifest](fixtures/v2.0/manifest.json).
 
-The mapping and lifecycle names/paths are exactly those specified by
-[`resource-naming-v1.md`](resource-naming-v1.md):
+## Windows resources
 
-- the same Windows named mapping and named synchronization object;
-- the same Linux `.region`, `.owners`, `.lifecycle`, and operation-lock paths.
-
-An opener maps enough of an existing region at its actual capacity to inspect
-the magic and header before projecting caller-requested dimensions. `CreateNew`
-reports AlreadyExists for either layout. A different requested layout reports
-IncompatibleLayout before any directory, slot, descriptor, or payload access.
-
-## Cold synchronization
-
-Layout-v2 create, zero-header initialization, complete header validation, and
-participant registration occur while the existing named synchronization
-resource is held. This preserves serialization with already released v1
-clients. Participant retirement is an aligned-atomic layout-v2 participant
-protocol transition and does not enter that named resource. The mapping is not
-Ready during creation, and no handle is returned until all sections have been
-initialized and the participant record is Active.
-
-Physical creation ownership, rather than `OpenMode` or an observed zero magic,
-authorizes initialization. A cold-open attempt records whether its physical
-mapping call created a new region or opened an existing one. Only the former may
-clear and initialize the header. An existing zero header is never written by an
-opener: `CreateOrOpen` reports `StoreBusy`, because an older creator may still be
-between mapping and synchronization acquisition under resource protocol 1,
-while `OpenExisting` reports `IncompatibleLayout`. `CreateNew` reports
-`AlreadyExists` without mapping the existing payload.
-
-On Windows, the named mutex is acquired before the physical mapping is created
-or opened and remains held through header work and participant registration. On
-Linux, `.lifecycle` is acquired first; release-marker reconciliation and stale
-data-resource deletion complete before the persistent `.lock` inode is opened
-and acquired. The mapping,
-private owner-anchor lock, owner-line commit, header work, and participant
-registration then occur while both gates are held. Release order is `.lock`
-followed by `.lifecycle`. Failed-open cleanup first releases both gates, then
-disposes the ordinary synchronization descriptor, and only then disposes the
-mapping/owner registration that may re-enter lifecycle coordination. Current
-cleanup retains `.lock` as a stable empty rendezvous file. Together these rules
-prevent active and reopening participants from splitting across an unlinked and
-replacement inode.
-
-The caller's original wait and cancellation budget covers the complete cold
-transaction, including both gates, mapping, header work, and participant
-registration. A deadline or cancellation observed before mapping or owner
-publication prevents those side effects.
-
-Linux owner registration and cleanup remain protected by `.lifecycle`. Every
-open layout-v2 handle writes one live v1-compatible owner line:
+The memory-mapped region name is the public name unchanged. The cold
+synchronization name is:
 
 ```text
-decimal-pid:proc-start-or-utc-token:32-hex-guid
+<scope>SharedMemoryStore-<sanitized-public-name>
 ```
 
-This prevents an older opener from deleting a live SMS2 region as stale. Close
-retires the ordinary descriptor before removing only the exact handle's line;
-final-owner cleanup follows the existing resource protocol and retains the
-stable `.lock`/`.lifecycle` rendezvous files.
+`scope` is `Global\` when the public name begins with `Global\` by an ordinal,
+case-insensitive comparison; otherwise it is `Local\`. The scope text in the
+public name remains part of the sanitized suffix. Sanitization processes UTF-16
+code units: letters, decimal digits, `-`, and `_` are retained and every other
+unit becomes `_`.
 
-Each current managed Linux owner also creates the private mode-`0600` path
+The named mutex is acquired before physical create/open and remains held through
+mapping inspection, creator-only initialization or complete validation, and
+participant registration. Windows kernel lifetime removes both named resources
+after their final handles close.
+
+## Linux resources
+
+The root is `/dev/shm/SharedMemoryStore` when `/dev/shm` exists; otherwise it is
+`SharedMemoryStore` below the operating-system temporary directory. The root is
+a real directory, never a symbolic link, and is mode `0700`.
+
+The resource fragment is:
 
 ```text
-<resource-fragment>.owners.anchor.<32-hex-owner-guid>
+sms-<readable>-<digest>
 ```
 
-before publishing its owner line, then holds an exclusive open-description
-`flock` until its mapped view is gone and its owner release is safely recorded.
-This lock is deliberately private to the owner and distinct from the POSIX
-record-lock protocol on `.lock` and `.lifecycle`; it never appears on a hot data
-path. C++/Python and older managed owners remain compatible because the
-three-field sidecar format is unchanged and they do not need to create anchors.
-The canonical name is the exact store `.owners` path plus `.anchor.` and the
-owner GUID rendered as exactly 32 lowercase hexadecimal digits; anchor cleanup
-never widens that per-store name pattern.
+`readable` is formed from UTF-16 code units by retaining ASCII letters, ASCII
+digits, `-`, `_`, and `.`, replacing every other unit with `_`, trimming leading
+and trailing `_` and `.`, substituting `store` when empty, and truncating to 80
+code units. `digest` is the lowercase hexadecimal form of the first eight bytes
+of SHA-256 over the strict UTF-8 public name.
 
-Under `.lifecycle`, a current managed reader probes a referenced anchor through
-a separately opened descriptor. Lock contention means live even if the recorded
-PID is invisible in the reader's PID namespace. Successful lock acquisition
-means stale. A missing anchor falls back to the v1 PID/start-token check for
-older, C++, and Python owners. Access errors, symbolic links, directories, and
-other ambiguous results retain the owner conservatively. A same-process anchor
-registry makes local-owner classification explicit.
+| Suffix | Purpose |
+|---|---|
+| `.region` | Mapped data file |
+| `.lock` | Stable cold-open rendezvous |
+| `.owners` | Exact live-owner sidecar |
+| `.lifecycle` | Owner reconciliation, physical create/open, and final cleanup |
+| `.owners.anchor.<guid>` | Private live-owner anchor |
+| `.owners.released.<guid>.ready` | Finalized bounded-close release marker |
 
-Close and failed-open cleanup never wait indefinitely for `.lifecycle`. After
-the mapped view is released, a C# resource-protocol-2 participant waits at most
-250 milliseconds to remove its exact owner line. If it cannot acquire the lock,
-or if cleanup fails before the owner-sidecar replacement commits, it publishes:
+Directories and files are created with mode `0700` and `0600` respectively.
+Existing objects are verified to be the expected non-symbolic-link type before
+use.
+
+Both `.lifecycle` and `.lock` use a nonblocking record lock on byte range
+`[0, 1)`, retried within the caller's one wait/cancellation budget. Implementations
+use `F_OFD_SETLK` and return `UnsupportedPlatform` if it is unavailable. A
+process-local non-reentrant gate serializes calls sharing one descriptor. The
+lock byte range is released before that local gate; an unlock failure retires
+the descriptor before reopening the gate.
+
+Cold-open ordering is:
+
+1. acquire `.lifecycle`;
+2. reconcile finalized release markers and conservatively filter stale owners;
+3. decide physical create/open disposition and open the persistent `.lock` inode;
+4. acquire `.lock`;
+5. create or map the region at its actual capacity;
+6. create and lock the private owner anchor, then atomically append the exact
+   owner line;
+7. perform creator-only SMS2 initialization or complete existing-header
+   validation;
+8. register the participant record through `Registering` to `Active`;
+9. release `.lock`, then `.lifecycle`.
+
+Failure cleanup releases both gates and the ordinary synchronization descriptor
+before releasing mapping/owner state that may re-enter lifecycle coordination.
+The `.lock` and `.lifecycle` files remain stable rendezvous inodes even with no
+live store.
+
+Only a physical creator may clear and initialize the mapped region. An opener
+never treats an existing zero or malformed header as empty. `CreateNew` reports
+`AlreadyExists` for an existing physical store; `OpenExisting` reports
+`NotFound` when none exists; a noncurrent or incompatible header is rejected
+before payload access. The caller's original budget covers this entire cold
+transaction.
+
+## Linux owner evidence
+
+Each handle commits one line:
 
 ```text
-<resource-fragment>.owners.released.<32-hex-owner-guid>.ready
+decimal-pid:proc-start-token:32-lowercase-hex-owner-guid
 ```
 
-The file contains the exact v1-compatible owner line. It is created as a unique
-`0600` temporary file beside `.owners`, flushed, and atomically renamed to its
-final name. The owner GUID in the filename must equal the third field in the
-content. Temporary artifacts have the same prefix but no `.ready` suffix.
+Before publishing it, the handle creates its exact mode-`0600` anchor path and
+holds an exclusive open-description `flock` until its mapped view is gone and
+owner release is safely recorded. A lifecycle reader opens the referenced
+anchor separately with `O_NOFOLLOW`: lock contention proves the owner live even
+across PID namespaces; successful lock acquisition proves it stale. Missing or
+ambiguous evidence falls back to exact PID/start-token/namespace classification
+and is retained conservatively when liveness cannot be proven.
 
-While holding `.lifecycle`, a resource-protocol-2 opener or releaser reconciles
-finalized markers before process-liveness filtering. It reads the raw owner
-sidecar, applies the existing line-trimming rule, removes only each marker's
-ordinal-exact owner record, atomically
-rewrites `.owners`, and only then deletes the corresponding marker. Replaying a
-marker after a crash between rewrite and deletion is therefore idempotent. A
-marker that arrives after the scan is conservative: its still-present owner line
-continues to protect the region until a later lifecycle operation. A malformed
-finalized marker fails the cold operation closed and is retained for diagnosis.
+Close unmaps first and waits at most 250 milliseconds to remove its ordinal-exact
+owner line under `.lifecycle`. If that cannot complete, it writes the exact line
+to a unique flushed temporary file and atomically renames it to:
 
-When the committed live-owner set is empty, stale-resource deletion also removes
-the exact resource's finalized and temporary marker glob. The empty owner set is
-atomically committed before this deletion. Resource-protocol-1 C#, C++, and
-Python participants do not interpret release markers; they continue to see the
-unreconciled owner line and therefore remain conservatively fail closed until a
-protocol-2 participant reconciles it or normal PID/start-token liveness proves it
-stale.
+```text
+<fragment>.owners.released.<owner-guid>.ready
+```
 
-The C# 2.0 package uses this bounded cleanup extension for both mapped profiles
-because layout 1.2 and layout 2.0 share the same Linux ownership resources. This
-does not change layout-1.2 bytes or its required per-operation `.lock` behavior;
-older resource-protocol-1 implementations remain compatible and conservative as
-described above.
+Under `.lifecycle`, an opener or releaser reconciles finalized markers before
+liveness filtering: validate filename/content GUID equality, remove only the
+ordinal-exact line, atomically replace `.owners`, then delete the marker. Replay
+after a crash is idempotent. Malformed markers fail the cold operation closed.
 
-The owner-sidecar rewrite is the commit point before deleting an unlocked stale
-anchor. Orderly close unmaps first, then releases the anchor only after either
-that exact owner is absent from the committed sidecar or its finalized release
-marker has been atomically published. If both recording paths fail, the managed
-process deliberately retains the anchor. Process termination closes the file
-descriptor and releases `flock` automatically; later lifecycle cleanup removes
-the now-unlocked artifact only when the conservative probe rules below prove it
-safe.
-
-Every current C# orphan-anchor sweep runs under `.lifecycle` and only after the
-replacement `.owners` sidecar commits. The sweep builds its referenced-token set
-from canonical three-field records in that committed sidecar, enumerates only
-canonical anchor names belonging to the same store, and ignores malformed
-names. It considers only unreferenced candidates. Each candidate is opened on a
-separate descriptor with `O_NOFOLLOW`, verified through that descriptor to be a
-regular file, and deleted only after and while a nonblocking exclusive `flock`
-succeeds. Referenced or locked anchors, ambiguous probes, non-regular files,
-symbolic links, directories, malformed names, and enumeration/open/stat/lock/
-delete access errors are retained conservatively. No final-owner glob removes
-these uncertain artifacts.
-
-Publishing a finalized release marker permits the closing participant to
-release its local anchor after unmapping, but the fallback may leave both the
-compatible owner line and the anchor pathname in place. A later lifecycle
-operation reconciles the exact line, commits the sidecar, and then applies the
-same conservative orphan sweep. This repair remains entirely on the cold
-lifecycle path.
+After the sidecar replacement commits, orphan-anchor cleanup enumerates only
+canonical names for this store. It removes an unreferenced anchor only while a
+separately opened, regular, non-symbolic-link descriptor holds a nonblocking
+exclusive `flock`. Referenced, locked, malformed, non-regular, or ambiguous
+artifacts and all access errors are retained conservatively. Final-owner cleanup
+deletes the data region and exact marker artifacts only after the empty owner
+set commits.
 
 ## Hot data paths
 
-After open, layout-v2 publish, reservation, acquire, projection, release,
-remove, reclaim, recovery, and diagnostics do not enter any named semaphore,
-mutex, or file lock. They use only aligned mapped atomics, immutable bytes,
-bounded scans, and helpable descriptors. A retained cold synchronization
-object is unreachable from these paths and exists only for compatible close or
-recovery lifecycle work.
-
-Layout-v1.2 handles continue using resource protocol 1 and acquire the ordinary
-named synchronization object per data operation. Resource protocol 2 does not
-change their bytes or behavior.
+After open, publish, segmented publish, reserve/advance/commit/abort, acquire,
+projection, release, remove, reclaim, recovery, and diagnostics use only mapped
+64-bit atomics, immutable bytes, bounded scans, and helpable descriptors. No
+named mutex, semaphore, record lock, or private anchor is reachable from these
+paths.

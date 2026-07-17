@@ -21,6 +21,56 @@ endif()
 
 list(APPEND _sms_library_sources "${_sms_platform_source}")
 
+# Keep the complete SMS2 module topology visible to CMake and IDE generators
+# while the test-first port is being delivered incrementally. A planned file is
+# not added to an active target until it exists, so setup commits continue to
+# configure and build the current native implementation.
+set(
+    _sms_planned_library_files
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mapped_atomic.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/layout_v2.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/layout_v2.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/control_words.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/operation_budget.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/checkpoint.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/lifecycle_gate.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/cold_open.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/cold_open.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/store_control.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/store_control.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/participant_registry.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/participant_registry.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform_identity.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/platform_identity.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/key_directory.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/key_directory.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/slot_table.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/slot_table.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/reservation_memory.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/lease_registry.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/lease_registry.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/reclaimer.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/reclaimer.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/recovery.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/recovery.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics_v2.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostics_v2.cpp")
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(
+        APPEND
+        _sms_planned_library_files
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/linux_owner_lifecycle.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/linux_owner_lifecycle.cpp")
+endif()
+
+foreach(_sms_planned_library_file IN LISTS _sms_planned_library_files)
+    if(EXISTS "${_sms_planned_library_file}")
+        list(APPEND _sms_library_sources "${_sms_planned_library_file}")
+    endif()
+endforeach()
+
 set(
     _sms_public_headers
     "${CMAKE_CURRENT_SOURCE_DIR}/include/shared_memory_store/c_api.h"
@@ -89,7 +139,7 @@ if(NOT DEFINED SKBUILD AND SMS_PYTHON_INSTALL_DIR STREQUAL "")
     set_target_properties(
         SharedMemoryStore
         PROPERTIES VERSION "${PROJECT_VERSION}"
-                   SOVERSION 1)
+                   SOVERSION 2)
 endif()
 
 if(SMS_BUILD_STATIC)
@@ -102,6 +152,39 @@ if(SMS_BUILD_STATIC)
         SharedMemoryStoreStatic
         PROPERTIES EXPORT_NAME SharedMemoryStoreStatic
                    OUTPUT_NAME shared_memory_store_static)
+endif()
+
+# Repository checkpoint agents need the real engine graph with instrumentation
+# enabled. Keep this target private to SMS_BUILD_TESTS: it is never installed or
+# exported and therefore cannot change either packaged native surface.
+if(SMS_BUILD_TESTS)
+    add_library(SharedMemoryStoreCheckpointRuntime STATIC)
+    _sms_configure_library(SharedMemoryStoreCheckpointRuntime)
+    target_compile_definitions(
+        SharedMemoryStoreCheckpointRuntime
+        PUBLIC SMS_STATIC=1 SMS_ENABLE_TEST_CHECKPOINTS=1)
+    set_target_properties(
+        SharedMemoryStoreCheckpointRuntime
+        PROPERTIES OUTPUT_NAME shared_memory_store_checkpoint_runtime)
+
+    # Python repository tests need the same real instrumented engine behind a
+    # loadable C ABI plus a private process-local callback bridge. This target
+    # is deliberately absent from every install/export rule.
+    add_library(SharedMemoryStorePythonCheckpointRuntime SHARED)
+    _sms_configure_library(SharedMemoryStorePythonCheckpointRuntime)
+    target_sources(
+        SharedMemoryStorePythonCheckpointRuntime
+        PRIVATE "${PROJECT_SOURCE_DIR}/tests/cpp/python_checkpoint_bridge.cpp")
+    target_compile_definitions(
+        SharedMemoryStorePythonCheckpointRuntime
+        PRIVATE SMS_ENABLE_TEST_CHECKPOINTS=1)
+    set_target_properties(
+        SharedMemoryStorePythonCheckpointRuntime
+        PROPERTIES OUTPUT_NAME shared_memory_store_python_checkpoint)
+    if(WIN32)
+        set_target_properties(
+            SharedMemoryStorePythonCheckpointRuntime PROPERTIES PREFIX "")
+    endif()
 endif()
 
 if(SMS_INSTALL)

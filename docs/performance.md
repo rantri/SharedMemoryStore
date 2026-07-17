@@ -1,49 +1,38 @@
 # Performance Scope
 
-SharedMemoryStore is designed to avoid per-operation managed heap allocation in
-hot paths after initialization and warm-up. That expectation is tied to the
-[public-api.md](../specs/001-frame-memory-store/contracts/public-api.md), status
-outcomes are tied to
-[error-taxonomy.md](../specs/001-frame-memory-store/contracts/error-taxonomy.md),
-and key-index health is tied to
-[index-health-contract.md](../specs/004-store-reliability-hardening/contracts/index-health-contract.md).
+SharedMemoryStore uses one SMS2 lock-free protocol in C#, C++, and Python.
+After a handle opens, publish, reserve, acquire, release, remove, recovery, and
+diagnostics do not acquire the platform lifecycle lock or a store-wide
+operation lock. The implementation uses mapped atomics, bounded scans,
+cooperative helping, and process-local backoff.
 
-This page separates measured results, design expectations, benchmark method,
-capacity assumptions, platform assumptions, and unvalidated scenarios.
+This is a progress and architecture guarantee, not a universal latency or
+throughput number. Lock-free means the system continues to make progress; an
+individual operation can still return `StoreBusy` after its configured budget
+expires.
+
+The normative rules are in the
+[protocol conformance contract](../specs/010-lock-free-only-multilang/contracts/protocol-conformance.md).
 
 ## Measured Areas
 
-The repository includes benchmarks under
+The managed benchmark project under
 [`benchmarks/SharedMemoryStore.Benchmarks/`](../benchmarks/SharedMemoryStore.Benchmarks/)
-for:
+covers representative lifecycle and data-path work, including:
 
-- lifecycle open/create and disposal paths.
-- publish allocation and throughput.
-- lease allocation and acquire/release behavior.
-- failure latency.
-- frame throughput.
-- direct ingest allocation and throughput.
-- segmented publish.
-- remove and reuse.
-- reliability recovery and lifecycle stress.
-- key-index tombstone pressure.
+- create/open and disposal;
+- contiguous and segmented publication;
+- direct reservation ingest;
+- acquire/release and removal/reuse;
+- recovery and lifecycle stress; and
+- throughput, allocation, and failure latency.
 
-Benchmark results are environment-specific. Treat them as local validation data,
-not hardware guarantees.
+Native qualification and the interoperability suite add cross-process,
+cross-runtime, collision, overflow, helping, recovery, and cold-lock isolation
+evidence. Results are environment-specific; keep the command, build, host, and
+workload details with every published measurement.
 
-## Design Expectations
-
-The current design expects:
-
-- fixed-capacity shared-memory storage from `SharedMemoryStoreOptions`.
-- immutable published payload bytes.
-- direct reservation writes into store-owned memory after capacity is reserved.
-- segmented publish to copy existing segments into one committed store value.
-- status-returning pressure and contention outcomes.
-- caller-owned diagnostics, retries, logging, and metrics.
-- no hidden background workers in the core package.
-
-## Running Benchmarks
+## Running Managed Benchmarks
 
 ```powershell
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release
@@ -56,83 +45,80 @@ dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.B
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --filter *SegmentedPublish*
 ```
 
-Sustained throughput validation:
+Sustained-throughput and direct-allocation validation:
 
 ```powershell
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation sustained-throughput
-```
-
-Direct allocation validation:
-
-```powershell
 dotnet run --project benchmarks/SharedMemoryStore.Benchmarks/SharedMemoryStore.Benchmarks.csproj -c Release -- --validation direct-allocation
 ```
 
-Record OS, CPU, .NET SDK, package version, payload bytes, descriptor bytes,
-slot count, lease-record count, producer count, reader count, segment count,
-copied bytes, final status, and benchmark command with any public performance
-claim.
+Record the OS, architecture, CPU, compiler/runtime versions, package version,
+the five-field protocol identity, configured capacities, payload and descriptor
+sizes, participant/producer/reader counts, operation budget, final statuses,
+and exact command.
 
-## Capacity Assumptions
+## Capacity and Contention
 
-Capacity is fixed at create/open time. `SlotCount` must cover published values,
-pending removals, and pending reservations. `LeaseRecordCount` must cover
-concurrent active readers. `MaxKeyBytes`, `MaxDescriptorBytes`, and
-`MaxValueBytes` must cover encoded keys, descriptors, and payloads.
+Capacity is fixed at create time:
 
-Every lock-free open handle also allocates private `long[SlotCount]` and
-`long[LeaseRecordCount]` capacity-proof buffers at open time. Budget about eight
-bytes per configured value slot or lease record per process/handle. The slot
-buffer is roughly 8 MiB at 1,048,575 slots; the lease buffer is 1 KiB for 128
-records, 64 KiB for 8,192, and 8 MiB for 1,048,576. The buffers are reused on
-rare full-candidate paths; they add no per-operation allocation and no shared or
-OS synchronization.
+- `SlotCount` covers published values plus records awaiting reservation,
+  removal, or reclamation.
+- `LeaseRecordCount` covers concurrent read leases.
+- `ParticipantRecordCount` covers concurrently open handles across all
+  runtimes.
+- `MaxKeyBytes`, `MaxDescriptorBytes`, and `MaxValueBytes` bound inline data.
+- the derived primary and overflow directory capacities bound collision-heavy
+  key placement.
 
-Use [Diagnostics](diagnostics.md) to track `StoreFull`, `LeaseTableFull`,
-`CapacityPressureCount`, active leases, active reservations, pending removals,
-and key-index health.
+`StoreFull`, `LeaseTableFull`, and `ParticipantTableFull` report distinct
+capacity limits. `StoreBusy` reports an exhausted retry/revalidation/helping
+budget, not a held hot-path mutex. High collision workloads can increase CAS
+retries, helping, spill occupancy, and overflow scans before any capacity
+status occurs.
 
-## Tombstone Pressure
+Use [Diagnostics](diagnostics.md) to distinguish these cases. In particular,
+compare free and active slot/lease/participant counts with primary directory
+occupancy, spilled buckets, overflow occupancy, CAS retries, helped
+transitions, and contention-budget exhaustion.
 
-The key index uses open addressing and tombstones to preserve probe chains after
-removal. High unique-key churn can make missing-key lookup and new-key insert
-paths probe longer even when live slot capacity is available. Diagnostic
-snapshots expose occupied, tombstone, empty, usable capacity, probe length, and
-compaction counters.
+## Allocation Expectations
 
-The current internal threshold compacts synchronously under the store mutation
-lock when tombstones reach 35% of index entries, when no empty probe terminators
-remain, or when observed probe length reaches 75% of index capacity. This is a
-current implementation detail for maintainers, not a public maintenance API.
+The managed implementation is designed to avoid per-operation managed heap
+allocation in ordinary warmed hot paths. C++ uses caller-owned RAII objects and
+views. Python wrapper objects follow Python lifetime conventions while payload
+and descriptor views remain borrowed mapped views subject to the documented
+lease/reservation lifetime rules.
+
+These expectations do not remove setup costs: opening validates the whole
+layout, registers a participant, and may allocate process-local proof or
+scratch state. Diagnostics formatting, logging, application parsing, and
+copying a borrowed view into application-owned bytes are caller costs.
 
 ## Platform Assumptions
 
-Current validation targets `.NET 10` on Linux, Windows, and the supported
-same-host Docker profile. Unsupported platforms or restricted environments may
-return documented unsupported or environment failure outcomes. See
-[Portability](portability.md) before publishing platform claims.
+The protocol is qualified only on x86-64 little-endian Windows and Linux where
+aligned 64-bit mapped atomics are always lock-free and the required mapping,
+cold lifecycle, and owner-evidence facilities are available. Same-host Docker
+sharing requires the configuration described in [Portability](portability.md).
+
+Do not infer performance or even support from a successful compile on another
+architecture, byte order, filesystem, container arrangement, or emulator.
 
 ## Not Claimed
 
-The documentation does not promise:
+The project does not promise:
 
-- a fixed throughput number on unmeasured hardware.
-- a latency percentile for every OS, CPU, storage, virtualization, or container
-  setup.
-- cross-host cache behavior.
-- persistence after process and mapping lifetime.
-- application-specific frame parsing performance.
-- protection from malicious writers that already have mapping access.
-- current C++ or Python bindings.
-- stable benchmark results across future API or layout changes.
+- a fixed throughput or latency percentile on unmeasured hardware;
+- starvation freedom for each individual operation;
+- cross-host behavior or persistence after mapping lifetime;
+- application-specific parsing performance;
+- protection from malicious same-host writers with mapping access; or
+- stable benchmark numbers across protocol or implementation changes.
 
 ## Release Review
 
-If a performance claim is added, changed, or removed, update:
-
-- this page.
-- [Release preparation](releases.md).
-- [Maintainers](maintainers.md).
-- [CHANGELOG.md](../CHANGELOG.md) when release-facing behavior or support
-  claims change.
-- benchmark result notes or validation evidence.
+When adding or changing a performance claim, update this page,
+[Release preparation](releases.md), [Maintainers](maintainers.md), and
+[CHANGELOG.md](../CHANGELOG.md) when the change is release-facing. Preserve raw
+results and qualification logs that identify the tested artifacts and protocol
+identity.

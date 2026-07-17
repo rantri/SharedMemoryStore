@@ -1,5 +1,3 @@
-using SharedMemoryStore.Layout;
-
 namespace SharedMemoryStore.LockFree;
 
 /// <summary>

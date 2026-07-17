@@ -1,7 +1,6 @@
 using System.Buffers;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.LayoutV2;
-using SharedMemoryStore.Leasing;
 
 namespace SharedMemoryStore.LockFree;
 
@@ -108,7 +107,7 @@ internal sealed unsafe class LockFreeParticipantRegistry
         }
 
         int pid = Environment.ProcessId;
-        bool capturedIdentity = LeaseOwnerClassifier.TryCaptureCurrentProcessIdentity(
+        bool capturedIdentity = ParticipantOwnerClassifier.TryCaptureCurrentProcessIdentity(
                 out int identityKind,
                 out long processStartValue,
                 out ulong pidNamespaceId);
@@ -517,7 +516,7 @@ internal sealed unsafe class LockFreeParticipantRegistry
                 incarnation));
         }
 
-        LeaseOwnerClassification owner = ClassifySnapshotOwner(
+        ParticipantOwnerClassification owner = ClassifySnapshotOwner(
             incarnation,
             _pidNamespaceId,
             IsPidNamespaceRecoveryEnabled());
@@ -537,19 +536,19 @@ internal sealed unsafe class LockFreeParticipantRegistry
     /// incarnation and the new claimant, so even apparently valid identity
     /// fields must never be compared until Active release-publication.
     /// </summary>
-    internal static LeaseOwnerClassification ClassifySnapshotOwner(
+    internal static ParticipantOwnerClassification ClassifySnapshotOwner(
         in ParticipantIncarnation incarnation,
         ulong storePidNamespaceId,
         bool presenceOnlyRecoveryEnabled = true) =>
         incarnation.State == LayoutV2Constants.ParticipantRegistering
             ? presenceOnlyRecoveryEnabled
-                ? LeaseOwnerClassifier.ClassifyPresenceOnly(
+                ? ParticipantOwnerClassifier.ClassifyPresenceOnly(
                     incarnation.ProcessId,
                     storePidNamespaceId)
-                : new LeaseOwnerClassification(
-                    LeaseOwnerKind.Unsupported,
+                : new ParticipantOwnerClassification(
+                    ParticipantOwnerKind.Unsupported,
                     incarnation.ProcessId)
-            : LeaseOwnerClassifier.Classify(incarnation);
+            : ParticipantOwnerClassifier.Classify(incarnation);
 
     /// <summary>
     /// Performs conservative stale-participant retirement after resource-level
@@ -624,7 +623,7 @@ internal sealed unsafe class LockFreeParticipantRegistry
         }
         else
         {
-            LeaseOwnerClassification owner = ClassifySnapshotOwner(
+            ParticipantOwnerClassification owner = ClassifySnapshotOwner(
                 incarnation,
                 _pidNamespaceId,
                 IsPidNamespaceRecoveryEnabled());
@@ -706,12 +705,13 @@ internal sealed unsafe class LockFreeParticipantRegistry
 
         if (!IsPidNamespaceRecoveryEnabled())
         {
-            LeaseOwnerClassification owner = LeaseOwnerClassifier.Classify(expected);
-            if (owner.Kind != LeaseOwnerKind.StaleProcess)
+            ParticipantOwnerClassification owner = ParticipantOwnerClassifier.Classify(expected);
+            if (owner.Kind != ParticipantOwnerKind.StaleProcess)
             {
-                return owner.Kind is LeaseOwnerKind.CurrentProcess or LeaseOwnerKind.OtherLiveProcess
+                return owner.Kind is ParticipantOwnerKind.CurrentProcess
+                    or ParticipantOwnerKind.OtherLiveProcess
                     ? ParticipantTransitionResult.LiveOwner
-                    : owner.Kind == LeaseOwnerKind.UnsafeRecord
+                    : owner.Kind == ParticipantOwnerKind.UnsafeRecord
                         ? ParticipantTransitionResult.Inconsistent
                         : ParticipantTransitionResult.Unsupported;
             }
@@ -1718,15 +1718,16 @@ internal sealed unsafe class LockFreeParticipantRegistry
         ref *(LeaseRecordV2*)(
             _mappingBase + _layout.LeaseRegistryOffset + ((long)index * _layout.LeaseStride));
 
-    private static ParticipantClassificationKind Map(LeaseOwnerKind ownerKind) => ownerKind switch
-    {
-        LeaseOwnerKind.CurrentProcess => ParticipantClassificationKind.CurrentProcess,
-        LeaseOwnerKind.OtherLiveProcess => ParticipantClassificationKind.Live,
-        LeaseOwnerKind.StaleProcess => ParticipantClassificationKind.Stale,
-        LeaseOwnerKind.Unsupported => ParticipantClassificationKind.Unsupported,
-        LeaseOwnerKind.UnsafeRecord => ParticipantClassificationKind.Inconsistent,
-        _ => ParticipantClassificationKind.Inconsistent
-    };
+    private static ParticipantClassificationKind Map(
+        ParticipantOwnerKind ownerKind) => ownerKind switch
+        {
+            ParticipantOwnerKind.CurrentProcess => ParticipantClassificationKind.CurrentProcess,
+            ParticipantOwnerKind.OtherLiveProcess => ParticipantClassificationKind.Live,
+            ParticipantOwnerKind.StaleProcess => ParticipantClassificationKind.Stale,
+            ParticipantOwnerKind.Unsupported => ParticipantClassificationKind.Unsupported,
+            ParticipantOwnerKind.UnsafeRecord => ParticipantClassificationKind.Inconsistent,
+            _ => ParticipantClassificationKind.Inconsistent
+        };
 
     private static int DecodeState(long control) => (int)((ulong)control & 0x7UL);
 

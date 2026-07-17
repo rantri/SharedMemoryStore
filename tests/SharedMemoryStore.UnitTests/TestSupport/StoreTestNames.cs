@@ -12,26 +12,20 @@ internal static class StoreTestNames
         int maxDescriptorBytes = 32,
         int maxKeyBytes = 32,
         int leaseRecordCount = 4,
+        int participantRecordCount = 64,
         OpenMode mode = OpenMode.CreateOrOpen,
         bool enableRecovery = true)
     {
-        return new SharedMemoryStoreOptions
-        {
-            Name = Create(),
-            OpenMode = mode,
-            SlotCount = slotCount,
-            MaxValueBytes = maxValueBytes,
-            MaxDescriptorBytes = maxDescriptorBytes,
-            MaxKeyBytes = maxKeyBytes,
-            LeaseRecordCount = leaseRecordCount,
-            EnableLeaseRecovery = enableRecovery,
-            TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(
-                slotCount,
-                maxValueBytes,
-                maxDescriptorBytes,
-                maxKeyBytes,
-                leaseRecordCount)
-        };
+        return SharedMemoryStoreOptions.Create(
+            Create(),
+            slotCount,
+            maxValueBytes,
+            maxDescriptorBytes,
+            maxKeyBytes,
+            leaseRecordCount,
+            participantRecordCount,
+            mode,
+            enableRecovery);
     }
 
     public static Store CreateStore(SharedMemoryStoreOptions options)

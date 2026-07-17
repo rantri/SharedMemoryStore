@@ -5,7 +5,7 @@
 This advanced sample demonstrates the reservation workflow for
 length-delimited frames whose payload length and descriptor are known before
 all payload bytes arrive. It also shows segmented publication for already
-buffered payloads.
+buffered payloads through the ordinary SMS2 store.
 
 ## Concepts Demonstrated
 
@@ -104,7 +104,7 @@ aborted, and the store handle is disposed before exit.
 - [Examples](../../docs/examples.md)
 - [Lifecycle](../../docs/lifecycle.md)
 - [Diagnostics](../../docs/diagnostics.md)
-- [Reservation API contract](../../specs/003-zero-copy-ingest/contracts/reservation-api.md)
+- [Current public API contract](../../specs/010-lock-free-only-multilang/contracts/public-api.md)
 
 ## Scope Boundaries and Non-Goals
 

@@ -173,7 +173,7 @@ public sealed class LockFreeCheckpointSpecializationTests
     }
 
     private static SharedMemoryStoreOptions Options(string name) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount: 2,
             maxValueBytes: 16,

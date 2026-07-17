@@ -1,14 +1,14 @@
 #include "internal.hpp"
+#include "linux_owner_lifecycle.hpp"
+#include "operation_budget.hpp"
 
 #if !defined(_WIN32)
 
 #include <cerrno>
+#include <algorithm>
 #include <csignal>
 #include <fcntl.h>
 #include <filesystem>
-#include <fstream>
-#include <random>
-#include <sstream>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -28,9 +28,22 @@ using clock_type = std::chrono::steady_clock;
 class FileState {
 public:
     explicit FileState(std::string path) : path_(std::move(path)) {
-        const auto descriptor = ::open(path_.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        auto descriptor = ::open(
+            path_.c_str(),
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
+            0600);
+        if (descriptor >= 0) {
+            struct stat information{};
+            if (::fstat(descriptor, &information) != 0 ||
+                !S_ISREG(information.st_mode) ||
+                ::fchmod(descriptor, 0600) != 0) {
+                const auto error = errno == 0 ? EINVAL : errno;
+                ::close(descriptor);
+                descriptor = -1;
+                errno = error;
+            }
+        }
         fd_.store(descriptor, std::memory_order_release);
-        if (descriptor >= 0) ::fchmod(descriptor, 0600);
     }
     ~FileState() { retire(); }
     int fd() const noexcept { return fd_.load(std::memory_order_acquire); }
@@ -53,9 +66,26 @@ std::shared_ptr<FileState> get_file_state(const std::string& raw_path) {
     auto path = std::filesystem::absolute(raw_path, error).lexically_normal().string();
     if (error) path = raw_path;
     std::lock_guard guard(file_states_gate);
-    if (auto found = file_states[path].lock(); found && found->usable()) return found;
+
+    // The registry is process-local cold-path coordination, not permanent
+    // mapped state. Remove every expired weak entry before lookup so churn
+    // across unique public names cannot retain path strings/map nodes forever.
+    for (auto iterator = file_states.begin(); iterator != file_states.end();) {
+        if (iterator->second.expired()) {
+            iterator = file_states.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+
+    const auto existing = file_states.find(path);
+    if (existing != file_states.end()) {
+        if (auto found = existing->second.lock(); found && found->usable()) {
+            return found;
+        }
+    }
     auto created = std::make_shared<FileState>(path);
-    file_states[path] = created;
+    file_states.insert_or_assign(path, created);
     return created;
 }
 
@@ -69,22 +99,42 @@ public:
     sms_status acquire(const Wait& wait) noexcept override {
         if (!usable()) return errno == EACCES ? SMS_STATUS_ACCESS_DENIED : SMS_STATUS_UNKNOWN_FAILURE;
         if (held_) return SMS_STATUS_SUCCESS;
+        if (!wait.valid()) return SMS_STATUS_UNKNOWN_FAILURE;
         const auto started = clock_type::now();
-        if (wait.infinite()) {
-            state_->mutex.lock();
-            local_held_ = true;
-        } else if (wait.milliseconds == 0) {
-            local_held_ = state_->mutex.try_lock();
-        } else {
-            local_held_ = state_->mutex.try_lock_for(std::chrono::milliseconds(wait.milliseconds));
+        for (;;) {
+            if (wait.cancellation != nullptr &&
+                wait.cancellation->is_canceled()) {
+                return SMS_STATUS_OPERATION_CANCELED;
+            }
+            if (state_->mutex.try_lock()) {
+                local_held_ = true;
+                break;
+            }
+            if (!wait.infinite()) {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    clock_type::now() - started);
+                if (wait.milliseconds == 0 || elapsed.count() >= wait.milliseconds) {
+                    return SMS_STATUS_STORE_BUSY;
+                }
+                const auto remaining =
+                    std::chrono::milliseconds(wait.milliseconds) - elapsed;
+                std::this_thread::sleep_for(
+                    std::min(std::chrono::milliseconds(10), remaining));
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
         }
-        if (!local_held_) return SMS_STATUS_STORE_BUSY;
         if (!usable()) {
             release();
             return SMS_STATUS_UNKNOWN_FAILURE;
         }
 
         for (;;) {
+            if (wait.cancellation != nullptr &&
+                wait.cancellation->is_canceled()) {
+                release();
+                return SMS_STATUS_OPERATION_CANCELED;
+            }
             struct flock request{};
             request.l_type = F_WRLCK;
             request.l_whence = SEEK_SET;
@@ -171,149 +221,150 @@ bool ensure_directory(const std::string& child_path) noexcept {
     }
 }
 
-bool exists(const std::string& path) noexcept {
-    struct stat value{};
-    return ::stat(path.c_str(), &value) == 0;
-}
-
-std::string process_start_token(std::int32_t pid) noexcept {
-    try {
-        std::ifstream input("/proc/" + std::to_string(pid) + "/stat");
-        std::string stat;
-        std::getline(input, stat);
-        const auto command_end = stat.rfind(')');
-        if (command_end == std::string::npos || command_end + 2 >= stat.size()) return {};
-        std::istringstream fields(stat.substr(command_end + 2));
-        std::string value;
-        for (int index = 0; fields >> value; ++index) {
-            if (index == 19) return "proc-" + value;
-        }
-    } catch (...) {
+sms_status inspect_regular_file(
+    const std::string& path,
+    bool& present) noexcept {
+    present = false;
+    struct stat information{};
+    if (::lstat(path.c_str(), &information) != 0) {
+        if (errno == ENOENT) return SMS_STATUS_SUCCESS;
+        return errno == EACCES || errno == EPERM
+            ? SMS_STATUS_ACCESS_DENIED
+            : SMS_STATUS_UNKNOWN_FAILURE;
     }
-    return {};
-}
-
-bool process_live(std::int32_t pid, std::string_view start_token) noexcept {
-    if (pid <= 0) return false;
-    if (::kill(pid, 0) != 0 && errno == ESRCH) return false;
-    if (start_token.empty()) return true;
-    const auto observed = process_start_token(pid);
-    return observed.empty() || observed == start_token;
-}
-
-bool parse_owner(std::string_view line, std::int32_t& pid, std::string& token) noexcept {
-    try {
-        const auto first = line.find(':');
-        const auto pid_text = line.substr(0, first);
-        std::size_t used{};
-        const auto parsed = std::stoll(std::string(pid_text), &used, 10);
-        if (used != pid_text.size() || parsed < std::numeric_limits<std::int32_t>::min() ||
-            parsed > std::numeric_limits<std::int32_t>::max()) return false;
-        pid = static_cast<std::int32_t>(parsed);
-        token.clear();
-        if (first != std::string_view::npos) {
-            const auto second = line.find(':', first + 1);
-            if (second != std::string_view::npos) token = std::string(line.substr(first + 1, second - first - 1));
-        }
-        return true;
-    } catch (...) {
-        return false;
+    if (S_ISLNK(information.st_mode) || !S_ISREG(information.st_mode)) {
+        return SMS_STATUS_CORRUPT_STORE;
     }
-}
-
-std::vector<std::string> read_live_owners(const std::string& path) {
-    std::vector<std::string> owners;
-    std::ifstream input(path);
-    std::string line;
-    while (std::getline(input, line)) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
-        const auto first = line.find_first_not_of(" \t");
-        if (first == std::string::npos) continue;
-        line.erase(0, first);
-        std::int32_t pid{};
-        std::string token;
-        if (parse_owner(line, pid, token) && process_live(pid, token)) owners.push_back(line);
-    }
-    return owners;
-}
-
-bool write_owners(const std::string& path, const std::vector<std::string>& owners) noexcept {
-    const auto temporary = path + ".tmp";
-    const auto fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) return false;
-    bool success = ::fchmod(fd, 0600) == 0;
-    for (const auto& owner : owners) {
-        const auto line = owner + "\n";
-        std::size_t offset{};
-        while (success && offset < line.size()) {
-            const auto written = ::write(fd, line.data() + offset, line.size() - offset);
-            if (written <= 0) success = false;
-            else offset += static_cast<std::size_t>(written);
-        }
-    }
-    if (success) success = ::fsync(fd) == 0;
-    ::close(fd);
-    if (success) success = ::rename(temporary.c_str(), path.c_str()) == 0;
-    if (!success) ::unlink(temporary.c_str());
-    return success;
+    present = true;
+    return SMS_STATUS_SUCCESS;
 }
 
 void delete_stale(const ResourceName& resource) noexcept {
     ::unlink(resource.linux_region_path.c_str());
     // Keep the operation-lock inode as a permanent rendezvous, matching the
     // lifecycle inode. It has no generation state and prevents pathname split.
-    ::unlink(resource.linux_owners_path.c_str());
-    ::unlink((resource.linux_owners_path + ".tmp").c_str());
+    LinuxOwnerLifecycle::delete_stale_owner_artifacts(
+        resource.linux_owners_path);
 }
 
-std::string random_hex() {
-    std::random_device random;
-    constexpr char hex[] = "0123456789abcdef";
-    std::string result(32, '0');
-    for (auto& value : result) value = hex[random() & 15U];
-    return result;
+void finalize_owner_while_lifecycle_held(
+    const ResourceName& resource,
+    const LinuxOwnerRecord& owner,
+    std::unique_ptr<LinuxOwnerAnchor> anchor) noexcept {
+    bool safely_recorded{};
+    bool no_owners{};
+    try {
+        const auto status =
+            LinuxOwnerLifecycle::remove_exact_under_lifecycle(
+                resource.linux_owners_path,
+                owner.line,
+                no_owners);
+        if (status == SMS_STATUS_SUCCESS) {
+            if (no_owners) delete_stale(resource);
+            safely_recorded = true;
+        }
+    } catch (...) {
+    }
+
+    // A durable exact marker remains the fail-closed fallback even when the
+    // already-held lifecycle transaction cannot replace its sidecar.
+    if (!safely_recorded) {
+        safely_recorded = LinuxOwnerLifecycle::publish_release_marker(
+            resource.linux_owners_path,
+            owner.line);
+    }
+    if (safely_recorded) {
+        if (anchor) anchor->release_and_remove();
+    } else {
+        LinuxOwnerLifecycle::retain_ambiguous_anchor(std::move(anchor));
+    }
 }
 
-std::string create_owner_record() {
-    const auto pid = current_process_id();
-    return std::to_string(pid) + ":" + process_start_token(pid) + ":" + random_hex();
-}
-
-void release_owner(const ResourceName& resource, const std::string& owner) noexcept {
+void release_owner(
+    const ResourceName& resource,
+    const LinuxOwnerRecord& owner,
+    std::unique_ptr<LinuxOwnerAnchor> anchor) noexcept {
     try {
         auto lifecycle = open_lock(resource.linux_lifecycle_path);
-        if (!lifecycle || lifecycle->acquire(Wait{-1}) != SMS_STATUS_SUCCESS) return;
-        auto owners = read_live_owners(resource.linux_owners_path);
-        owners.erase(std::remove(owners.begin(), owners.end(), owner), owners.end());
-        if (owners.empty()) delete_stale(resource);
-        else write_owners(resource.linux_owners_path, owners);
-        lifecycle->release();
+        if (lifecycle && lifecycle->acquire(
+                Wait{LinuxOwnerLifecycle::bounded_close_milliseconds}) ==
+                SMS_STATUS_SUCCESS) {
+            finalize_owner_while_lifecycle_held(
+                resource, owner, std::move(anchor));
+            lifecycle->release();
+            return;
+        }
     } catch (...) {
+    }
+
+    const auto safely_recorded = LinuxOwnerLifecycle::publish_release_marker(
+        resource.linux_owners_path,
+        owner.line);
+    if (safely_recorded) {
+        if (anchor) anchor->release_and_remove();
+    } else {
+        LinuxOwnerLifecycle::retain_ambiguous_anchor(std::move(anchor));
     }
 }
 
 class LinuxRegion final : public MappedRegion {
 public:
-    LinuxRegion(int fd, std::uint8_t* data, std::int64_t size, ResourceName resource, std::string owner)
-        : fd_(fd), data_(data), size_(size), resource_(std::move(resource)), owner_(std::move(owner)) {}
+    LinuxRegion(
+        int fd,
+        std::uint8_t* data,
+        std::int64_t size,
+        ResourceName resource,
+        LinuxOwnerRecord owner,
+        std::unique_ptr<LinuxOwnerAnchor> anchor)
+        : fd_(fd),
+          data_(data),
+          size_(size),
+          resource_(std::move(resource)),
+          owner_(std::move(owner)),
+          anchor_(std::move(anchor)) {}
     ~LinuxRegion() override { close(); }
     std::uint8_t* data() noexcept override { return data_; }
     std::int64_t size() const noexcept override { return size_; }
+    void mark_owner_registered() noexcept { owner_registered_ = true; }
     void close() noexcept override {
-        if (closed_) return;
+        if (!close_mapping()) return;
+        if (owner_registered_) {
+            release_owner(resource_, owner_, std::move(anchor_));
+        } else if (anchor_) {
+            anchor_->release_and_remove();
+            anchor_.reset();
+        }
+    }
+    void close_while_cold_locked() noexcept override {
+        if (!close_mapping()) return;
+        if (owner_registered_) {
+            finalize_owner_while_lifecycle_held(
+                resource_, owner_, std::move(anchor_));
+        } else if (anchor_) {
+            anchor_->release_and_remove();
+            anchor_.reset();
+        }
+    }
+private:
+    [[nodiscard]] bool close_mapping() noexcept {
+        if (closed_) return false;
         closed_ = true;
-        if (data_ && data_ != MAP_FAILED) ::munmap(data_, static_cast<std::size_t>(size_));
+        if (data_ && data_ != MAP_FAILED) {
+            ::munmap(data_, static_cast<std::size_t>(size_));
+        }
         data_ = nullptr;
         if (fd_ >= 0) ::close(fd_);
         fd_ = -1;
-        release_owner(resource_, owner_);
+        return true;
     }
-private:
+
     int fd_{-1};
     std::uint8_t* data_{};
     std::int64_t size_{};
     ResourceName resource_;
-    std::string owner_;
+    LinuxOwnerRecord owner_;
+    std::unique_ptr<LinuxOwnerAnchor> anchor_;
+    bool owner_registered_{};
     bool closed_{};
 };
 
@@ -328,10 +379,22 @@ sms_open_status map_lock_status(sms_status status) noexcept {
     }
 }
 
+Wait remaining_wait(
+    const Wait& wait,
+    clock_type::time_point started) noexcept {
+    if (wait.infinite()) return wait;
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        clock_type::now() - started).count();
+    return Wait{
+        std::max<std::int64_t>(0, wait.milliseconds - elapsed),
+        wait.cancellation};
+}
+
 } // namespace
 
 PlatformOpenResult platform_open(const ResourceName& resource, const Options& options, const Wait& wait) noexcept {
     PlatformOpenResult result{};
+    const auto started = clock_type::now();
     try {
         if (!ensure_directory(resource.linux_region_path)) {
             result.status = (errno == EACCES || errno == EPERM) ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
@@ -342,82 +405,156 @@ PlatformOpenResult platform_open(const ResourceName& resource, const Options& op
             result.status = (errno == EACCES || errno == EPERM) ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
             return result;
         }
-        const auto lock_status = lifecycle->acquire(wait);
+        const auto lock_status = lifecycle->acquire(remaining_wait(wait, started));
         if (lock_status != SMS_STATUS_SUCCESS) {
             result.status = map_lock_status(lock_status);
             return result;
         }
 
-        auto owners = read_live_owners(resource.linux_owners_path);
-        auto live_resource = exists(resource.linux_region_path) && !owners.empty();
-        if (!live_resource) delete_stale(resource);
+        LinuxOwnerSnapshot owner_snapshot{};
+        const auto owner_status = LinuxOwnerLifecycle::prepare(
+            resource.linux_owners_path,
+            owner_snapshot);
+        if (owner_status != SMS_STATUS_SUCCESS) {
+            result.status = map_lock_status(owner_status);
+            return result;
+        }
+        bool region_present{};
+        const auto region_status = inspect_regular_file(
+            resource.linux_region_path,
+            region_present);
+        if (region_status != SMS_STATUS_SUCCESS) {
+            result.status = map_lock_status(region_status);
+            return result;
+        }
+        if (owner_snapshot.has_live_owner && !region_present) {
+            // Live or ambiguous evidence without its data object is not proof
+            // that a new store may be created under the same public name.
+            result.status = SMS_OPEN_MAPPING_FAILED;
+            return result;
+        }
+        const auto live_resource =
+            region_present && owner_snapshot.has_live_owner;
+        if (!live_resource) {
+            delete_stale(resource);
+            owner_snapshot.committed_owners.clear();
+        }
         if (options.open_mode == SMS_OPEN_MODE_CREATE_NEW && live_resource) {
-            lifecycle->release();
             result.status = SMS_OPEN_ALREADY_EXISTS;
             return result;
         }
         if (options.open_mode == SMS_OPEN_MODE_OPEN_EXISTING && !live_resource) {
-            lifecycle->release();
             result.status = SMS_OPEN_NOT_FOUND;
             return result;
         }
 
         const bool create = !live_resource;
-        const auto flags = O_RDWR | O_CLOEXEC | (create ? (O_CREAT | O_EXCL) : 0);
+        // SMS2 cold ordering is lifecycle -> stable ordinary rendezvous ->
+        // mapping/owner publication. Both gates remain held through participant
+        // registration by Store::open; hot operations never use either gate.
+        auto cold_lock = open_lock(resource.linux_lock_path);
+        if (!cold_lock) {
+            result.status = (errno == EACCES || errno == EPERM)
+                ? SMS_OPEN_ACCESS_DENIED
+                : SMS_OPEN_MAPPING_FAILED;
+            return result;
+        }
+        const auto cold_status = cold_lock->acquire(remaining_wait(wait, started));
+        if (cold_status != SMS_STATUS_SUCCESS) {
+            result.status = map_lock_status(cold_status);
+            return result;
+        }
+
+        const auto flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
+            (create ? (O_CREAT | O_EXCL) : 0);
         const auto fd = ::open(resource.linux_region_path.c_str(), flags, 0600);
         if (fd < 0) {
-            lifecycle->release();
             result.status = errno == EEXIST ? SMS_OPEN_ALREADY_EXISTS :
                             (errno == EACCES || errno == EPERM ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED);
             return result;
         }
-        ::fchmod(fd, 0600);
+        struct stat mapped_file{};
+        if (::fstat(fd, &mapped_file) != 0 || !S_ISREG(mapped_file.st_mode) ||
+            ::fchmod(fd, 0600) != 0) {
+            const auto error = errno;
+            ::close(fd);
+            if (create) delete_stale(resource);
+            result.status = error == EACCES || error == EPERM
+                ? SMS_OPEN_ACCESS_DENIED
+                : SMS_OPEN_MAPPING_FAILED;
+            return result;
+        }
+        std::int64_t mapping_size{};
         if (create) {
             if (::ftruncate(fd, options.total_bytes) != 0) {
-                ::close(fd); delete_stale(resource); lifecycle->release();
+                ::close(fd);
+                delete_stale(resource);
                 result.status = errno == EACCES || errno == EPERM ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
                 return result;
             }
+            mapping_size = options.total_bytes;
         } else {
-            struct stat information{};
-            if (::fstat(fd, &information) != 0 || information.st_size < options.total_bytes) {
-                ::close(fd); lifecycle->release();
-                result.status = SMS_OPEN_INCOMPATIBLE_LAYOUT;
+            if (mapped_file.st_size <= 0 ||
+                static_cast<std::uint64_t>(mapped_file.st_size) >
+                    static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+                ::close(fd);
+                result.status = SMS_OPEN_MAPPING_FAILED;
                 return result;
             }
+            mapping_size = static_cast<std::int64_t>(mapped_file.st_size);
         }
-        if (options.total_bytes <= 0 || static_cast<std::uint64_t>(options.total_bytes) > std::numeric_limits<std::size_t>::max()) {
-            ::close(fd); lifecycle->release(); result.status = SMS_OPEN_INVALID_OPTIONS; return result;
+        if (mapping_size <= 0 ||
+            static_cast<std::uint64_t>(mapping_size) >
+                std::numeric_limits<std::size_t>::max()) {
+            ::close(fd);
+            if (create) delete_stale(resource);
+            result.status = SMS_OPEN_INVALID_OPTIONS;
+            return result;
         }
-        auto* mapped = static_cast<std::uint8_t*>(::mmap(nullptr, static_cast<std::size_t>(options.total_bytes),
+        auto* mapped = static_cast<std::uint8_t*>(::mmap(nullptr, static_cast<std::size_t>(mapping_size),
                                                          PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
         if (mapped == MAP_FAILED) {
-            ::close(fd); if (create) delete_stale(resource); lifecycle->release();
-            result.status = errno == EACCES || errno == EPERM ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
-            return result;
-        }
-
-        const auto owner = create_owner_record();
-        owners = read_live_owners(resource.linux_owners_path);
-        owners.push_back(owner);
-        if (!write_owners(resource.linux_owners_path, owners)) {
-            ::munmap(mapped, static_cast<std::size_t>(options.total_bytes));
-            ::close(fd); if (create) delete_stale(resource); lifecycle->release();
-            result.status = errno == EACCES || errno == EPERM ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
-            return result;
-        }
-        lifecycle->release();
-
-        auto shared_lock = open_lock(resource.linux_lock_path);
-        if (!shared_lock) {
-            release_owner(resource, owner);
-            ::munmap(mapped, static_cast<std::size_t>(options.total_bytes));
             ::close(fd);
+            if (create) delete_stale(resource);
             result.status = errno == EACCES || errno == EPERM ? SMS_OPEN_ACCESS_DENIED : SMS_OPEN_MAPPING_FAILED;
             return result;
         }
-        result.region = std::make_unique<LinuxRegion>(fd, mapped, options.total_bytes, resource, owner);
-        result.lock = std::move(shared_lock);
+
+        LinuxOwnerRecord owner{};
+        std::unique_ptr<LinuxOwnerAnchor> anchor;
+        const auto create_owner_status = LinuxOwnerLifecycle::create_current_owner(
+            resource.linux_owners_path,
+            owner,
+            anchor);
+        if (create_owner_status != SMS_STATUS_SUCCESS || !anchor) {
+            ::munmap(mapped, static_cast<std::size_t>(mapping_size));
+            ::close(fd);
+            if (create) delete_stale(resource);
+            result.status = map_lock_status(create_owner_status);
+            return result;
+        }
+        auto candidate = std::make_unique<LinuxRegion>(
+            fd,
+            mapped,
+            mapping_size,
+            resource,
+            owner,
+            std::move(anchor));
+        const auto registration_status = LinuxOwnerLifecycle::commit_registration(
+            resource.linux_owners_path,
+            owner_snapshot.committed_owners,
+            owner.line);
+        if (registration_status != SMS_STATUS_SUCCESS) {
+            candidate.reset();
+            if (create) delete_stale(resource);
+            result.status = map_lock_status(registration_status);
+            return result;
+        }
+        candidate->mark_owner_registered();
+        result.region = std::move(candidate);
+        result.lifecycle_lock = std::move(lifecycle);
+        result.cold_lock = std::move(cold_lock);
+        result.physical_creator = create;
         result.status = SMS_OPEN_SUCCESS;
         return result;
     } catch (...) {

@@ -8,7 +8,7 @@ public sealed class LockFreeAcquireAllocationTests
     [Fact]
     public void OneMillionWarmedAcquireProjectReleaseCyclesAllocateZeroBytes()
     {
-        using var store = CreateLockFreeStore(leaseRecordCount: 2);
+        using var store = CreateStore(leaseRecordCount: 2);
         var key = new byte[] { 1, 0, 2 };
         var value = new byte[] { 3, 0, 4, 5 };
         var descriptor = new byte[] { 6, 0, 7 };
@@ -31,7 +31,7 @@ public sealed class LockFreeAcquireAllocationTests
     public void WarmExpectedMissAndLeaseTableFullPathsAllocateZeroBytes()
     {
         const int MeasuredFailureCycles = 100_000;
-        using var store = CreateLockFreeStore(leaseRecordCount: 1);
+        using var store = CreateStore(leaseRecordCount: 1);
         var publishedKey = new byte[] { 1 };
         var missingKey = new byte[] { 2 };
         Assert.Equal(StoreStatus.Success, store.TryPublish(publishedKey, [9], [8]));
@@ -106,9 +106,9 @@ public sealed class LockFreeAcquireAllocationTests
         }
     }
 
-    private static MemoryStore CreateLockFreeStore(int leaseRecordCount)
+    private static MemoryStore CreateStore(int leaseRecordCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-acquire-allocation-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,
@@ -121,7 +121,7 @@ public sealed class LockFreeAcquireAllocationTests
         var status = MemoryStore.TryCreateOrOpen(options, out var store);
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<MemoryStore>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         return result;
     }
 

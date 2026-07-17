@@ -1,71 +1,57 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "shared_protocol": {
-    "layouts": [
-      {
-        "version": "1.2",
-        "major": 1,
-        "minor": 2,
-        "magic": "SMS1",
-        "resource_protocol": 1
-      },
-      {
-        "version": "2.0",
-        "major": 2,
-        "minor": 0,
-        "magic": "SMS2",
-        "resource_protocol": 2,
-        "required_features_mask": 7,
-        "required_features": ["versioned_empty_spill_summary", "publication_intent", "pid_namespace_identity"]
-      }
-    ],
+    "layout": {
+      "version": "2.0",
+      "major": 2,
+      "minor": 0,
+      "magic": "SMS2",
+      "resource_protocol": 2,
+      "required_features_mask": 7,
+      "optional_features_mask": 0,
+      "required_features": [
+        "versioned_empty_spill_summary",
+        "publication_intent",
+        "pid_namespace_identity"
+      ]
+    },
     "byte_order": "little",
-    "required_pointer_width": 64
+    "required_pointer_width": 64,
+    "qualified_architecture": "x86_64",
+    "noncurrent_mapping_policy": "reject-before-payload-access",
+    "in_place_conversion": false
   },
   "distributions": [
     {
       "name": "SharedMemoryStore",
       "ecosystem": "NuGet",
-      "version": "2.0.0",
-      "creates_layouts": ["1.2", "2.0"],
-      "reads_layouts": ["1.2", "2.0"],
-      "recognizes_layout_headers": ["1.2", "2.0"],
-      "layout_resource_protocols": {
-        "1.2": 1,
-        "2.0": 2
-      },
+      "version": "3.0.0",
+      "creates_layouts": ["2.0"],
+      "reads_layouts": ["2.0"],
+      "resource_protocol": 2,
+      "required_features_mask": 7,
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     },
     {
       "name": "SharedMemoryStore",
       "ecosystem": "CMake",
-      "version": "0.1.0",
-      "c_abi": "1.0",
-      "creates_layouts": ["1.2"],
-      "reads_layouts": ["1.2"],
-      "recognizes_layout_headers": ["1.2", "2.0"],
-      "rejects_layouts": ["2.0"],
-      "rejection_status": "IncompatibleLayout",
-      "payload_access_before_rejection": false,
-      "layout_resource_protocols": {
-        "1.2": 1
-      },
+      "version": "1.0.0",
+      "c_abi": "2.0",
+      "creates_layouts": ["2.0"],
+      "reads_layouts": ["2.0"],
+      "resource_protocol": 2,
+      "required_features_mask": 7,
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     },
     {
       "name": "shared-memory-store",
       "ecosystem": "Python",
-      "version": "0.1.0",
-      "requires_c_abi": "1.0",
-      "creates_layouts": ["1.2"],
-      "reads_layouts": ["1.2"],
-      "recognizes_layout_headers": ["1.2", "2.0"],
-      "rejects_layouts": ["2.0"],
-      "rejection_status": "IncompatibleLayout",
-      "payload_access_before_rejection": false,
-      "layout_resource_protocols": {
-        "1.2": 1
-      },
+      "version": "1.0.0",
+      "requires_c_abi": "2.0",
+      "creates_layouts": ["2.0"],
+      "reads_layouts": ["2.0"],
+      "resource_protocol": 2,
+      "required_features_mask": 7,
       "validated_targets": ["windows-x86_64", "linux-x86_64"]
     }
   ],
@@ -85,12 +71,11 @@
       "binary-publish-acquire-release",
       "remove-final-release-reuse",
       "reservation-commit-abort",
-      "bounded-lock-contention",
+      "participant-capacity-and-reuse",
+      "bounded-contention",
       "explicit-crash-recovery",
       "linux-owner-cleanup",
-      "layout-2.0-rejects-required-features-zero-bit-0-only-and-mask-3-drafts",
-      "older-layout-2.0-drafts-reject-required-features-mask-7",
-      "v1.2-only-client-rejects-layout-2.0-before-payload-access"
+      "noncurrent-and-malformed-mappings-reject-before-payload-access"
     ]
   }
 }

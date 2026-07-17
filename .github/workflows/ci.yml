@@ -32,6 +32,12 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Validate SMS2-only qualification policy
+        shell: pwsh
+        run: |
+          ./scripts/validate-lock-free-os.ps1 -Command self-test -Configuration Release -ValidateOnly
+          ./scripts/run-lock-free-qualification.ps1 -Tier pr -Configuration Release -ValidateOnly
+
       - name: Restore
         run: dotnet restore SharedMemoryStore.slnx
 
@@ -51,7 +57,7 @@ jobs:
         shell: pwsh
         run: ./scripts/validate-docs.ps1
 
-      - name: Validate package consumption
+      - name: Validate SMS2 package consumption
         shell: pwsh
         run: ./scripts/validate-package-consumption.ps1 -Configuration Release
 
@@ -72,7 +78,7 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Validate Docker sharing
+      - name: Validate SMS2 Docker sharing
         shell: pwsh
         run: ./scripts/validate-docker-shared-memory.ps1 -Configuration Release
 
@@ -89,7 +95,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Validate CMake build, tests, install, and clean consumer
+      - name: Validate SMS2 CMake build, tests, install, and clean consumer
         shell: pwsh
         run: ./scripts/validate-native.ps1 -Configuration Release
 
@@ -114,7 +120,7 @@ jobs:
       - name: Install Python build frontend
         run: python -m pip install --upgrade build
 
-      - name: Validate source tests, wheel contents, and clean installation
+      - name: Validate SMS2 source tests, distributions, and clean installation
         shell: pwsh
         run: ./scripts/validate-python.ps1 -Configuration Release
 
@@ -142,7 +148,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate all ordered runtime pairs and stress lifecycles
+      - name: Validate all ordered SMS2 runtime pairs and stress lifecycles
         shell: pwsh
         run: >-
           ./scripts/validate-interoperability.ps1

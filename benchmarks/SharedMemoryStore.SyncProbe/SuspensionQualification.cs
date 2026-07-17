@@ -1051,7 +1051,7 @@ internal static class SuspensionQualification
     }
 
     private static SharedMemoryStoreOptions CreateOptions(string name, OpenMode mode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             SlotCount,
             MaxValueBytes,

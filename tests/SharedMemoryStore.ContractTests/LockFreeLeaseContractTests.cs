@@ -87,7 +87,7 @@ public sealed class LockFreeLeaseContractTests
         }
 
         using var owned = CreateStore(leaseRecordCount: 2);
-        Assert.Equal(StoreProfile.LockFree, owned.Store.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), owned.Store.ProtocolInfo);
         Assert.Equal(2, owned.Store.ProtocolInfo.LayoutMajorVersion);
         Assert.Equal(StoreStatus.Success, owned.Store.TryPublish([0x21], [1, 2, 3]));
 
@@ -184,7 +184,7 @@ public sealed class LockFreeLeaseContractTests
     private static OwnedStore CreateStore(int leaseRecordCount)
     {
         string name = $"sms-v2-lease-contract-{Guid.NewGuid():N}";
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 128,
@@ -201,7 +201,7 @@ public sealed class LockFreeLeaseContractTests
 
     private static MemoryStore OpenExisting(string name, int leaseRecordCount)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 4,
             maxValueBytes: 128,

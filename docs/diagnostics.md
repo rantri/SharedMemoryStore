@@ -1,106 +1,191 @@
 # Diagnostics
 
-SharedMemoryStore exposes caller-owned diagnostics through `GetDiagnostics()`
-and `TryGetDiagnostics()`. The public API contract defines the diagnostic
-snapshot in
-[public-api.md](../specs/001-frame-memory-store/contracts/public-api.md).
-Key-index health follows
-[index-health-contract.md](../specs/004-store-reliability-hardening/contracts/index-health-contract.md),
-and observability boundaries follow
-[diagnostics-integration-contract.md](../specs/005-api-production-readiness/contracts/diagnostics-integration-contract.md).
+Diagnostics are caller-controlled, bounded observations. The store has no
+background reporter and never writes diagnostics to the console. Correctness
+does not depend on taking a snapshot.
 
-The library does not write to the console, configure logging, export metrics, or
-start hidden background work. Consumers decide how snapshots become logs,
-metrics, traces, alerts, or support evidence.
+The shared-versus-local comparison rules follow the current
+[public API](../specs/010-lock-free-only-multilang/contracts/public-api.md) and
+[interoperability](../specs/010-lock-free-only-multilang/contracts/interoperability-and-validation.md)
+contracts.
 
-## Snapshot Fields
-
-`DiagnosticsSnapshot` includes:
-
-- `TotalBytes`: configured mapped-region length.
-- `SlotCount`: configured reusable slot count.
-- `FreeSlotCount`: slots currently available for publish.
-- `PublishedSlotCount`: slots currently published.
-- `PendingRemovalCount`: slots waiting for final lease release.
-- `ActiveLeaseCount`: active lease records.
-- `ActiveReservationCount`: slots reserved but not committed.
-- `AbortedReservationCount`: reservations aborted through this handle.
-- `RecoveredLeaseCount`, `ActiveLeaseRecoveryCount`,
-  `UnsupportedLeaseRecoveryCount`, and `FailedLeaseRecoveryCount`: lease
-  recovery outcomes.
-- `RecoveredReservationCount`, `ActiveReservationRecoveryCount`,
-  `UnsupportedReservationRecoveryCount`, and
-  `FailedReservationRecoveryCount`: reservation recovery outcomes.
-- `CapacityPressureCount`: store-full and lease-table-full pressure failures.
-- `IndexEntryCount`, `OccupiedIndexEntryCount`,
-  `TombstoneIndexEntryCount`, `EmptyIndexEntryCount`,
-  `TombstonePressureRatio`, `UsableIndexCapacity`,
-  `LastObservedProbeLength`, `MaxObservedProbeLength`, and
-  `IndexCompactionCount`: key-index health and churn signals.
-- `LastFailureStatus`: last non-success operation status observed by the
-  handle.
-- `GetFailureCount(StoreStatus status)`: aggregate per-status failure counts
-  including validation, contention, cancellation, lifecycle, capacity, platform,
-  reservation, lease, and unexpected failures.
-
-## Example
+C#:
 
 ```csharp
-var status = store.TryGetDiagnostics(out var snapshot);
+StoreStatus status = store.TryGetDiagnostics(
+    new StoreWaitOptions(TimeSpan.FromMilliseconds(100)),
+    out DiagnosticsSnapshot snapshot);
+
 if (status == StoreStatus.Success)
 {
-    logger.LogInformation(
-        "SharedMemoryStore free={Free} published={Published} activeLeases={Leases} lastFailure={LastFailure}",
-        snapshot.FreeSlotCount,
-        snapshot.PublishedSlotCount,
-        snapshot.ActiveLeaseCount,
-        snapshot.LastFailureStatus);
+    Console.WriteLine(snapshot.ProtocolInfo);
+    Console.WriteLine($"slots: {snapshot.FreeSlotCount}/{snapshot.SlotCount}");
 }
 ```
 
-Use `GetFailureCount(StoreStatus status)` when exporting metrics by status:
+C++ uses `try_get_diagnostics`; Python uses `store.diagnostics()`. Every runtime
+reports the same canonical protocol identity and equivalent shared facts.
 
-```csharp
-var fullFailures = snapshot.GetFailureCount(StoreStatus.StoreFull);
-var busyFailures = snapshot.GetFailureCount(StoreStatus.StoreBusy);
+## Protocol identity
+
+`ProtocolInfo` is immutable for a successfully opened handle:
+
+| Field | Current value |
+|---|---:|
+| Layout major | `2` |
+| Layout minor | `0` |
+| Resource protocol | `2` |
+| Required features | `7` |
+| Optional features | `0` |
+
+Treat the five fields as one identity. Package version is not part of this
+value.
+
+## Shared structural facts
+
+These values are derived from the mapped region and should agree across
+runtimes observing a stable state:
+
+- `TotalBytes` and `SlotCount`;
+- `FreeSlotCount`, `InitializingSlotCount`, `ReservedSlotCount`,
+  `PublishedSlotCount`, `PendingRemovalCount`, `ReclaimingSlotCount`, and
+  `RetiredSlotCount`;
+- `ActiveReservationCount`;
+- `ActiveLeaseCount`, `ClaimingLeaseCount`, `RecoveringLeaseCount`,
+  `FreeLeaseCount`, and `RetiredLeaseCount`;
+- `ParticipantRecordCount`, `FreeParticipantCount`,
+  `RegisteringParticipantCount`, `ActiveParticipantCount`,
+  `ClosingParticipantCount`, `RecoveringParticipantCount`,
+  `ReclaimingParticipantCount`, and `RetiredParticipantCount`;
+- `IsParticipantTableExhausted`;
+- aggregate directory capacity/occupancy values; and
+- `PrimaryDirectoryOccupancy`, `SpilledBucketCount`, and
+  `OverflowDirectoryOccupancy`.
+
+Slot states should account for the configured slot count in a stable snapshot:
+
+```text
+free + initializing + reserved + published + pending-removal + reclaiming + retired
+    = slot count
 ```
 
-## Troubleshooting Signals
+Participant states follow the same accounting pattern. A concurrent snapshot is
+bounded and may observe legal movement between records; use repeated snapshots
+when an operator needs a stable trend rather than a single instant.
 
-- Rising `CapacityPressureCount` indicates slot or lease-record pressure.
-- Nonzero `GetFailureCount(StoreStatus.StoreFull)` points to slot pressure.
-- Nonzero `GetFailureCount(StoreStatus.LeaseTableFull)` points to concurrent
-  reader or leaked lease pressure.
-- Nonzero `GetFailureCount(StoreStatus.RemovePending)` indicates removals while
-  readers are holding leases.
-- Nonzero `GetFailureCount(StoreStatus.InvalidLease)` or
-  `GetFailureCount(StoreStatus.LeaseAlreadyReleased)` indicates lease ownership
-  or disposal paths need review.
-- Nonzero reservation failure counts indicate a producer advanced, committed,
-  aborted, disposed, or recovered a reservation outside the expected lifecycle.
-- Nonzero recovery result counters identify recovered records, live-owner skips,
-  unsupported owner checks, and unsafe records.
-- Rising tombstone counts with low occupied counts indicate key churn pressure.
-  Internal compaction is synchronous and caller-triggered by mutation paths; the
-  library does not start a background maintenance worker.
-- `GetFailureCount(StoreStatus.UnsupportedPlatform)` indicates an unsupported
-  OS, restricted host, isolated Docker profile, or recovery capability mismatch.
-  On Linux, Windows, and supported same-host Docker profiles, equivalent
-  workloads should report the same diagnostic categories.
-- `GetFailureCount(StoreStatus.CorruptStore)` means the process should stop
-  unsafe access and gather evidence for maintainers.
+SMS2 uses a fixed primary directory, versioned spill summaries, and bounded
+overflow cells. It does not expose tombstone-pressure or synchronous-compaction
+diagnostics.
 
-## Support Evidence
+## Runtime-local counters
 
-When reporting a bug, include:
+The following values describe work performed through the current runtime or
+handle. They are not expected to match another participant:
 
-- package version and target framework.
-- OS, architecture, and .NET runtime.
-- store options without secrets.
-- operation status and whether the operation used `StoreWaitOptions`.
-- relevant `DiagnosticsSnapshot` fields.
-- sample command or minimal reproduction.
+- `AbortedReservationCount`;
+- `RecoveredLeaseCount`, `ActiveLeaseRecoveryCount`,
+  `UnsupportedLeaseRecoveryCount`, and `FailedLeaseRecoveryCount`;
+- `RecoveredReservationCount`, `ActiveReservationRecoveryCount`,
+  `UnsupportedReservationRecoveryCount`, and
+  `FailedReservationRecoveryCount`;
+- `CapacityPressureCount`;
+- recent/max probe and overflow-scan lengths;
+- `OverflowScanCount`;
+- `CasRetryCount` and `HelpedTransitionCount`;
+- `ContentionBudgetExhaustionCount`;
+- `InvalidTokenCount` and `StaleTokenCount`;
+- `RecoveryAttemptCount` and `RecoveredTransitionCount`;
+- current/live/stale/unsupported/inconsistent/changing owner-classification
+  counters;
+- `LastFailureStatus`; and
+- `GetFailureCount(StoreStatus)` or the language-equivalent status counters.
 
-Do not include secrets or payload bytes unless maintainers explicitly request a
-safe minimal reproduction. Use [SUPPORT.md](../SUPPORT.md) for public reports
-and [SECURITY.md](../SECURITY.md) for private vulnerability reporting.
+Interop tooling must compare shared structural facts while checking only the
+presence and meaning of local counters. Equal local counters are coincidental.
+
+## Reading pressure
+
+Useful capacity interpretations:
+
+- low `FreeSlotCount` with many published values means configured value
+  capacity is genuinely occupied;
+- high `PendingRemovalCount` with active leases means readers delay physical
+  reuse;
+- high `ReservedSlotCount` means producers hold incomplete reservations;
+- `LeaseTableFull` with a low slot count points to lease-record sizing rather
+  than value capacity;
+- `IsParticipantTableExhausted` points to open-handle capacity;
+- spilled buckets and overflow occupancy indicate directory collision pressure;
+  and
+- retired records indicate generation/incarnation reuse protection, not
+  transient contention.
+
+`StoreFull`, `LeaseTableFull`, and `ParticipantTableFull` are capacity outcomes,
+not corruption.
+
+## Reading contention and helping
+
+`CasRetryCount` measures failed compare/exchange attempts recorded locally.
+`HelpedTransitionCount` measures cooperative completion of another
+participant's published transition. `ContentionBudgetExhaustionCount` counts
+local calls that returned `StoreBusy` after bounded retry/revalidation/helping.
+
+These counters help distinguish sustained contention from a cold-open wait. Hot
+operations never acquire the platform lifecycle lock, so a high hot-path retry
+count should not be explained as mutex ownership.
+
+## Recovery and owner classification
+
+Recovery metrics should be interpreted together:
+
+- an attempt is a record considered for explicit recovery;
+- a recovered transition is one exact compare/exchange that reclaimed eligible
+  state;
+- current/live classifications are retained;
+- stale classifications may be reclaimed after unchanged-state revalidation;
+- unsupported or inconsistent classifications are retained conservatively; and
+- changing classifications mean the record moved during the observation.
+
+Never infer that unsupported owner evidence is stale. Linux PID namespace and
+owner-anchor evidence, Windows process identity, permissions, and host support
+all affect classification.
+
+## Failure counts
+
+`LastFailureStatus` is the latest non-success result recorded by this handle.
+Use `GetFailureCount(status)` for a specific deterministic status. Successful
+operations do not erase earlier counts.
+
+Input errors, capacity, `StoreBusy`, cancellation, and lifecycle races must not
+latch corruption. `CorruptStore` is reserved for a persistent impossible shared
+state after revalidation.
+
+## Diagnostics after close
+
+The managed handle preserves its last structural snapshot for safe formatting
+after disposal and continues to report local `StoreDisposed` outcomes. It does
+not re-enter mapped memory. C++ and Python wrappers follow their public closed-
+handle contracts and must not expose a borrowed mapped view after close.
+
+## Operational collection
+
+For useful evidence, record:
+
+- timestamp and process/runtime identity;
+- package version and five-field protocol identity;
+- public store name only when it is not sensitive;
+- configured capacities;
+- shared slot/lease/participant/directory facts;
+- local retry/help/token/recovery/status counters;
+- host OS, architecture, container namespace, and permissions; and
+- recent crashes, cancellations, recovery scans, and deployment replacement.
+
+Avoid dumping key, descriptor, or payload bytes by default. SharedMemoryStore
+does not know whether those bytes contain secrets.
+
+## Related guides
+
+- [Errors and statuses](errors.md)
+- [Usage](usage.md)
+- [Architecture](architecture.md)
+- [Portability](portability.md)

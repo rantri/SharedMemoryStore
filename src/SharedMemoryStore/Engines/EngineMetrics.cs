@@ -1,12 +1,11 @@
 namespace SharedMemoryStore.Engines;
 
 /// <summary>
-/// Profile-neutral instantaneous engine state consumed by facade diagnostics.
+/// Instantaneous engine state consumed by facade diagnostics.
 /// </summary>
 /// <remarks>
 /// Metrics are observational only. No correctness decision may depend on this
-/// potentially cross-instant snapshot. Profile-specific fields that do not
-/// apply to the legacy engine remain zero.
+/// potentially cross-instant snapshot.
 /// </remarks>
 internal readonly record struct EngineMetrics
 {
@@ -58,8 +57,6 @@ internal readonly record struct EngineMetrics
 
     internal int OccupiedIndexEntryCount { get; init; }
 
-    internal int TombstoneIndexEntryCount { get; init; }
-
     internal int EmptyIndexEntryCount { get; init; }
 
     internal int UsableIndexCapacity { get; init; }
@@ -67,8 +64,6 @@ internal readonly record struct EngineMetrics
     internal int LastObservedProbeLength { get; init; }
 
     internal int MaxObservedProbeLength { get; init; }
-
-    internal long IndexCompactionCount { get; init; }
 
     internal int PrimaryDirectoryOccupancy { get; init; }
 

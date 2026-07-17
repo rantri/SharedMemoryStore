@@ -1,13 +1,17 @@
 using System.Buffers;
 using System.Text.Json;
+using SharedMemoryStore.LockFree;
 
 namespace SharedMemoryStore.InteropAgent;
 
 internal sealed class AgentSession : IDisposable
 {
     private readonly Dictionary<string, MemoryStore> _stores = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SharedMemoryStoreOptions> _storeOptions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ValueLease> _leases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ValueReservation> _reservations = new(StringComparer.Ordinal);
+    private AgentCheckpointOperation? _checkpointOperation;
+    private AgentColdLock? _coldLock;
 
     public AgentResponse Handle(AgentRequest request)
     {
@@ -15,12 +19,24 @@ internal sealed class AgentSession : IDisposable
         {
             return request.Command switch
             {
-                "ping" => Success(request.Id, 0, "Success", new { runtime = "dotnet", protocolVersion = 1 }),
+                "ping" => Success(request.Id, 0, "Success", new
+                {
+                    runtime = "dotnet",
+                    protocolVersion = 2,
+                    checkpointCatalogVersion = 1,
+                    layoutMajorVersion = 2,
+                    layoutMinorVersion = 0,
+                    resourceProtocolVersion = 2,
+                    requiredFeatures = 7UL,
+                    optionalFeatures = 0UL
+                }),
                 "open" => Open(request),
                 "close" => Close(request),
                 "publish" => Publish(request),
                 "publishSegments" or "publishSegmented" => PublishSegments(request),
                 "acquire" => Acquire(request),
+                "read" => Read(request),
+                "checksum" => Checksum(request),
                 "release" => Release(request),
                 "remove" => Remove(request),
                 "reserve" => Reserve(request),
@@ -31,6 +47,14 @@ internal sealed class AgentSession : IDisposable
                 "recoverLeases" => RecoverLeases(request),
                 "recoverReservations" => RecoverReservations(request),
                 "diagnostics" => Diagnostics(request),
+                "checkpointCatalog" => CheckpointCatalog(request),
+                "pauseAtCheckpoint" => BeginCheckpoint(request, crash: false),
+                "resumeCheckpoint" => CompleteCheckpoint(request, cancel: false),
+                "cancelCheckpoint" => CompleteCheckpoint(request, cancel: true),
+                "crashAtCheckpoint" => BeginCheckpoint(request, crash: true),
+                "injectRawFault" => InjectRawFault(request),
+                "holdColdLock" => HoldColdLock(request),
+                "releaseColdLock" => ReleaseColdLock(request),
                 "crash" => Crash(),
                 _ => AgentHost.Failure(
                     request.Id,
@@ -53,6 +77,11 @@ internal sealed class AgentSession : IDisposable
 
     public void Dispose()
     {
+        _checkpointOperation?.Dispose();
+        _checkpointOperation = null;
+        _coldLock?.Dispose();
+        _coldLock = null;
+
         foreach (var lease in _leases.Values)
         {
             lease.Dispose();
@@ -71,6 +100,7 @@ internal sealed class AgentSession : IDisposable
         _leases.Clear();
         _reservations.Clear();
         _stores.Clear();
+        _storeOptions.Clear();
     }
 
     private AgentResponse Open(AgentRequest request)
@@ -81,37 +111,40 @@ internal sealed class AgentSession : IDisposable
         {
             previous.Dispose();
         }
+        _storeOptions.Remove(storeId);
 
-        var slotCount = RequiredInt32(arguments, "slotCount");
-        var maxValueBytes = RequiredInt32(arguments, "maxValueBytes");
-        var maxDescriptorBytes = RequiredInt32(arguments, "maxDescriptorBytes");
-        var maxKeyBytes = RequiredInt32(arguments, "maxKeyBytes");
-        var leaseRecordCount = RequiredInt32(arguments, "leaseRecordCount");
-        var totalBytes = OptionalInt64(arguments, "totalBytes") ?? SharedMemoryStoreOptions.CalculateRequiredBytes(
-            slotCount,
-            maxValueBytes,
-            maxDescriptorBytes,
-            maxKeyBytes,
-            leaseRecordCount);
-        var options = new SharedMemoryStoreOptions
+        SharedMemoryStoreOptions options;
+        try
         {
-            Name = RequiredString(arguments, "name"),
-            OpenMode = ParseOpenMode(arguments),
-            TotalBytes = totalBytes,
-            SlotCount = slotCount,
-            MaxValueBytes = maxValueBytes,
-            MaxDescriptorBytes = maxDescriptorBytes,
-            MaxKeyBytes = maxKeyBytes,
-            LeaseRecordCount = leaseRecordCount,
-            EnableLeaseRecovery = OptionalBoolean(arguments, "enableLeaseRecovery") ?? false
-        };
+            options = ReadOptions(arguments);
+        }
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
+        {
+            return Success(
+                request.Id,
+                (int)StoreOpenStatus.InvalidOptions,
+                StoreOpenStatus.InvalidOptions.ToString(),
+                result: null);
+        }
         var status = MemoryStore.TryCreateOrOpen(options, Wait(arguments), out var store);
         if (status == StoreOpenStatus.Success && store is not null)
         {
             _stores.Add(storeId, store);
+            _storeOptions.Add(storeId, options);
         }
 
-        return Success(request.Id, (int)status, status.ToString(), new { storeId });
+        return Success(
+            request.Id,
+            (int)status,
+            status.ToString(),
+            store is null
+                ? null
+                : new
+                {
+                    storeId,
+                    participantRecordCount = options.ParticipantRecordCount,
+                    protocolInfo = store.ProtocolInfo
+                });
     }
 
     private AgentResponse Close(AgentRequest request)
@@ -121,6 +154,7 @@ internal sealed class AgentSession : IDisposable
         {
             store.Dispose();
         }
+        _storeOptions.Remove(storeId);
 
         return Success(request.Id, 0, StoreStatus.Success.ToString(), new { storeId });
     }
@@ -176,6 +210,40 @@ internal sealed class AgentSession : IDisposable
             ? lease.Release(Wait(arguments))
             : StoreStatus.InvalidLease;
         return Status(request.Id, status);
+    }
+
+    private AgentResponse Read(AgentRequest request)
+    {
+        var leaseId = RequiredString(Arguments(request), "leaseId");
+        if (!_leases.TryGetValue(leaseId, out var lease) || !lease.IsValid)
+        {
+            return Status(request.Id, StoreStatus.InvalidLease);
+        }
+
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), new
+        {
+            leaseId,
+            value = AgentProtocol.EncodeBytes(lease.ValueSpan),
+            descriptor = AgentProtocol.EncodeBytes(lease.DescriptorSpan)
+        });
+    }
+
+    private AgentResponse Checksum(AgentRequest request)
+    {
+        string leaseId = RequiredString(Arguments(request), "leaseId");
+        if (!_leases.TryGetValue(leaseId, out ValueLease lease) || !lease.IsValid)
+        {
+            return Status(request.Id, StoreStatus.InvalidLease);
+        }
+
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), new
+        {
+            leaseId,
+            valueLength = lease.ValueSpan.Length,
+            descriptorLength = lease.DescriptorSpan.Length,
+            valueChecksum = Fnv1a64(lease.ValueSpan),
+            descriptorChecksum = Fnv1a64(lease.DescriptorSpan)
+        });
     }
 
     private AgentResponse Remove(AgentRequest request)
@@ -264,9 +332,230 @@ internal sealed class AgentSession : IDisposable
     private AgentResponse Diagnostics(AgentRequest request)
     {
         var arguments = Arguments(request);
+        string storeId = RequiredString(arguments, "storeId");
         var status = Store(arguments).TryGetDiagnostics(Wait(arguments), out var snapshot);
-        return Success(request.Id, (int)status, status.ToString(), snapshot);
+        if (status != StoreStatus.Success)
+        {
+            return Status(request.Id, status);
+        }
+
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["storeId"] = storeId
+        };
+        foreach (JsonProperty property in AgentProtocol.ToJsonElement(snapshot).EnumerateObject())
+        {
+            result.Add(property.Name, property.Value.Clone());
+        }
+
+        result.Add(
+            "failureCounts",
+            Enum.GetValues<StoreStatus>()
+                .Select(snapshot.GetFailureCount)
+                .ToArray());
+        return Success(request.Id, 0, status.ToString(), result);
     }
+
+    private static AgentResponse CheckpointCatalog(AgentRequest request)
+    {
+        object[] checkpoints = LockFreeCheckpointCatalog.Entries
+            .Select(entry => (object)new
+            {
+                id = (int)entry.Id,
+                name = entry.Id.ToString(),
+                family = entry.Family.ToString(),
+                position = entry.Position.ToString(),
+                pause = entry.Pause.ToString(),
+                crash = entry.Crash.ToString(),
+                race = entry.Race.ToString(),
+                isPublicOrderingPoint = entry.IsPublicOrderingPoint,
+                description = entry.Description
+            })
+            .ToArray();
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), new
+        {
+            checkpointCatalogVersion = 1,
+            checkpoints
+        });
+    }
+
+    private AgentResponse BeginCheckpoint(AgentRequest request, bool crash)
+    {
+        if (_checkpointOperation is not null)
+        {
+            return AgentHost.Failure(
+                request.Id,
+                -3,
+                "CheckpointAlreadyArmed",
+                "checkpoint_already_armed",
+                "One managed checkpoint operation is already paused.");
+        }
+
+        JsonElement arguments = Arguments(request);
+        int checkpointValue = RequiredInt32(arguments, "checkpointId");
+        int occurrence = checked((int)(OptionalInt64(arguments, "occurrence") ?? 1));
+        ArgumentOutOfRangeException.ThrowIfLessThan(occurrence, 1);
+        var checkpoint = (LockFreeCheckpointId)checkpointValue;
+        _ = LockFreeCheckpointCatalog.Get(checkpoint);
+        var spec = new AgentCheckpointSpec(
+            checkpoint,
+            occurrence,
+            RequiredString(arguments, "operation"),
+            ReadOptions(arguments),
+            OptionalBytes(arguments, "key"),
+            OptionalBytes(arguments, "value"),
+            OptionalBytes(arguments, "descriptor"));
+        var operation = new AgentCheckpointOperation(spec);
+        _checkpointOperation = operation;
+        if (!operation.WaitUntilPaused(TimeSpan.FromSeconds(10)))
+        {
+            AgentCheckpointCompletion completion = operation.Complete(cancel: true);
+            operation.Dispose();
+            _checkpointOperation = null;
+            return AgentHost.Failure(
+                request.Id,
+                -4,
+                "CheckpointNotReached",
+                "checkpoint_not_reached",
+                $"Checkpoint {checkpoint} was not reached; open={completion.OpenStatus}, operation={completion.Status}.");
+        }
+
+        LockFreeCheckpointEntry reached = operation.Reached
+            ?? throw new InvalidOperationException("The checkpoint gate signaled without an entry.");
+        if (crash)
+        {
+            Environment.Exit(97);
+            throw new InvalidOperationException("Process termination returned unexpectedly.");
+        }
+
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), CheckpointResult(reached, spec.Operation));
+    }
+
+    private AgentResponse CompleteCheckpoint(AgentRequest request, bool cancel)
+    {
+        AgentCheckpointOperation? operation = _checkpointOperation;
+        if (operation is null)
+        {
+            return AgentHost.Failure(
+                request.Id,
+                -5,
+                "CheckpointNotArmed",
+                "checkpoint_not_armed",
+                "No managed checkpoint operation is currently paused.");
+        }
+
+        _checkpointOperation = null;
+        LockFreeCheckpointEntry reached = operation.Reached
+            ?? throw new InvalidOperationException("The paused checkpoint has no entry.");
+        AgentCheckpointCompletion completion;
+        try
+        {
+            completion = operation.Complete(cancel);
+        }
+        finally
+        {
+            operation.Dispose();
+        }
+
+        return Success(request.Id, (int)completion.Status, completion.Status.ToString(), new
+        {
+            checkpoint = CheckpointResult(reached, operation: null),
+            canceled = cancel,
+            openStatus = new { code = (int)completion.OpenStatus, name = completion.OpenStatus.ToString() }
+        });
+    }
+
+    private AgentResponse InjectRawFault(AgentRequest request)
+    {
+        JsonElement arguments = Arguments(request);
+        string storeId = RequiredString(arguments, "storeId");
+        if (!_storeOptions.TryGetValue(storeId, out SharedMemoryStoreOptions? options))
+        {
+            throw new KeyNotFoundException($"Store handle '{storeId}' does not exist.");
+        }
+
+        string target = RequiredString(arguments, "target");
+        AgentRawFaultResult result = target switch
+        {
+            "directoryMutation" => AgentRawFaults.InjectDirectoryMutation(options),
+            "participantProcessId" => AgentRawFaults.ReplaceParticipantProcessId(
+                options,
+                RequiredInt32(arguments, "targetProcessId"),
+                RequiredInt32(arguments, "replacementProcessId")),
+            "participantNamespace" => AgentRawFaults.ReplaceParticipantNamespace(
+                options,
+                RequiredInt32(arguments, "targetProcessId"),
+                RequiredUInt64(arguments, "replacementPidNamespaceId")),
+            "headerNamespace" => AgentRawFaults.ReplaceHeaderNamespace(
+                options,
+                RequiredUInt64(arguments, "replacementPidNamespaceId")),
+            "layoutMajorVersion" => AgentRawFaults.ReplaceLayoutMajorVersion(
+                options,
+                RequiredUInt16(arguments, "replacementLayoutMajorVersion")),
+            "requiredFeatures" => AgentRawFaults.ReplaceRequiredFeatures(
+                options,
+                RequiredUInt64(arguments, "replacementRequiredFeatures")),
+            _ => throw new JsonException($"Unknown raw fault target '{target}'.")
+        };
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), result);
+    }
+
+    private AgentResponse HoldColdLock(AgentRequest request)
+    {
+        if (_coldLock is not null)
+        {
+            return AgentHost.Failure(
+                request.Id,
+                -6,
+                "ColdLockAlreadyHeld",
+                "cold_lock_already_held",
+                "This agent already holds a cold synchronization resource.");
+        }
+
+        string name = RequiredString(Arguments(request), "name");
+        try
+        {
+            _coldLock = AgentColdLock.Acquire(name);
+            return Success(request.Id, 0, StoreStatus.Success.ToString(), new { name });
+        }
+        catch (Exception exception)
+        {
+            return AgentHost.Failure(
+                request.Id,
+                -7,
+                "ColdLockFailed",
+                "cold_lock_failed",
+                exception.Message);
+        }
+    }
+
+    private AgentResponse ReleaseColdLock(AgentRequest request)
+    {
+        AgentColdLock? coldLock = _coldLock;
+        if (coldLock is null)
+        {
+            return AgentHost.Failure(
+                request.Id,
+                -8,
+                "ColdLockNotHeld",
+                "cold_lock_not_held",
+                "This agent does not hold a cold synchronization resource.");
+        }
+
+        _coldLock = null;
+        coldLock.Dispose();
+        return Success(request.Id, 0, StoreStatus.Success.ToString(), new { released = true });
+    }
+
+    private static object CheckpointResult(LockFreeCheckpointEntry entry, string? operation) => new
+    {
+        checkpointId = (int)entry.Id,
+        checkpointName = entry.Id.ToString(),
+        family = entry.Family.ToString(),
+        position = entry.Position.ToString(),
+        operation,
+        processId = Environment.ProcessId
+    };
 
     private static AgentResponse Crash()
     {
@@ -304,6 +593,22 @@ internal sealed class AgentSession : IDisposable
         arguments.TryGetProperty(name, out var property) && property.TryGetInt32(out var value)
             ? value
             : throw new JsonException($"'{name}' is required and must be a 32-bit integer.");
+
+    private static ulong RequiredUInt64(JsonElement arguments, string name) =>
+        arguments.TryGetProperty(name, out var property) && property.TryGetUInt64(out ulong value)
+            ? value
+            : throw new JsonException($"'{name}' is required and must be an unsigned 64-bit integer.");
+
+    private static ushort RequiredUInt16(JsonElement arguments, string name)
+    {
+        int value = RequiredInt32(arguments, name);
+        if ((uint)value > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(name, value, "The value must fit an unsigned 16-bit integer.");
+        }
+
+        return (ushort)value;
+    }
 
     private static long? OptionalInt64(JsonElement arguments, string name) =>
         !arguments.TryGetProperty(name, out var property) || property.ValueKind == JsonValueKind.Null
@@ -368,6 +673,37 @@ internal sealed class AgentSession : IDisposable
         return Enum.Parse<OpenMode>(property.GetString() ?? string.Empty, ignoreCase: true);
     }
 
+    private static SharedMemoryStoreOptions ReadOptions(JsonElement arguments)
+    {
+        int slotCount = RequiredInt32(arguments, "slotCount");
+        int maxValueBytes = RequiredInt32(arguments, "maxValueBytes");
+        int maxDescriptorBytes = RequiredInt32(arguments, "maxDescriptorBytes");
+        int maxKeyBytes = RequiredInt32(arguments, "maxKeyBytes");
+        int leaseRecordCount = RequiredInt32(arguments, "leaseRecordCount");
+        int participantRecordCount = RequiredInt32(arguments, "participantRecordCount");
+        long totalBytes = OptionalInt64(arguments, "totalBytes")
+            ?? SharedMemoryStoreOptions.CalculateRequiredBytes(
+                slotCount,
+                maxValueBytes,
+                maxDescriptorBytes,
+                maxKeyBytes,
+                leaseRecordCount,
+                participantRecordCount);
+        return new SharedMemoryStoreOptions
+        {
+            Name = RequiredString(arguments, "name"),
+            OpenMode = ParseOpenMode(arguments),
+            TotalBytes = totalBytes,
+            SlotCount = slotCount,
+            MaxValueBytes = maxValueBytes,
+            MaxDescriptorBytes = maxDescriptorBytes,
+            MaxKeyBytes = maxKeyBytes,
+            LeaseRecordCount = leaseRecordCount,
+            ParticipantRecordCount = participantRecordCount,
+            EnableLeaseRecovery = OptionalBoolean(arguments, "enableLeaseRecovery") ?? false
+        };
+    }
+
     private static StoreWaitOptions Wait(JsonElement arguments)
     {
         var milliseconds = OptionalInt64(arguments, "timeoutMs") ?? 1000;
@@ -378,6 +714,19 @@ internal sealed class AgentSession : IDisposable
             < -1 => new StoreWaitOptions(TimeSpan.FromMilliseconds(-2)),
             _ => new StoreWaitOptions(TimeSpan.FromMilliseconds(milliseconds))
         };
+    }
+
+    private static string Fnv1a64(ReadOnlySpan<byte> value)
+    {
+        const ulong offsetBasis = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        ulong checksum = offsetBasis;
+        foreach (byte item in value)
+        {
+            checksum = unchecked((checksum ^ item) * prime);
+        }
+
+        return checksum.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static AgentResponse Status(string id, StoreStatus status) =>

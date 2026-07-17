@@ -22,23 +22,16 @@ var maxValueBytes = ParseInt(args[3]);
 var maxDescriptorBytes = ParseInt(args[4]);
 var maxKeyBytes = ParseInt(args[5]);
 var leaseRecordCount = ParseInt(args[6]);
-var options = new SharedMemoryStoreOptions
-{
-    Name = args[1],
-    OpenMode = OpenMode.OpenExisting,
-    SlotCount = slotCount,
-    MaxValueBytes = maxValueBytes,
-    MaxDescriptorBytes = maxDescriptorBytes,
-    MaxKeyBytes = maxKeyBytes,
-    LeaseRecordCount = leaseRecordCount,
-    EnableLeaseRecovery = true,
-    TotalBytes = SharedMemoryStoreOptions.CalculateRequiredBytes(
-        slotCount,
-        maxValueBytes,
-        maxDescriptorBytes,
-        maxKeyBytes,
-        leaseRecordCount)
-};
+var options = SharedMemoryStoreOptions.Create(
+    args[1],
+    slotCount,
+    maxValueBytes,
+    maxDescriptorBytes,
+    maxKeyBytes,
+    leaseRecordCount,
+    participantRecordCount: 64,
+    OpenMode.OpenExisting,
+    enableLeaseRecovery: true);
 
 var open = Store.TryCreateOrOpen(options, out var store);
 if (open != StoreOpenStatus.Success || store is null)
@@ -127,6 +120,8 @@ static int RunStaleOwner(Store store, int firstKeyValue, int leaseCount)
         + Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
         + " "
         + leaseCount.ToString(CultureInfo.InvariantCulture));
+    Console.Out.Flush();
+    Environment.Exit(0);
     return 0;
 }
 

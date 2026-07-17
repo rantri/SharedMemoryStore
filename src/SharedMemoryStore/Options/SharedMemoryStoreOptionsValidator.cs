@@ -1,16 +1,15 @@
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 
 namespace SharedMemoryStore.Options;
 
 internal static class SharedMemoryStoreOptionsValidator
 {
-    public static StoreOpenStatus Validate(SharedMemoryStoreOptions? options, out StoreLayout layout)
+    public static StoreOpenStatus Validate(SharedMemoryStoreOptions? options, out StoreLayoutV2 layout)
     {
         return ValidateDetailed(options, out layout).Status;
     }
 
-    public static StoreOptionsValidationResult ValidateDetailed(SharedMemoryStoreOptions? options, out StoreLayout layout)
+    public static StoreOptionsValidationResult ValidateDetailed(SharedMemoryStoreOptions? options, out StoreLayoutV2 layout)
     {
         layout = default;
 
@@ -42,29 +41,22 @@ internal static class SharedMemoryStoreOptionsValidator
             failures.Add(new StoreOptionsValidationFailure(nameof(options.OpenMode), "OpenMode must be a defined value."));
         }
 
-        if (!Enum.IsDefined(options.Profile))
-        {
-            failures.Add(new StoreOptionsValidationFailure(nameof(options.Profile), "Profile must be a defined value."));
-        }
-
-        if (options.Profile == StoreProfile.LockFree
-            && (options.ParticipantRecordCount < 1 || options.ParticipantRecordCount > 1_048_575))
+        if (options.ParticipantRecordCount < 1 || options.ParticipantRecordCount > 1_048_575)
         {
             failures.Add(new StoreOptionsValidationFailure(
                 nameof(options.ParticipantRecordCount),
-                "ParticipantRecordCount must be between 1 and 1,048,575 for the lock-free profile."));
+                "ParticipantRecordCount must be between 1 and 1,048,575."));
         }
 
         if (options.SlotCount <= 0)
         {
             failures.Add(new StoreOptionsValidationFailure(nameof(options.SlotCount), "SlotCount must be greater than zero."));
         }
-        else if (options.Profile == StoreProfile.LockFree
-            && options.SlotCount > LayoutV2Constants.MaximumSlotCount)
+        else if (options.SlotCount > LayoutV2Constants.MaximumSlotCount)
         {
             failures.Add(new StoreOptionsValidationFailure(
                 nameof(options.SlotCount),
-                "SlotCount must be between 1 and 1,048,575 for the lock-free profile."));
+                "SlotCount must be between 1 and 1,048,575."));
         }
 
         if (options.MaxKeyBytes <= 0)
@@ -97,44 +89,17 @@ internal static class SharedMemoryStoreOptionsValidator
             return Invalid(failures);
         }
 
-        if (options.Profile == StoreProfile.LockFree)
-        {
-            StoreLayoutV2 layoutV2;
-            try
-            {
-                layoutV2 = StoreLayoutV2.FromOptions(options);
-            }
-            catch (OverflowException)
-            {
-                return Invalid(new StoreOptionsValidationFailure(nameof(options.TotalBytes), "Layout size calculation overflowed."));
-            }
-            catch (ArgumentOutOfRangeException exception)
-            {
-                return Invalid(new StoreOptionsValidationFailure(exception.ParamName ?? nameof(options), exception.Message));
-            }
-
-            if (!layoutV2.FitsWithinTotalBytes())
-            {
-                return new StoreOptionsValidationResult(
-                    StoreOpenStatus.InsufficientCapacity,
-                    new[]
-                    {
-                        new StoreOptionsValidationFailure(
-                            nameof(options.TotalBytes),
-                            $"TotalBytes must be at least {layoutV2.RequiredBytes} for the configured capacities.")
-                    });
-            }
-
-            return new StoreOptionsValidationResult(StoreOpenStatus.Success, Array.Empty<StoreOptionsValidationFailure>());
-        }
-
         try
         {
-            layout = StoreLayout.FromOptions(options);
+            layout = StoreLayoutV2.FromOptions(options);
         }
         catch (OverflowException)
         {
             return Invalid(new StoreOptionsValidationFailure(nameof(options.TotalBytes), "Layout size calculation overflowed."));
+        }
+        catch (ArgumentOutOfRangeException exception)
+        {
+            return Invalid(new StoreOptionsValidationFailure(exception.ParamName ?? nameof(options), exception.Message));
         }
 
         if (!layout.FitsWithinTotalBytes())

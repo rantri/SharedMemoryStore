@@ -10,15 +10,17 @@ public sealed class RemoveReuseIntegrationTests
     {
         using var store = IntegrationStoreFactory.Create(IntegrationStoreFactory.Options(slotCount: 1));
         Assert.Equal(StoreStatus.Success, store.TryPublish([1], [1, 2]));
-        var first = SharedMemoryLayoutReader.ReadFirstPublished(store);
 
         Assert.Equal(StoreStatus.Success, store.TryAcquire([1], out var lease));
+        ValueLease staleLease = lease;
         Assert.Equal(StoreStatus.RemovePending, store.TryRemove([1]));
         Assert.Equal(StoreStatus.Success, lease.Release());
+        Assert.False(staleLease.IsValid);
 
         Assert.Equal(StoreStatus.Success, store.TryPublish([2], [3, 4]));
-        var second = SharedMemoryLayoutReader.ReadFirstPublished(store);
-        Assert.Equal(first.SlotIndex, second.SlotIndex);
-        Assert.Equal(first.Generation + 1, second.Generation);
+        Assert.Equal(StoreStatus.Success, store.TryAcquire([2], out ValueLease replacement));
+        Assert.Equal(new byte[] { 3, 4 }, replacement.ValueSpan.ToArray());
+        Assert.Equal(StoreStatus.Success, replacement.Release());
+        Assert.False(staleLease.IsValid);
     }
 }

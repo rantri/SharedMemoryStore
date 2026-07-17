@@ -19,11 +19,11 @@ public sealed class StoreWaitPolicyTests
     }
 
     [Fact]
-    public void NoWaitPublishReturnsBusyWhenSharedMutexIsHeld()
+    public void NoWaitPublishIgnoresHeldColdSynchronization()
     {
         var options = StoreTestNames.Options();
         using var store = StoreTestNames.CreateStore(options);
-        using var synchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
+        using var coldSynchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
 
         var elapsed = Stopwatch.StartNew();
         StoreStatus result = default;
@@ -36,16 +36,17 @@ public sealed class StoreWaitPolicyTests
         thread.Start();
 
         Assert.True(done.Wait(TimeSpan.FromSeconds(1)));
-        Assert.Equal(StoreStatus.StoreBusy, result);
+        thread.Join();
+        Assert.Equal(StoreStatus.Success, result);
         Assert.True(elapsed.Elapsed <= TimeSpan.FromMilliseconds(250));
     }
 
     [Fact]
-    public void NoWaitUsesOneBudgetAcrossLocalAndSharedContention()
+    public void ConcurrentNoWaitPublishesIgnoreHeldColdSynchronization()
     {
         var options = StoreTestNames.Options();
         using var store = StoreTestNames.CreateStore(options);
-        using var synchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
+        using var coldSynchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
         using var blockingStarted = new ManualResetEventSlim();
         using var blockingDone = new ManualResetEventSlim();
         using var noWaitDone = new ManualResetEventSlim();
@@ -82,8 +83,8 @@ public sealed class StoreWaitPolicyTests
         noWaitThread.Join();
 
         Assert.True(completedWithinBudget, $"No-wait operation took {elapsed.Elapsed} while the same handle was contended.");
-        Assert.Equal(StoreStatus.StoreBusy, blockingResult);
-        Assert.Equal(StoreStatus.StoreBusy, noWaitResult);
+        Assert.Equal(StoreStatus.Success, blockingResult);
+        Assert.Equal(StoreStatus.Success, noWaitResult);
     }
 
     [Fact]
@@ -103,11 +104,11 @@ public sealed class StoreWaitPolicyTests
     }
 
     [Fact]
-    public void TryGetDiagnosticsReturnsBusyWhenSharedMutexIsHeld()
+    public void TryGetDiagnosticsIgnoresHeldColdSynchronization()
     {
         var options = StoreTestNames.Options();
         using var store = StoreTestNames.CreateStore(options);
-        using var synchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
+        using var coldSynchronization = PlatformTestEnvironment.HoldStoreSynchronization(options.Name);
 
         StoreStatus result = default;
         using var done = new ManualResetEventSlim();
@@ -119,7 +120,8 @@ public sealed class StoreWaitPolicyTests
         thread.Start();
 
         Assert.True(done.Wait(TimeSpan.FromSeconds(1)));
-        Assert.Equal(StoreStatus.StoreBusy, result);
+        thread.Join();
+        Assert.Equal(StoreStatus.Success, result);
     }
 
     [Fact]

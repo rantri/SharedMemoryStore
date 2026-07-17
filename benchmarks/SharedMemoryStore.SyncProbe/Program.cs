@@ -82,12 +82,7 @@ static async Task<int> RunController(string[] args)
         args,
         "--warmup",
         mode == "full" ? ReleaseWarmupSeconds : DefaultShortWarmupSeconds);
-    StoreProfile[] profiles = ParseProfiles(
-        ReadStringOption(args, "--profile") ?? (mode == "overflow" ? "v2" : "legacy"),
-        "--profile");
-    StoreProfile[] countBoundProfiles = ParseProfiles(
-        ReadStringOption(args, "--count-bound-profiles") ?? "both",
-        "--count-bound-profiles");
+    ProtocolSelection[] protocols = [ProtocolSelection.Sms2];
     bool affinityRequested = !args.Contains("--no-affinity", StringComparer.Ordinal);
     ScenarioPlan[] plans = ProbeScenarioCatalog.Select(mode);
     string? scenarioFilter = ReadStringOption(args, "--scenario");
@@ -152,9 +147,9 @@ static async Task<int> RunController(string[] args)
         DefaultStickyOverflowMissingSamplesPerWindow);
     bool includesStickyOverflow = plans.Any(
         static plan => plan.Kind == ProbeScenarioKind.StickyOverflow);
-    if (includesStickyOverflow && !profiles.Contains(StoreProfile.LockFree))
+    if (includesStickyOverflow && !protocols.Contains(ProtocolSelection.Sms2))
     {
-        throw new ArgumentException("The sticky-overflow qualification requires --profile v2 or both.");
+        throw new ArgumentException("The sticky-overflow qualification requires the SMS2 protocol.");
     }
 
     BucketPairCollisionSet stickyOverflowKeys = includesStickyOverflow
@@ -169,11 +164,11 @@ static async Task<int> RunController(string[] args)
     ProbeEnvironment probeEnvironment = CaptureEnvironment(repositoryProvenance);
 
     var runs = new List<RunResult>();
-    foreach (StoreProfile profile in profiles)
+    foreach (ProtocolSelection profile in protocols)
     {
         foreach (ScenarioPlan plan in plans)
         {
-            if (plan.Kind == ProbeScenarioKind.StickyOverflow && profile != StoreProfile.LockFree)
+            if (plan.Kind == ProbeScenarioKind.StickyOverflow && profile != ProtocolSelection.Sms2)
             {
                 continue;
             }
@@ -183,9 +178,7 @@ static async Task<int> RunController(string[] args)
                 for (var trial = 1; trial <= trials; trial++)
                 {
                     ProbeRunTargets targets = ProbeCompletionTargetPolicy.Resolve(
-                        profile,
                         plan.Kind,
-                        countBoundProfiles,
                         mixedOperationTarget,
                         largeFrames);
                     long runOperationTarget = targets.OperationTarget;
@@ -315,8 +308,7 @@ static async Task<int> RunController(string[] args)
             durationSeconds,
             durationBoundGraceSeconds,
             trials,
-            profiles.Select(static profile => profile.ToString()).ToArray(),
-            countBoundProfiles.Select(static profile => profile.ToString()).ToArray(),
+            ProtocolSelection.Sms2.ToString(),
             plans.Select(static plan => plan.Name).ToArray(),
             scenarioCounts,
             CreateScenarioStoreDimensions(plans, largeFrameBytes, stickyOverflowSlotCount),
@@ -338,7 +330,7 @@ static async Task<int> RunController(string[] args)
             stickyOverflowSlotCount,
             stickyOverflowChurnCycles,
             stickyOverflowMissingSamples,
-            ProbeReportSchema.LegacyFullPayloadCopiesFieldSemantics,
+            ProbeReportSchema.FullPayloadCopiesFieldSemantics,
             SyncKeysPerWorker,
             SyncMaximumWorkerCount,
             syncCanonicalBucketCount,
@@ -381,7 +373,7 @@ static async Task<int> RunController(string[] args)
 }
 
 static async Task<RunResult> RunAutonomousTrial(
-    StoreProfile profile,
+    ProtocolSelection profile,
     ScenarioPlan plan,
     int processCount,
     int trial,
@@ -463,7 +455,7 @@ static async Task<RunResult> RunAutonomousTrial(
 }
 
 static async Task<RunResult> RunMixedTrial(
-    StoreProfile profile,
+    ProtocolSelection profile,
     ScenarioPlan plan,
     int readerCount,
     int trial,
@@ -570,7 +562,7 @@ static async Task<RunResult> RunMixedTrial(
 }
 
 static RunResult RunStickyOverflowTrial(
-    StoreProfile profile,
+    ProtocolSelection profile,
     ScenarioPlan plan,
     int trial,
     bool affinityRequested,
@@ -579,7 +571,7 @@ static RunResult RunStickyOverflowTrial(
     int missingSamplesPerWindow,
     BucketPairCollisionSet collisionSet)
 {
-    if (profile != StoreProfile.LockFree
+    if (profile != ProtocolSelection.Sms2
         || collisionSet.Keys.Length != StickyOverflowProbeKeyCount)
     {
         throw new InvalidOperationException("Sticky-overflow qualification requires the lock-free profile and exact collision keys.");
@@ -860,7 +852,7 @@ static long MeasureMissingWindow(
 }
 
 static async Task<RunResult> RunBrokerTrial(
-    StoreProfile profile,
+    ProtocolSelection profile,
     ScenarioPlan plan,
     int readerCount,
     int trial,
@@ -1075,7 +1067,7 @@ static async Task<RunResult> RunBrokerTrial(
 }
 
 static RunResult AggregateAutonomousRun(
-    StoreProfile profile,
+    ProtocolSelection profile,
     ScenarioPlan plan,
     int processCount,
     int trial,
@@ -1179,7 +1171,7 @@ static RunResult AggregateAutonomousRun(
         MergeHistograms(workerResults.Select(static result => result.StatusHistogram)),
         workerResults.Select(static result => result.Cycles).ToArray(),
         FullPayloadCopyCountIsInstrumented: false,
-        FullPayloadCopyEvidenceKind: "not-instrumented-legacy-field-do-not-interpret-as-count",
+        FullPayloadCopyEvidenceKind: "not-instrumented-unused-field-do-not-interpret-as-count",
         ProducerStoreOperationAllocatedBytes: 0,
         AllocationMeasurementScope: "sum-of-dedicated-worker-thread-measured-regions",
         EarlySampleCount: early.Length,
@@ -1234,7 +1226,7 @@ static async Task<List<WorkerResult>> CollectWorkerResults(
 
 static ProbeTrialWatchdog? CreateTrialWatchdog(
     string scenario,
-    StoreProfile profile,
+    ProtocolSelection profile,
     int durationSeconds,
     int warmupSeconds,
     int durationBoundGraceSeconds,
@@ -1262,7 +1254,7 @@ static ProbeTrialWatchdog? CreateTrialWatchdog(
 
 static TimeoutException DurationBoundTrialTimeout(
     string scenario,
-    StoreProfile profile,
+    ProtocolSelection profile,
     int durationSeconds,
     int warmupSeconds,
     int durationBoundGraceSeconds) =>
@@ -1273,7 +1265,7 @@ static TimeoutException DurationBoundTrialTimeout(
 
 static void FailFastDurationBoundTrial(
     string scenario,
-    StoreProfile profile,
+    ProtocolSelection profile,
     int durationSeconds,
     int warmupSeconds,
     int durationBoundGraceSeconds,
@@ -1310,7 +1302,7 @@ static void FailFastDurationBoundTrial(
 }
 
 static async Task ReportTrialHeartbeats(
-    StoreProfile profile,
+    ProtocolSelection profile,
     string scenario,
     int processCount,
     int trial,
@@ -1430,7 +1422,7 @@ static void SeedMixed(Store owner)
 
 static Process StartAutonomousWorker(
     string scenario,
-    StoreProfile profile,
+    ProtocolSelection profile,
     string name,
     int workerId,
     int durationSeconds,
@@ -1455,7 +1447,7 @@ static Process StartAutonomousWorker(
 
 static Process StartBrokerWorker(
     string scenario,
-    StoreProfile profile,
+    ProtocolSelection profile,
     string name,
     int workerId,
     string role,
@@ -1506,7 +1498,7 @@ static int RunAutonomousWorker(string[] args)
     }
 
     string scenario = args[1];
-    StoreProfile profile = Enum.Parse<StoreProfile>(args[2], ignoreCase: true);
+    ProtocolSelection profile = ParseProtocol(args[2], "protocol");
     string name = args[3];
     int workerId = int.Parse(args[4], CultureInfo.InvariantCulture);
     int durationSeconds = int.Parse(args[5], CultureInfo.InvariantCulture);
@@ -1668,7 +1660,7 @@ static async Task<int> RunBrokerWorker(string[] args)
     }
 
     string scenario = args[1];
-    StoreProfile profile = Enum.Parse<StoreProfile>(args[2], ignoreCase: true);
+    ProtocolSelection profile = ParseProtocol(args[2], "protocol");
     string name = args[3];
     int workerId = int.Parse(args[4], CultureInfo.InvariantCulture);
     string role = args[5];
@@ -2133,7 +2125,7 @@ static void RetryPause(int attempt)
 static SharedMemoryStoreOptions Options(
     string name,
     OpenMode mode,
-    StoreProfile profile,
+    ProtocolSelection profile,
     string scenario,
     int payloadBytes)
 {
@@ -2152,30 +2144,21 @@ static SharedMemoryStoreOptions Options(
             : reader ? ReaderPayloadBytes : SyncValueBytes;
     int descriptorBytes = mixed || broker ? BenchmarkDescriptorBytes : 0;
     int leaseRecords = mixed ? MixedLeaseRecordCount : DefaultLeaseRecordCount;
-    return profile == StoreProfile.LockFree
-        ? SharedMemoryStoreOptions.CreateLockFree(
-            name,
-            slotCount,
-            valueBytes,
-            descriptorBytes,
-            MaxKeyBytes,
-            leaseRecords,
-            ParticipantRecordCount,
-            mode,
-            enableLeaseRecovery: true)
-        : SharedMemoryStoreOptions.Create(
-            name,
-            slotCount,
-            valueBytes,
-            descriptorBytes,
-            MaxKeyBytes,
-            leaseRecords,
-            mode,
-            enableLeaseRecovery: true);
+    _ = profile;
+    return SharedMemoryStoreOptions.Create(
+        name,
+        slotCount,
+        valueBytes,
+        descriptorBytes,
+        MaxKeyBytes,
+        leaseRecords,
+        ParticipantRecordCount,
+        mode,
+        enableLeaseRecovery: true);
 }
 
 static SharedMemoryStoreOptions StickyOverflowOptions(string name, int slotCount) =>
-    SharedMemoryStoreOptions.CreateLockFree(
+    SharedMemoryStoreOptions.Create(
         name,
         slotCount,
         1,
@@ -2711,9 +2694,9 @@ static double JainFairness(double[] rates)
 static IReadOnlyList<SummaryResult> Summarize(IReadOnlyList<RunResult> runs)
 {
     return runs
-        .GroupBy(static run => new { run.Profile, run.Scenario, run.ProcessCount })
+        .GroupBy(static run => new { run.Protocol, run.Scenario, run.ProcessCount })
         .Select(group => new SummaryResult(
-            group.Key.Profile,
+            group.Key.Protocol,
             group.Key.Scenario,
             group.Key.ProcessCount,
             Median(group.Select(static run => run.ApiCallsPerSecond)),
@@ -2742,7 +2725,7 @@ static IReadOnlyList<SummaryResult> Summarize(IReadOnlyList<RunResult> runs)
             group.Select(static run => run.AllocationMeasurementScope)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray()))
-        .OrderBy(static result => result.Profile, StringComparer.Ordinal)
+        .OrderBy(static result => result.Protocol, StringComparer.Ordinal)
         .ThenBy(static result => result.Scenario, StringComparer.Ordinal)
         .ThenBy(static result => result.ProcessCount)
         .ToArray();
@@ -2841,12 +2824,10 @@ static void DisposeProcesses(IReadOnlyList<Process> processes)
     }
 }
 
-static StoreProfile[] ParseProfiles(string value, string optionName) => value.ToLowerInvariant() switch
+static ProtocolSelection ParseProtocol(string value, string optionName) => value.ToLowerInvariant() switch
 {
-    "legacy" => [StoreProfile.Legacy],
-    "v2" or "lockfree" or "lock-free" => [StoreProfile.LockFree],
-    "both" => [StoreProfile.Legacy, StoreProfile.LockFree],
-    _ => throw new ArgumentException($"{optionName} must be legacy, v2, or both.")
+    "v2" or "sms2" or "lockfree" or "lock-free" => ProtocolSelection.Sms2,
+    _ => throw new ArgumentException($"{optionName} must be v2 (SMS2).")
 };
 
 static int ReadPositiveIntOption(string[] args, string name, int fallback)

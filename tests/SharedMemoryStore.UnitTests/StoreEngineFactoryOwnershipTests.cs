@@ -1,55 +1,43 @@
-using System.Buffers;
-using SharedMemoryStore.Diagnostics;
+using System.Reflection;
 using SharedMemoryStore.Engines;
-using SharedMemoryStore.Ingest;
 
 namespace SharedMemoryStore.UnitTests;
 
+[Collection("DynamicEngineFacade")]
 public sealed class StoreEngineFactoryOwnershipTests
 {
     [Fact]
     public void FacadeConstructionFailureDisposesTransferredEngineExactlyOnce()
     {
-        var engine = new ThrowingProfileEngine();
+        FakeEngineCallLog.Reset(StoreStatus.Success, throwOnProtocolInfo: true);
+        object engine = MemoryStoreFacadeTests.CreateFakeEngine();
 
-        Assert.Throws<InjectedFacadeConstructionException>(
-            () => StoreEngineFactory.WrapOwnedEngine(engine));
+        TargetInvocationException thrown = Assert.Throws<TargetInvocationException>(
+            () => InvokeWrapOwnedEngine(engine));
 
-        Assert.Equal(1, engine.DisposeCount);
+        Assert.IsType<InvalidOperationException>(thrown.InnerException);
+        Assert.Equal(1, FakeEngineCallLog.Count(nameof(IDisposable.Dispose)));
     }
 
-    private sealed class InjectedFacadeConstructionException : Exception;
-
-    private sealed class ThrowingProfileEngine : IStoreEngine
+    [Fact]
+    public void SuccessfulFacadeConstructionTransfersEngineOwnershipUntilFacadeDisposal()
     {
-        internal int DisposeCount { get; private set; }
+        FakeEngineCallLog.Reset(StoreStatus.Success);
+        object engine = MemoryStoreFacadeTests.CreateFakeEngine();
 
-        public StoreProfile Profile => throw new InjectedFacadeConstructionException();
-        public StoreProtocolInfo ProtocolInfo => default;
-        public StoreStatus RecordFacadeStatus(StoreStatus status) => status;
-        public DiagnosticsSnapshot CreateDisposedDiagnosticsSnapshot() => default;
-        public StoreStatus TryPublish(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ReadOnlySpan<byte> descriptor, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public StoreStatus TryReserve(ReadOnlySpan<byte> key, int payloadLength, ReadOnlySpan<byte> descriptor, StoreWaitOptions waitOptions, out ReservationHandle reservation) { reservation = default; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryPublishSegments(ReadOnlySpan<byte> key, ReadOnlySequence<byte> payload, ReadOnlySpan<byte> descriptor, StoreWaitOptions waitOptions, out long copiedBytes) { copiedBytes = 0; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryAcquire(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions, out LeaseHandle lease) { lease = default; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryRemove(ReadOnlySpan<byte> key, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public StoreStatus TryRecoverLeases(LeaseRecoveryOptions options, StoreWaitOptions waitOptions, out LeaseRecoveryReport report) { report = default; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryRecoverReservations(ReservationRecoveryOptions options, StoreWaitOptions waitOptions, out ReservationRecoveryReport report) { report = default; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryGetMetrics(StoreWaitOptions waitOptions, out EngineMetrics metrics) { metrics = default; return StoreStatus.UnknownFailure; }
-        public StoreStatus TryGetDiagnostics(StoreWaitOptions waitOptions, out DiagnosticsSnapshot snapshot) { snapshot = default; return StoreStatus.UnknownFailure; }
-        public bool IsReservationPending(ReservationHandle reservation) => false;
-        public int GetReservationBytesWritten(ReservationHandle reservation) => 0;
-        public Span<byte> GetReservationSpan(ReservationHandle reservation, int sizeHint) => [];
-        public Memory<byte> DangerousGetReservationMemory(ReservationHandle reservation, int sizeHint) => Memory<byte>.Empty;
-        public StoreStatus AdvanceReservation(ReservationHandle reservation, int byteCount, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public StoreStatus CommitReservation(ReservationHandle reservation, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public StoreStatus AbortReservation(ReservationHandle reservation, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public bool IsLeaseActive(LeaseHandle lease) => false;
-        public int GetValueLength(LeaseHandle lease) => 0;
-        public int GetDescriptorLength(LeaseHandle lease) => 0;
-        public ReadOnlySpan<byte> GetValueSpan(LeaseHandle lease) => [];
-        public ReadOnlySpan<byte> GetDescriptorSpan(LeaseHandle lease) => [];
-        public StoreStatus ReleaseLease(LeaseHandle lease, StoreWaitOptions waitOptions) => StoreStatus.UnknownFailure;
-        public void Dispose() => DisposeCount++;
+        using MemoryStore store = InvokeWrapOwnedEngine(engine);
+
+        Assert.Equal(0, FakeEngineCallLog.Count(nameof(IDisposable.Dispose)));
+        store.Dispose();
+        Assert.Equal(1, FakeEngineCallLog.Count(nameof(IDisposable.Dispose)));
+    }
+
+    private static MemoryStore InvokeWrapOwnedEngine(object engine)
+    {
+        MethodInfo method = typeof(StoreEngineFactory).GetMethod(
+                "WrapOwnedEngine",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new Xunit.Sdk.XunitException("StoreEngineFactory.WrapOwnedEngine is absent.");
+        return (MemoryStore)method.Invoke(null, [engine])!;
     }
 }

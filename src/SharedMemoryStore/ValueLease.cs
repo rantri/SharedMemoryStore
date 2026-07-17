@@ -1,5 +1,4 @@
 using SharedMemoryStore.Engines;
-using SharedMemoryStore.Layout;
 
 namespace SharedMemoryStore;
 
@@ -17,11 +16,6 @@ public readonly struct ValueLease : IDisposable
     {
         _store = store;
         _handle = handle;
-    }
-
-    internal ValueLease(MemoryStore store, int slotIndex, SlotLifecycleId lifecycleId, int leaseRecordId)
-        : this(store, store.CreateLegacyLeaseHandle(slotIndex, lifecycleId, leaseRecordId))
-    {
     }
 
     /// <summary>Gets a value indicating whether this token still references an active lease record.</summary>
@@ -52,19 +46,13 @@ public readonly struct ValueLease : IDisposable
         _store?.ReleaseLease(_handle, StoreWaitOptions.Default) ?? StoreStatus.InvalidLease;
 
     /// <summary>
-    /// Releases the lease exactly once using the supplied profile-specific bounded wait policy.
+    /// Releases the lease exactly once using the supplied bounded wait policy.
     /// </summary>
     public StoreStatus Release(StoreWaitOptions waitOptions) =>
         _store?.ReleaseLease(_handle, waitOptions) ?? StoreStatus.InvalidLease;
 
     /// <summary>Releases the lease on a best-effort basis when it is still active.</summary>
     public void Dispose() => _ = Release();
-
-    internal int LeaseRecordIdForTesting => MemoryStore.DecodeLegacyLeaseRecordId(_handle);
-
-    internal int SlotIndexForTesting => MemoryStore.DecodeLegacySlotIndex(_handle.SlotBinding);
-
-    internal SlotLifecycleId LifecycleIdForTesting => MemoryStore.DecodeLegacyLifecycle(_handle);
 
     internal LeaseHandle HandleForEngine => _handle;
 }

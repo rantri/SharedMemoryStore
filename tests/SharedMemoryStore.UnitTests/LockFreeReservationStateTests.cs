@@ -17,14 +17,14 @@ public sealed class LockFreeReservationStateTests
         Assert.Equal(1, (int)SlotPublicationIntent.ExplicitReservation);
         Assert.Equal(2, (int)SlotPublicationIntent.AtomicPublication);
 
-        using MemoryStore store = CreateLockFreeStore();
+        using MemoryStore store = CreateStore();
         Assert.Equal(7UL, store.ProtocolInfo.RequiredFeatures);
     }
 
     [Fact]
     public void FirstClaimCarriesParticipantAndStoreIdentityAndReuseAdvancesGeneration()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 1, default, out var first));
         var firstHandle = first.HandleForEngine;
@@ -54,7 +54,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void CopiedReservationHasOneExclusiveCursorAndRequiresExactAdvance()
     {
-        using var store = CreateLockFreeStore();
+        using var store = CreateStore();
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 4, [9], out var reservation));
         var copy = reservation;
 
@@ -75,7 +75,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void CommitAbortAndRecoveryEachFenceTheExactReservationGeneration()
     {
-        using var store = CreateLockFreeStore(slotCount: 1, enableRecovery: true);
+        using var store = CreateStore(slotCount: 1, enableRecovery: true);
 
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 1, default, out var committed));
         committed.GetSpan(1)[0] = 7;
@@ -86,7 +86,7 @@ public sealed class LockFreeReservationStateTests
 
         // A committed value still owns the only slot, so use independent stores for
         // abort and recovery terminal paths.
-        using var abortStore = CreateLockFreeStore(slotCount: 1, enableRecovery: true);
+        using var abortStore = CreateStore(slotCount: 1, enableRecovery: true);
         Assert.Equal(StoreStatus.Success, abortStore.TryReserve([2], 1, default, out var aborted));
         Assert.Equal(StoreStatus.Success, aborted.Abort());
         Assert.Equal(StoreStatus.InvalidReservation, aborted.Commit());
@@ -137,7 +137,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void WritableProjectionEndsAfterCommitAbortRecoveryAndStoreDispose()
     {
-        using var commitStore = CreateLockFreeStore();
+        using var commitStore = CreateStore();
         Assert.Equal(StoreStatus.Success, commitStore.TryReserve([1], 1, default, out var committed));
         committed.GetSpan()[0] = 1;
         Assert.Equal(StoreStatus.Success, committed.Advance(1));
@@ -145,13 +145,13 @@ public sealed class LockFreeReservationStateTests
         Assert.True(committed.GetSpan().IsEmpty);
         Assert.True(committed.DangerousGetMemory().IsEmpty);
 
-        using var abortStore = CreateLockFreeStore();
+        using var abortStore = CreateStore();
         Assert.Equal(StoreStatus.Success, abortStore.TryReserve([2], 1, default, out var aborted));
         Assert.Equal(StoreStatus.Success, aborted.Abort());
         Assert.True(aborted.GetSpan().IsEmpty);
         Assert.True(aborted.DangerousGetMemory().IsEmpty);
 
-        using var recoveryStore = CreateLockFreeStore(enableRecovery: true);
+        using var recoveryStore = CreateStore(enableRecovery: true);
         Assert.Equal(StoreStatus.Success, recoveryStore.TryReserve([3], 1, default, out var recovered));
         Assert.Equal(
             StoreStatus.Success,
@@ -159,7 +159,7 @@ public sealed class LockFreeReservationStateTests
         Assert.True(recovered.GetSpan().IsEmpty);
         Assert.True(recovered.DangerousGetMemory().IsEmpty);
 
-        var disposedStore = CreateLockFreeStore();
+        var disposedStore = CreateStore();
         Assert.Equal(StoreStatus.Success, disposedStore.TryReserve([4], 1, default, out var disposed));
         disposedStore.Dispose();
         Assert.True(disposed.GetSpan().IsEmpty);
@@ -170,7 +170,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void CancellationBeforeBindingLeavesNoKeyOrSlotOwnership()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var canceledWait = new StoreWaitOptions(TimeSpan.FromSeconds(1), cancellation.Token);
@@ -187,7 +187,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void CancellationAfterBindingAndBeforeCommitPreservesThePendingLifecycle()
     {
-        using var store = CreateLockFreeStore(slotCount: 1);
+        using var store = CreateStore(slotCount: 1);
         Assert.Equal(StoreStatus.Success, store.TryReserve([1], 1, default, out var reservation));
         reservation.GetSpan()[0] = 9;
 
@@ -213,7 +213,7 @@ public sealed class LockFreeReservationStateTests
     [Fact]
     public void NoWaitMayOrderBindingAndCommitWhenThereIsNoContention()
     {
-        using var store = CreateLockFreeStore();
+        using var store = CreateStore();
 
         Assert.Equal(
             StoreStatus.Success,
@@ -223,11 +223,11 @@ public sealed class LockFreeReservationStateTests
         Assert.Equal(StoreStatus.Success, reservation.Commit(StoreWaitOptions.NoWait));
     }
 
-    private static MemoryStore CreateLockFreeStore(
+    private static MemoryStore CreateStore(
         int slotCount = 4,
         bool enableRecovery = true)
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-reservation-state-{Guid.NewGuid():N}",
             slotCount,
             maxValueBytes: 16,
@@ -241,7 +241,7 @@ public sealed class LockFreeReservationStateTests
 
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<MemoryStore>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         Assert.Equal(2, result.ProtocolInfo.LayoutMajorVersion);
         return result;
     }

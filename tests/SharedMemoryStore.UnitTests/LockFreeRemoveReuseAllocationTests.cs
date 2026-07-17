@@ -10,7 +10,7 @@ public sealed class LockFreeRemoveReuseAllocationTests
     [Fact]
     public void OneMillionWarmedCompleteLifecycleCyclesAllocateZeroBytesAndRestoreExactCapacity()
     {
-        using var store = CreateLockFreeStore();
+        using var store = CreateStore();
         var key = new byte[] { 1, 0, 2 };
         var otherKey = new byte[] { 3, 0, 4 };
         var publishedValue = new byte[] { 5, 0, 6, 7 };
@@ -186,9 +186,9 @@ public sealed class LockFreeRemoveReuseAllocationTests
         RequireStatus(StoreStatus.Success, restored.Abort(), "capacity final abort", cycle: -1);
     }
 
-    private static MemoryStore CreateLockFreeStore()
+    private static MemoryStore CreateStore()
     {
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-v2-remove-reuse-allocation-{Guid.NewGuid():N}",
             slotCount: 1,
             maxValueBytes: 8,
@@ -201,7 +201,7 @@ public sealed class LockFreeRemoveReuseAllocationTests
         StoreOpenStatus status = MemoryStore.TryCreateOrOpen(options, out var store);
         Assert.Equal(StoreOpenStatus.Success, status);
         var result = Assert.IsType<MemoryStore>(store);
-        Assert.Equal(StoreProfile.LockFree, result.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), result.ProtocolInfo);
         return result;
     }
 

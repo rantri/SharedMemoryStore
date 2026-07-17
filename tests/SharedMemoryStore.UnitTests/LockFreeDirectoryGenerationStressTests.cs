@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using SharedMemoryStore.Layout;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using Xunit.Abstractions;
@@ -977,7 +976,7 @@ public sealed class LockFreeDirectoryGenerationStressTests
     }
 
     private static SharedMemoryStoreOptions Options(string name, int slotCount, OpenMode openMode) =>
-        SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions.Create(
             name,
             slotCount,
             maxValueBytes: 1,

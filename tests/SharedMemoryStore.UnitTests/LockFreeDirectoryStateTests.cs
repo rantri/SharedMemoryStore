@@ -14,7 +14,7 @@ public sealed class LockFreeDirectoryStateTests
             return;
         }
 
-        var options = SharedMemoryStoreOptions.CreateLockFree(
+        var options = SharedMemoryStoreOptions.Create(
             $"sms-unit-publish-history-{Guid.NewGuid():N}",
             slotCount: 2,
             maxValueBytes: 16,
@@ -42,7 +42,7 @@ public sealed class LockFreeDirectoryStateTests
         start.SignalAndWait();
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Equal(StoreProfile.LockFree, ownedStore.Profile);
+        Assert.Equal(new StoreProtocolInfo(2, 0, 2, 7, 0), ownedStore.ProtocolInfo);
         Assert.Single(statuses, static status => status == StoreStatus.Success);
         Assert.Single(statuses, static status => status == StoreStatus.DuplicateKey);
     }

@@ -6,7 +6,9 @@
 #include <string>
 
 #if defined(_WIN32)
-#  define NOMINMAX
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
 #  include <windows.h>
 #else
 #  include <unistd.h>
@@ -21,6 +23,7 @@ int main() {
     using namespace shared_memory_store;
     auto options = store_options::create(
         "sms-cpp-sample-" + std::to_string(pid), 2, 64, 16, 16, 4,
+        64,
         open_mode::create_new);
     memory_store store;
     if (const auto opened = memory_store::try_create_or_open(options, store);
@@ -28,6 +31,11 @@ int main() {
         std::cerr << "open failed: " << static_cast<int>(opened) << '\n';
         return 1;
     }
+    if (store.protocol() != protocol_info{2, 0, 2, 7, 0}) return 5;
+    std::cout << "protocol: " << store.protocol().layout_major << '.'
+              << store.protocol().layout_minor
+              << " resource=" << store.protocol().resource_protocol
+              << " features=" << store.protocol().required_features << '\n';
     const std::array<std::byte, 3> key{std::byte{1}, std::byte{2}, std::byte{3}};
     const std::array<std::byte, 3> payload{std::byte{7}, std::byte{8}, std::byte{9}};
     if (store.try_publish(key, payload) != status::success) return 2;

@@ -268,7 +268,7 @@ public sealed class LockFreeStructuralControlValidationTests
 
     private static MemoryStore CreateStore(string name)
     {
-        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.CreateLockFree(
+        SharedMemoryStoreOptions options = SharedMemoryStoreOptions.Create(
             name,
             slotCount: 1,
             maxValueBytes: 4,

@@ -137,6 +137,58 @@ function Reset-ArtifactScratchDirectory {
     return (New-Item -ItemType Directory -Path $target -Force).FullName
 }
 
+function New-UnrelatedRunDirectory {
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $normalizedRoot = [IO.Path]::GetFullPath($repositoryRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $rootPrefix = $normalizedRoot + [IO.Path]::DirectorySeparatorChar
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $temporaryPrefix = $temporaryRoot + [IO.Path]::DirectorySeparatorChar
+    $candidate = [IO.Path]::GetFullPath((Join-Path $temporaryRoot (
+        'shared-memory-store-python-validation-' + [Guid]::NewGuid().ToString('N'))))
+
+    if (-not $candidate.StartsWith($temporaryPrefix, $comparison)) {
+        throw "Python validation unrelated run directory escaped the OS temporary root: '$candidate'."
+    }
+    if ($candidate.Equals($normalizedRoot, $comparison) -or $candidate.StartsWith($rootPrefix, $comparison)) {
+        throw "Python validation unrelated run directory must be outside the repository: '$candidate'."
+    }
+
+    return (New-Item -ItemType Directory -Path $candidate).FullName
+}
+
+function Remove-UnrelatedRunDirectory {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $temporaryPrefix = $temporaryRoot + [IO.Path]::DirectorySeparatorChar
+    $target = [IO.Path]::GetFullPath($Path).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    if (-not $target.StartsWith($temporaryPrefix, $comparison)) {
+        throw "Refusing to remove unrelated run directory outside the OS temporary root: '$target'."
+    }
+
+    $item = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+    if (-not $item.PSIsContainer `
+        -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to remove non-directory or linked unrelated run path '$target'."
+    }
+    Remove-Item -LiteralPath $target -Recurse -Force
+    if (Test-Path -LiteralPath $target) {
+        throw "Python validation unrelated run directory remained after cleanup: '$target'."
+    }
+}
+
 function Get-VenvPython {
     param([Parameter(Mandatory)][string]$EnvironmentPath)
 
@@ -184,8 +236,7 @@ $stagedSourcePath = Join-Path $workPath 'source-package'
 $buildEnvironmentPath = Join-Path $workPath 'build-environment'
 $wheelEnvironmentPath = Join-Path $workPath 'wheel-environment'
 $distributionPath = Join-Path $workPath 'dist'
-$unrelatedRunPath = Join-Path $workPath 'unrelated-run-directory'
-New-Item -ItemType Directory -Path $stagedSourcePath, $distributionPath, $unrelatedRunPath -Force | Out-Null
+New-Item -ItemType Directory -Path $stagedSourcePath, $distributionPath -Force | Out-Null
 
 $cmake = (Get-Command $CMakeExecutable -ErrorAction Stop).Source
 $python = (Get-Command $PythonExecutable -ErrorAction Stop).Source
@@ -327,6 +378,7 @@ Invoke-Checked $wheelPython '-m' 'pip' 'install' '--no-deps' $sdistWheels[0].Ful
 
 $savedPythonPath = [Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
 $savedInstalledGate = [Environment]::GetEnvironmentVariable('SMS_TEST_INSTALLED_PACKAGE', 'Process')
+$unrelatedRunPath = New-UnrelatedRunDirectory
 try {
     [Environment]::SetEnvironmentVariable('PYTHONPATH', $null, 'Process')
     [Environment]::SetEnvironmentVariable('SMS_TEST_INSTALLED_PACKAGE', '1', 'Process')
@@ -342,6 +394,7 @@ try {
 finally {
     [Environment]::SetEnvironmentVariable('PYTHONPATH', $savedPythonPath, 'Process')
     [Environment]::SetEnvironmentVariable('SMS_TEST_INSTALLED_PACKAGE', $savedInstalledGate, 'Process')
+    Remove-UnrelatedRunDirectory $unrelatedRunPath
 }
 
 Write-Host "Python SharedMemoryStore validation passed for $($wheels[0].Name)."
