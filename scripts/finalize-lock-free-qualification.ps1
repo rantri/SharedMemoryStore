@@ -184,24 +184,144 @@ function Assert-CodeReview {
         [Parameter(Mandatory)]$Review,
         [Parameter(Mandatory)]$Provenance)
 
-    if ([int]$Review.schemaVersion -ne 1 `
-        -or [int]$Review.contractRevision -ne $contractRevision `
+    function Assert-ExactProperties {
+        param(
+            [Parameter(Mandatory)]$Value,
+            [Parameter(Mandatory)][string[]]$Expected,
+            [Parameter(Mandatory)][string]$Context)
+
+        if ($Value -isnot [pscustomobject]) {
+            throw "$Context must be a JSON object."
+        }
+        $actual = @($Value.PSObject.Properties.Name)
+        $expectedSet = [Collections.Generic.HashSet[string]]::new(
+            $Expected,
+            [StringComparer]::Ordinal)
+        if ($actual.Count -ne $Expected.Count `
+            -or @($actual | Where-Object { -not $expectedSet.Contains($_) }).Count -ne 0) {
+            throw "$Context must contain exactly: $($Expected -join ', ')."
+        }
+    }
+
+    function Test-JsonInteger {
+        param($Value)
+
+        return $Value -is [byte] `
+            -or $Value -is [sbyte] `
+            -or $Value -is [int16] `
+            -or $Value -is [uint16] `
+            -or $Value -is [int32] `
+            -or $Value -is [uint32] `
+            -or $Value -is [int64] `
+            -or $Value -is [uint64]
+    }
+
+    Assert-ExactProperties $Review `
+        @('schemaVersion', 'contractRevision', 'revision', 'reviewer', 'overallStatus', 'findings') `
+        'Independent review'
+    Assert-ExactProperties $Review.revision `
+        @('commit', 'sourceManifestSha256') `
+        'Independent review revision'
+    Assert-ExactProperties $Review.reviewer `
+        @('identity', 'independentFromImplementation') `
+        'Independent review reviewer'
+
+    if (-not (Test-JsonInteger $Review.schemaVersion) `
+        -or [int64]$Review.schemaVersion -ne 1 `
+        -or -not (Test-JsonInteger $Review.contractRevision) `
+        -or [int64]$Review.contractRevision -ne $contractRevision `
+        -or $Review.revision.commit -isnot [string] `
+        -or [string]$Review.revision.commit -cnotmatch '^[0-9a-f]{40}$' `
         -or [string]$Review.revision.commit -cne [string]$Provenance.commit `
+        -or $Review.revision.sourceManifestSha256 -isnot [string] `
+        -or [string]$Review.revision.sourceManifestSha256 -cnotmatch '^[0-9A-F]{64}$' `
         -or [string]$Review.revision.sourceManifestSha256 -cne [string]$Provenance.sourceManifestSha256 `
-        -or -not [bool]$Review.reviewer.independentFromImplementation `
+        -or $Review.reviewer.independentFromImplementation -isnot [bool] `
+        -or $Review.reviewer.independentFromImplementation -ne $true `
+        -or $Review.reviewer.identity -isnot [string] `
         -or [string]::IsNullOrWhiteSpace([string]$Review.reviewer.identity) `
-        -or [string]$Review.overallStatus -cne 'passed') {
+        -or $Review.overallStatus -isnot [string] `
+        -or [string]$Review.overallStatus -cne 'passed' `
+        -or $Review.findings -isnot [array]) {
         throw 'The independent review does not bind the exact implementation revision or declare a passing independent reviewer.'
     }
+
+    $findingIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($finding in @($Review.findings)) {
+        Assert-ExactProperties $finding `
+            @('id', 'severity', 'status', 'summary') `
+            'Independent review finding'
+        if ($finding.id -isnot [string] `
+            -or [string]::IsNullOrWhiteSpace([string]$finding.id) `
+            -or -not $findingIds.Add([string]$finding.id) `
+            -or $finding.severity -isnot [string] `
+            -or [string]$finding.severity -cnotin @('high', 'medium', 'low') `
+            -or $finding.status -isnot [string] `
+            -or [string]$finding.status -cnotin @('open', 'resolved') `
+            -or $finding.summary -isnot [string] `
+            -or [string]::IsNullOrWhiteSpace([string]$finding.summary)) {
+            throw 'Independent review findings must have unique non-empty IDs, valid enums, and non-empty summaries.'
+        }
+    }
+
     $unresolved = @($Review.findings | Where-Object {
-        [string]$_.status -cne 'resolved' -and [string]$_.severity -cin @('high', 'medium')
+        [string]$_.status -ceq 'open' -and [string]$_.severity -cin @('high', 'medium')
     })
     if ($unresolved.Count -ne 0) {
         throw 'The independent review contains unresolved High or Medium findings.'
     }
 }
 
+function Assert-CodeReviewValidatorSelfTest {
+    $provenance = [pscustomobject]@{
+        commit = '0123456789abcdef0123456789abcdef01234567'
+        sourceManifestSha256 = 'A' * 64
+    }
+    $validJson = @'
+{
+  "schemaVersion": 1,
+  "contractRevision": 1,
+  "revision": {
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "sourceManifestSha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "reviewer": {
+    "identity": "validator-self-test",
+    "independentFromImplementation": true
+  },
+  "overallStatus": "passed",
+  "findings": []
+}
+'@
+    Assert-CodeReview ($validJson | ConvertFrom-Json -Depth 20) $provenance
+
+    $invalidJson = @(
+        $validJson.Replace('"independentFromImplementation": true', '"independentFromImplementation": "false"'),
+        $validJson.Replace('  "findings": []', "  `"unexpected`": true,`n  `"findings`": []"),
+        (($validJson.Replace('"overallStatus": "passed",', '"overallStatus": "passed"')) `
+            -replace '(?m)^  "findings": \[\]\r?\n', ''),
+        $validJson.Replace('"findings": []', '"findings": {}'),
+        $validJson.Replace('"findings": []', '"findings": [{"id":"REV-001","severity":"critical","status":"open","summary":"invalid enum"}]'),
+        $validJson.Replace('"findings": []', '"findings": [{"id":"REV-001","severity":"high","status":"open","summary":"unresolved"}]'),
+        $validJson.Replace('"findings": []', '"findings": [{"id":"REV-001","severity":"low","status":"resolved","summary":"x","unexpected":true}]'),
+        $validJson.Replace('"identity": "validator-self-test"', '"identity": "validator-self-test", "unexpected": true')
+    )
+    foreach ($json in $invalidJson) {
+        $rejected = $false
+        try {
+            Assert-CodeReview ($json | ConvertFrom-Json -Depth 20) $provenance
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw 'Independent review validator self-test accepted invalid JSON.'
+        }
+    }
+}
+
 if ($ValidateOnly) {
+    Assert-CodeReviewValidatorSelfTest
     $specPath = Join-Path $repositoryRoot 'specs/010-lock-free-only-multilang/spec.md'
     $releaseContractPath = Join-Path $repositoryRoot 'specs/010-lock-free-only-multilang/release-qualification.md'
     $spec = Get-Content -LiteralPath $specPath -Raw

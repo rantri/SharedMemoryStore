@@ -115,9 +115,14 @@ function Assert-InteropArtifactEvidence {
     $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')).TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $evidenceRoot = [IO.Path]::GetFullPath($runRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     $canonical = [Collections.Generic.List[string]]::new()
     $seen = [Collections.Generic.HashSet[string]]::new(
+        $(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
+    $sourceSeen = [Collections.Generic.HashSet[string]]::new(
         $(if ($IsWindows) { [StringComparer]::OrdinalIgnoreCase } else { [StringComparer]::Ordinal }))
     foreach ($artifact in @($report.artifacts)) {
         $recordedPath = [string]$artifact.path
@@ -127,17 +132,33 @@ function Assert-InteropArtifactEvidence {
         else {
             [IO.Path]::GetFullPath((Join-Path $root $recordedPath))
         }
-        if (-not $fullPath.StartsWith($artifactRoot, $comparison) `
+        $sourcePath = [string]$artifact.sourcePath
+        $sourceFullPath = if ([IO.Path]::IsPathFullyQualified($sourcePath)) {
+            [IO.Path]::GetFullPath($sourcePath)
+        }
+        else {
+            [IO.Path]::GetFullPath((Join-Path $root $sourcePath))
+        }
+        if ([string]::IsNullOrWhiteSpace($recordedPath) `
+            -or [string]::IsNullOrWhiteSpace($sourcePath) `
+            -or -not $fullPath.StartsWith($evidenceRoot, $comparison) `
             -or -not $seen.Add($fullPath) `
-            -or -not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            throw "Interoperability artifact path is outside artifacts, duplicated, or missing: '$recordedPath'."
+            -or -not (Test-Path -LiteralPath $fullPath -PathType Leaf) `
+            -or -not $sourceFullPath.StartsWith($artifactRoot, $comparison) `
+            -or -not $sourceSeen.Add($sourceFullPath) `
+            -or -not (Test-Path -LiteralPath $sourceFullPath -PathType Leaf)) {
+            throw "Interoperability artifact path is outside the immutable run/source roots, duplicated, or missing: '$recordedPath'."
         }
         $item = Get-Item -LiteralPath $fullPath -Force
+        $sourceItem = Get-Item -LiteralPath $sourceFullPath -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 `
+            -or ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 `
             -or [int64]$artifact.length -ne [int64]$item.Length `
+            -or [int64]$artifact.length -ne [int64]$sourceItem.Length `
             -or [string]$artifact.sha256 -notmatch '^[0-9A-F]{64}$' `
-            -or [string]$artifact.sha256 -cne (Get-FileSha256 $fullPath)) {
-            throw "Interoperability artifact hash/length/link proof failed for '$recordedPath'."
+            -or [string]$artifact.sha256 -cne (Get-FileSha256 $fullPath) `
+            -or [string]$artifact.sha256 -cne (Get-FileSha256 $sourceFullPath)) {
+            throw "Interoperability artifact copy/source hash, length, or link proof failed for '$recordedPath'."
         }
         $canonical.Add("$recordedPath|$($artifact.length)|$($artifact.sha256)")
     }
@@ -154,7 +175,135 @@ function Assert-InteropArtifactEvidence {
         evidenceSha256 = Get-FileSha256 $Path
         artifactCount = $canonical.Count
         artifactSetSha256 = $digest
+        artifacts = @($report.artifacts | Sort-Object path | ForEach-Object {
+            [pscustomobject][ordered]@{
+                path = [string]$_.path
+                sourcePath = [string]$_.sourcePath
+                length = [int64]$_.length
+                sha256 = [string]$_.sha256
+            }
+        })
     }
+}
+
+function Invoke-InteropArtifactVerifierSelfTest {
+    $caseRoot = Join-Path $runRoot 'interop-artifact-verifier-self-test'
+    $sourceRoot = Join-Path $caseRoot 'sources'
+    $bundleRoot = Join-Path $caseRoot 'bundle'
+    New-Item -ItemType Directory -Path $sourceRoot, $bundleRoot -Force | Out-Null
+    $artifacts = [Collections.Generic.List[object]]::new()
+    foreach ($index in 0..2) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes("artifact-$index")
+        $source = Join-Path $sourceRoot "source-$index.bin"
+        $copy = Join-Path $bundleRoot "copy-$index.bin"
+        [IO.File]::WriteAllBytes($source, $bytes)
+        [IO.File]::WriteAllBytes($copy, $bytes)
+        $artifacts.Add([pscustomobject][ordered]@{
+            path = [IO.Path]::GetRelativePath($root, $copy).Replace('\', '/')
+            sourcePath = [IO.Path]::GetRelativePath($root, $source).Replace('\', '/')
+            length = [int64]$bytes.Length
+            sha256 = Get-FileSha256 $copy
+        })
+    }
+    $canonical = @($artifacts | Sort-Object path | ForEach-Object {
+        "$($_.path)|$($_.length)|$($_.sha256)"
+    }) -join "`n"
+    $report = [pscustomobject][ordered]@{
+        schemaVersion = 1
+        mode = 'host'
+        configuration = $Configuration
+        stressEnabled = $true
+        orderedRuntimeCells = 9
+        stressValueCount = [int64]$selected.interopValueCount
+        stressLifecycleCycleCount = [int64]$selected.interopLifecycleCycleCount
+        artifactBuildPerformed = $false
+        artifactsPrevalidated = $true
+        sourceCommit = [string]$repositoryProvenance.commit
+        sourceWorkingTreeState = 'clean'
+        scriptSha256 = 'A' * 64
+        dockerfileSha256 = $null
+        dockerImage = $null
+        dockerImageId = $null
+        artifactSetSha256 = Get-StringSha256 $canonical
+        artifacts = @($artifacts)
+    }
+    $reportPath = Join-Path $caseRoot 'report.json'
+    function Write-SelfTestReport {
+        [IO.File]::WriteAllText(
+            $reportPath,
+            ($report | ConvertTo-Json -Depth 8),
+            [Text.UTF8Encoding]::new($false))
+    }
+    function Assert-SelfTestRejected {
+        $rejected = $false
+        try {
+            [void](Assert-InteropArtifactEvidence `
+                $reportPath `
+                ([int64]$selected.interopValueCount) `
+                ([int64]$selected.interopLifecycleCycleCount))
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw 'Interoperability artifact verifier self-test accepted tampered evidence.'
+        }
+    }
+
+    Write-SelfTestReport
+    [void](Assert-InteropArtifactEvidence `
+        $reportPath `
+        ([int64]$selected.interopValueCount) `
+        ([int64]$selected.interopLifecycleCycleCount))
+    $assertions = 1
+
+    $firstSource = Join-Path $root ([string]$report.artifacts[0].sourcePath)
+    $firstCopy = Join-Path $root ([string]$report.artifacts[0].path)
+    $sourceBytes = [IO.File]::ReadAllBytes($firstSource)
+    $copyBytes = [IO.File]::ReadAllBytes($firstCopy)
+    try {
+        [IO.File]::AppendAllText($firstSource, 'tamper')
+        Assert-SelfTestRejected
+        $assertions++
+    }
+    finally {
+        [IO.File]::WriteAllBytes($firstSource, $sourceBytes)
+    }
+    try {
+        [IO.File]::AppendAllText($firstCopy, 'tamper')
+        Assert-SelfTestRejected
+        $assertions++
+    }
+    finally {
+        [IO.File]::WriteAllBytes($firstCopy, $copyBytes)
+    }
+
+    $savedSourcePath = [string]$report.artifacts[0].sourcePath
+    try {
+        $report.artifacts[0].sourcePath = ''
+        Write-SelfTestReport
+        Assert-SelfTestRejected
+        $assertions++
+    }
+    finally {
+        $report.artifacts[0].sourcePath = $savedSourcePath
+    }
+    $savedDigest = [string]$report.artifactSetSha256
+    try {
+        $report.artifactSetSha256 = '0' * 64
+        Write-SelfTestReport
+        Assert-SelfTestRejected
+        $assertions++
+    }
+    finally {
+        $report.artifactSetSha256 = $savedDigest
+    }
+    Write-SelfTestReport
+    [void](Assert-InteropArtifactEvidence `
+        $reportPath `
+        ([int64]$selected.interopValueCount) `
+        ([int64]$selected.interopLifecycleCycleCount))
+    return $assertions
 }
 
 function Assert-DockerInteropEvidence {
@@ -519,6 +668,8 @@ $repositoryProvenance = Get-RepositoryProvenance
 $completionProvenance = $null
 $testedAssemblyManifest = @()
 $completionAssemblyManifest = @()
+$testedInteropArtifactManifest = @()
+$completionInteropArtifactManifest = @()
 $interopArtifactEvidencePath = $null
 
 function Assert-KnownProvenance {
@@ -795,16 +946,29 @@ function Get-TestedAssemblyManifest {
     })
 }
 
+function Assert-FileManifestStable {
+    param(
+        [Parameter(Mandatory)][object[]]$Start,
+        [Parameter(Mandatory)][object[]]$End,
+        [Parameter(Mandatory)][string]$Context)
+
+    $startCanonical = @($Start | Sort-Object path | ForEach-Object {
+        "$($_.path)|$($_.length)|$($_.sha256)"
+    }) -join "`n"
+    $endCanonical = @($End | Sort-Object path | ForEach-Object {
+        "$($_.path)|$($_.length)|$($_.sha256)"
+    }) -join "`n"
+    if ([string]::IsNullOrWhiteSpace($startCanonical) -or $startCanonical -cne $endCanonical) {
+        throw "$Context changed after it was captured or while qualification was running."
+    }
+}
+
 function Assert-AssemblyManifestStable {
     param(
         [Parameter(Mandatory)][object[]]$Start,
         [Parameter(Mandatory)][object[]]$End)
 
-    $startCanonical = @($Start | ForEach-Object { "$($_.path)|$($_.length)|$($_.sha256)" }) -join "`n"
-    $endCanonical = @($End | ForEach-Object { "$($_.path)|$($_.length)|$($_.sha256)" }) -join "`n"
-    if ([string]::IsNullOrWhiteSpace($startCanonical) -or $startCanonical -ne $endCanonical) {
-        throw 'Tested assembly manifest changed after the clean build or while qualification was running.'
-    }
+    Assert-FileManifestStable $Start $End 'Tested assembly manifest'
 }
 
 function Get-TestedAssemblyHash {
@@ -5360,6 +5524,15 @@ try {
                 "assertions=$probeCompletionAssertions",
                 'duration-bound Sms2 plus count-bound Sms2 mixed/large rows accepted',
                 'below-target/config-swap/dual-target/short-duration/missing-target cases rejected')
+        $interopArtifactAssertions = Invoke-InteropArtifactVerifierSelfTest
+        Add-EvidenceResult 'interop-artifact-verifier-self-test' 'passed' `
+            'immutable-copy-source-binding-positive-and-tamper-negative-cases-passed' @(
+                "assertions=$interopArtifactAssertions",
+                'exact copied/source artifact sets accepted',
+                'source tamper/copy tamper/missing source/digest mismatch rejected') @(
+                    [IO.Path]::GetRelativePath(
+                        $root,
+                        (Join-Path $runRoot 'interop-artifact-verifier-self-test/report.json')))
         $osManifestAssertions = Invoke-OsEvidenceManifestVerifierSelfTest
         Add-EvidenceResult 'os-evidence-manifest-verifier-self-test' 'passed' `
             'exact-tree-positive-and-tamper-negative-cases-passed' @(
@@ -5454,6 +5627,42 @@ try {
                 "artifactsDirectory=$interopPython")
         $interopRuntimeEnvironment = Get-ValidatedInteropEnvironment `
             $interopBuild $interopPython
+
+        # Snapshot and exercise the exact native/Python artifacts before the
+        # aggregate suite consumes them. The evidence bundle lives inside the
+        # immutable run tree, while Assert-InteropArtifactEvidence also binds
+        # every copy back to its source artifact through completion.
+        $interopArtifactEvidencePath = Join-Path $runRoot 'interoperability-artifacts.json'
+        Invoke-BoundedStep 'interoperability' $powershell @(
+            '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
+            '-Configuration', $Configuration,
+            '-BuildDirectory', $interopBuild,
+            '-InstallDirectory', $interopInstall,
+            '-PythonArtifactsDirectory', $interopPython,
+            '-PythonExecutable', [string]$interopRuntimeEnvironment.SMS_PYTHON_EXECUTABLE,
+            '-SkipBuild',
+            '-ArtifactsPrevalidated',
+            '-Stress',
+            '-StressValueCount', [string]$selected.interopValueCount,
+            '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
+            '-EvidencePath', $interopArtifactEvidencePath)
+        $interopEvidence = Assert-InteropArtifactEvidence `
+            $interopArtifactEvidencePath `
+            ([int64]$selected.interopValueCount) `
+            ([int64]$selected.interopLifecycleCycleCount)
+        $testedInteropArtifactManifest = @($interopEvidence.artifacts)
+        Set-StepValidation 'interoperability' 'passed' `
+            'installed-artifact-nine-cell-mixed-runtime-and-immutable-bundle-pass' @(
+                'orderedRuntimeCells=9',
+                "valuesPerCell=$($selected.interopValueCount)",
+                "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
+                "artifactCount=$($interopEvidence.artifactCount)",
+                "artifactSetSha256=$($interopEvidence.artifactSetSha256)",
+                "artifactEvidence=$($interopEvidence.evidencePath)",
+                "artifactEvidenceSha256=$($interopEvidence.evidenceSha256)",
+                'nativeInstallConsumer=passed',
+                'pythonWheelAndSdistConsumers=passed',
+                'sourceArtifactsBoundThroughCompletion=true')
 
         $fullSuiteTrx = Join-Path $runRoot 'trx/full-test-suite'
         New-Item -ItemType Directory -Path $fullSuiteTrx | Out-Null
@@ -5574,67 +5783,33 @@ try {
             'one-protocol-api-surface=passed',
             'nuget-cache=isolated-per-run')
 
-        # PR and nightly evidence must not depend on a separate CI job whose
-        # artifacts are absent from this immutable evidence tree. Release uses
-        # the stricter host and Docker rows embedded in command=all OS evidence.
-        if ($Tier -ne 'release') {
-            $interopArtifactEvidencePath = Join-Path $runRoot 'interoperability-artifacts.json'
-            Invoke-BoundedStep 'interoperability' $powershell @(
+        if ($Tier -eq 'nightly' -and $IsLinux) {
+            Invoke-BoundedStep 'docker-shared-memory' $powershell @(
+                '-NoProfile', '-File', 'scripts/validate-docker-shared-memory.ps1',
+                '-Profile', 'All', '-Configuration', $Configuration)
+            Set-StepValidation 'docker-shared-memory' 'passed' `
+                'same-host-container-lifecycle-owner-and-cleanup-pass' @(
+                    'namespaceIdentity=passed', 'ownerAnchorsAndMarkers=passed',
+                    'abruptRecovery=passed', 'composeCleanup=passed')
+            Invoke-BoundedStep 'docker-interoperability' $powershell @(
                 '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
                 '-Configuration', $Configuration,
-                '-BuildDirectory', $interopBuild,
-                '-InstallDirectory', $interopInstall,
-                '-PythonArtifactsDirectory', $interopPython,
-                '-PythonExecutable', [string]$interopRuntimeEnvironment.SMS_PYTHON_EXECUTABLE,
-                '-SkipBuild',
-                '-ArtifactsPrevalidated',
-                '-Stress',
+                '-Docker', '-Stress',
                 '-StressValueCount', [string]$selected.interopValueCount,
                 '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
-                '-EvidencePath', $interopArtifactEvidencePath)
-            $interopEvidence = Assert-InteropArtifactEvidence `
-                $interopArtifactEvidencePath `
+                '-EvidencePath', (Join-Path $runRoot 'docker-interoperability-artifacts.json'))
+            $dockerInteropEvidence = Assert-DockerInteropEvidence `
+                (Join-Path $runRoot 'docker-interoperability-artifacts.json') `
                 ([int64]$selected.interopValueCount) `
                 ([int64]$selected.interopLifecycleCycleCount)
-            Set-StepValidation 'interoperability' 'passed' 'installed-artifact-nine-cell-and-mixed-runtime-pass' @(
-                'orderedRuntimeCells=9',
-                "valuesPerCell=$($selected.interopValueCount)",
-                "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
-                "artifactCount=$($interopEvidence.artifactCount)",
-                "artifactSetSha256=$($interopEvidence.artifactSetSha256)",
-                "artifactEvidence=$($interopEvidence.evidencePath)",
-                "artifactEvidenceSha256=$($interopEvidence.evidenceSha256)",
-                'nativeInstallConsumer=passed',
-                'pythonWheelAndSdistConsumers=passed')
-
-            if ($Tier -eq 'nightly' -and $IsLinux) {
-                Invoke-BoundedStep 'docker-shared-memory' $powershell @(
-                    '-NoProfile', '-File', 'scripts/validate-docker-shared-memory.ps1',
-                    '-Profile', 'All', '-Configuration', $Configuration)
-                Set-StepValidation 'docker-shared-memory' 'passed' `
-                    'same-host-container-lifecycle-owner-and-cleanup-pass' @(
-                        'namespaceIdentity=passed', 'ownerAnchorsAndMarkers=passed',
-                        'abruptRecovery=passed', 'composeCleanup=passed')
-                Invoke-BoundedStep 'docker-interoperability' $powershell @(
-                    '-NoProfile', '-File', 'scripts/validate-interoperability.ps1',
-                    '-Configuration', $Configuration,
-                    '-Docker', '-Stress',
-                    '-StressValueCount', [string]$selected.interopValueCount,
-                    '-StressLifecycleCycleCount', [string]$selected.interopLifecycleCycleCount,
-                    '-EvidencePath', (Join-Path $runRoot 'docker-interoperability-artifacts.json'))
-                $dockerInteropEvidence = Assert-DockerInteropEvidence `
-                    (Join-Path $runRoot 'docker-interoperability-artifacts.json') `
-                    ([int64]$selected.interopValueCount) `
-                    ([int64]$selected.interopLifecycleCycleCount)
-                Set-StepValidation 'docker-interoperability' 'passed' `
-                    'installed-container-artifact-nine-cell-and-mixed-runtime-pass' @(
-                        'orderedRuntimeCells=9',
-                        "valuesPerCell=$($selected.interopValueCount)",
-                        "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
-                        "dockerImageId=$($dockerInteropEvidence.dockerImageId)",
-                        "artifactEvidence=$($dockerInteropEvidence.evidencePath)",
-                        "artifactEvidenceSha256=$($dockerInteropEvidence.evidenceSha256)")
-            }
+            Set-StepValidation 'docker-interoperability' 'passed' `
+                'installed-container-artifact-nine-cell-and-mixed-runtime-pass' @(
+                    'orderedRuntimeCells=9',
+                    "valuesPerCell=$($selected.interopValueCount)",
+                    "mixedLifecycleCycles=$($selected.interopLifecycleCycleCount)",
+                    "dockerImageId=$($dockerInteropEvidence.dockerImageId)",
+                    "artifactEvidence=$($dockerInteropEvidence.evidencePath)",
+                    "artifactEvidenceSha256=$($dockerInteropEvidence.evidenceSha256)")
         }
 
         if ($SkipOsValidation) {
@@ -5709,20 +5884,33 @@ try {
         }
 
         if ($null -ne $interopArtifactEvidencePath) {
-            [void](Assert-InteropArtifactEvidence `
+            $completionInteropEvidence = Assert-InteropArtifactEvidence `
                 $interopArtifactEvidencePath `
                 ([int64]$selected.interopValueCount) `
-                ([int64]$selected.interopLifecycleCycleCount))
+                ([int64]$selected.interopLifecycleCycleCount)
+            $completionInteropArtifactManifest = @($completionInteropEvidence.artifacts)
+            Assert-FileManifestStable `
+                $testedInteropArtifactManifest `
+                $completionInteropArtifactManifest `
+                'Tested native/Python artifact manifest'
         }
         $revalidatedOsEvidenceCount = Assert-AcceptedOsEvidenceStable
         $completionAssemblyManifest = @(Get-TestedAssemblyManifest)
         Assert-AssemblyManifestStable $testedAssemblyManifest $completionAssemblyManifest
         $completionProvenance = Get-RepositoryProvenance
         Assert-ProvenanceStable $repositoryProvenance $completionProvenance
-        Add-EvidenceResult 'completion-integrity' 'passed' 'source-and-tested-assemblies-stable' @(
+        $testedArtifactDigest = Get-StringSha256 (@(
+            @($testedAssemblyManifest) + @($testedInteropArtifactManifest) |
+                Sort-Object path |
+                ForEach-Object { "$($_.path)|$($_.length)|$($_.sha256)" }
+        ) -join "`n")
+        Add-EvidenceResult 'completion-integrity' 'passed' `
+            'source-tested-assemblies-and-native-python-artifacts-stable' @(
             "commit=$($completionProvenance.commit)",
             "sourceManifestSha256=$($completionProvenance.sourceManifestSha256)",
             "testedAssemblyManifestSha256=$testedAssemblyDigest",
+            "testedArtifactManifestSha256=$testedArtifactDigest",
+            "testedNativePythonArtifacts=$($testedInteropArtifactManifest.Count)",
             "acceptedOsEvidenceRevalidated=$revalidatedOsEvidenceCount")
         $overallStatus = if ($notQualifiedReasons.Count -eq 0) { 'passed' } else { 'not-qualified' }
     }
@@ -5763,8 +5951,9 @@ finally {
         provenance = $repositoryProvenance
         completionProvenance = $completionProvenance
         testedAssemblies = $testedAssemblyManifest
-        testedArtifacts = $testedAssemblyManifest
+        testedArtifacts = @($testedAssemblyManifest) + @($testedInteropArtifactManifest)
         completionTestedAssemblies = $completionAssemblyManifest
+        completionTestedArtifacts = @($completionAssemblyManifest) + @($completionInteropArtifactManifest)
         host = [ordered]@{
             operatingSystem = [Runtime.InteropServices.RuntimeInformation]::OSDescription
             operatingSystemArchitecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
