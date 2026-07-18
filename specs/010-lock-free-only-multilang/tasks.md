@@ -198,7 +198,7 @@
 - [X] T098 [US3] Implement native test-only deterministic checkpoints and pause/crash commands without changing packaged production wire state in `src/cpp/src/checkpoint.hpp` and `tests/cpp/native_fault_agent.cpp`
 - [X] T099 [US3] Extend managed/native/Python agents with the canonical checkpoint catalog, abrupt exit, recovery, raw corruption injection, and held-cold-lock commands in `tests/SharedMemoryStore.InteropAgent/`, `tests/cpp/interop_agent.cpp`, and `tests/python/interop_agent.py`
 - [X] T100 [P] [US3] Make Docker interoperability cover SMS2-only mixed-runtime lifecycle, namespace identity, owner anchors/markers, pause, crash, recovery, and cleanup in `tests/SharedMemoryStore.InteropTests/Dockerfile` and `scripts/validate-interoperability.ps1`
-- [ ] T101 [US3] Run deterministic, linearizability, 10,000-crash, raw-memory-order, corruption/non-poisoning, held-lock, disposal, and capacity-restoration suites and fix every forbidden outcome
+- [X] T101 [US3] Run deterministic, linearizability, 10,000-crash, raw-memory-order, corruption/non-poisoning, held-lock, disposal, and capacity-restoration suites and fix every forbidden outcome
 
 **Checkpoint**: No paused or dead runtime is a store-wide progress dependency, and recovery never reclaims live or later-generation ownership.
 
@@ -249,11 +249,11 @@
 - [X] T124 [P] Run `scripts/validate-native.ps1 -Configuration Release`, fixing every native conformance, atomic, lifecycle, C ABI, install, and consumer failure
 - [X] T125 [P] Run `scripts/validate-python.ps1 -Configuration Release`, fixing every Python wrapper, lifetime, wheel, sdist, import, and sample failure
 - [X] T126 Run `scripts/validate-interoperability.ps1 -Configuration Release -Stress -StressValueCount 1000 -StressLifecycleCycleCount 10000`, fixing every ordered-pair and mixed-runtime failure
-- [ ] T127 Run Docker and independent Windows x64/Linux x64 raw atomic, cold lifecycle, owner, no-hot-lock, crash, and package validation through `scripts/validate-interoperability.ps1` and `scripts/validate-lock-free-os.ps1`
+- [X] T127 Run Docker and independent Windows x64/Linux x64 raw atomic, cold lifecycle, owner, no-hot-lock, crash, and package validation through `scripts/validate-interoperability.ps1` and `scripts/validate-lock-free-os.ps1`
 - [X] T128 [P] Run documentation, link, compatibility-manifest, static public API, binary export, and retired-path inspection through `scripts/validate-docs.ps1` and repository searches
-- [ ] T129 Run PR, nightly, and full release qualification with immutable artifact-bound reports and record the exact outcome in `specs/010-lock-free-only-multilang/release-qualification.md`
-- [ ] T130 Execute every command and migration smoke in `specs/010-lock-free-only-multilang/quickstart.md` from clean artifacts and correct any drift
-- [ ] T131 Run `git diff --check`, clean-build verification, package content inspection, and final task/checklist completeness validation
+- [X] T129 Run PR, nightly, and full release qualification with immutable artifact-bound reports and record the exact outcome in `specs/010-lock-free-only-multilang/release-qualification.md`
+- [X] T130 Execute every command and migration smoke in `specs/010-lock-free-only-multilang/quickstart.md` from clean artifacts and correct any drift
+- [X] T131 Run `git diff --check`, clean-build verification, package content inspection, and final task/checklist completeness validation
 
 ---
 

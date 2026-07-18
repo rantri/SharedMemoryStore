@@ -1182,13 +1182,34 @@ static RunResult AggregateAutonomousRun(
 
 static async Task AwaitReady(IReadOnlyList<Process> workers, CancellationToken cancellationToken)
 {
-    foreach (Process worker in workers)
+    Task<string?>[] readiness = workers
+        .Select(worker => worker.StandardOutput.ReadLineAsync(cancellationToken).AsTask())
+        .ToArray();
+    var pending = new HashSet<int>(Enumerable.Range(0, workers.Count));
+    while (pending.Count != 0)
     {
-        string? ready = await worker.StandardOutput.ReadLineAsync(cancellationToken);
+        Task<string?> completed = await Task.WhenAny(pending.Select(index => readiness[index]));
+        int index = Array.IndexOf(readiness, completed);
+        string? ready = await completed;
+        pending.Remove(index);
         if (ready != "READY")
         {
-            string error = await worker.StandardError.ReadToEndAsync(cancellationToken);
-            throw new InvalidOperationException($"Worker failed to become ready: {ready}; {error}");
+            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+            var failures = new List<string>();
+            for (var workerIndex = 0; workerIndex < workers.Count; workerIndex++)
+            {
+                string readinessState = readiness[workerIndex].IsCompletedSuccessfully
+                    ? readiness[workerIndex].Result ?? "<eof>"
+                    : "<pending>";
+                string error = workers[workerIndex].HasExited
+                    ? await workers[workerIndex].StandardError.ReadToEndAsync(cancellationToken)
+                    : "<still-running>";
+                failures.Add($"worker[{workerIndex}] ready={readinessState}; {error}");
+            }
+
+            throw new InvalidOperationException(
+                "Workers failed to become ready:" + Environment.NewLine
+                + string.Join(Environment.NewLine, failures));
         }
     }
 }
@@ -1546,8 +1567,10 @@ static int RunAutonomousWorker(string[] args)
                 out _);
             if (warmupFailures != 0)
             {
+                RecordCorruptionTrace(warmupCounters);
                 Console.Error.WriteLine(
-                    "Warm-up correctness failure: " + JsonSerializer.Serialize(warmupCounters.ToHistogram()));
+                    $"Warm-up correctness failure scenario={scenario} worker={workerId}: "
+                    + JsonSerializer.Serialize(warmupCounters.ToHistogram()));
                 return 6;
             }
         }
@@ -1588,6 +1611,10 @@ static int RunAutonomousWorker(string[] args)
                 counters,
                 out int cycleFailures,
                 out long cycleBytes);
+            if (cycleFailures != 0)
+            {
+                RecordCorruptionTrace(counters);
+            }
             if (sample)
             {
                 double microseconds = Stopwatch.GetElapsedTime(started).TotalMicroseconds;
@@ -1884,22 +1911,29 @@ static void RunCycle(
             return;
         }
 
-        bool descriptorValid = lease.DescriptorSpan.Length == BenchmarkDescriptorBytes;
+        ReadOnlySpan<byte> descriptor = lease.DescriptorSpan;
+        bool descriptorValid = descriptor.Length == BenchmarkDescriptorBytes;
         long generation = descriptorValid
-            ? BinaryPrimitives.ReadInt64LittleEndian(lease.DescriptorSpan)
+            ? BinaryPrimitives.ReadInt64LittleEndian(descriptor)
             : long.MinValue;
         descriptorValid = descriptorValid
             && BenchmarkProtocol.ValidateDescriptor(
-                lease.DescriptorSpan,
+                descriptor,
                 readKeyIndex,
                 generation,
                 MixedPayloadBytes);
+        ReadOnlySpan<byte> payload = lease.ValueSpan;
         bool payloadValid = descriptorValid
-            && BenchmarkProtocol.ValidateGenerationPayload(lease.ValueSpan, readKeyIndex, generation);
-        bytesProcessed = lease.ValueSpan.Length;
+            && BenchmarkProtocol.ValidateGenerationPayload(payload, readKeyIndex, generation);
+        bytesProcessed = payload.Length;
         if (!descriptorValid || !payloadValid)
         {
             counters.RecordChecksumFailure();
+            counters.RecordCorruptReason(
+                $"mixed-reader-{workerId}-key-{readKeyIndex}"
+                + $"-descriptor-{Convert.ToHexString(descriptor)}"
+                + $"-payload-prefix-{Convert.ToHexString(payload[..Math.Min(payload.Length, 32)])}");
+            RecordCorruptionTrace(counters);
             failures++;
         }
 
@@ -2056,11 +2090,23 @@ static StoreStatus ReleaseWithRetry(ValueLease lease, StatusCounters counters)
     {
         status = lease.Release(StoreWaitOptions.Infinite);
         counters.Record(OperationKind.Release, status);
+        if (status == StoreStatus.CorruptStore)
+        {
+            RecordCorruptionTrace(counters);
+        }
         RetryPause(attempt++);
     }
     while (status == StoreStatus.StoreBusy && attempt < 4096);
 
     return status;
+}
+
+static void RecordCorruptionTrace(StatusCounters counters)
+{
+    if (LockFreeCorruptionTrace.Consume() is { } reason)
+    {
+        counters.RecordCorruptReason(reason);
+    }
 }
 
 static StoreStatus PublishWithRetry(

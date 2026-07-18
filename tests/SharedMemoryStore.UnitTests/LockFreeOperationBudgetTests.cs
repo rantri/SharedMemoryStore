@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Reflection;
+using SharedMemoryStore.Engines;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
 using System.Runtime.InteropServices;
@@ -434,6 +435,102 @@ public sealed class LockFreeOperationBudgetTests
             store.TryReserve([2], 1, default, StoreWaitOptions.Infinite, out ValueReservation reservation));
         Assert.True(reservation.IsValid);
         Assert.Equal(StoreStatus.Success, reservation.Abort(StoreWaitOptions.Infinite));
+    }
+
+    [Fact]
+    public void RecoveryReclaimDefersExactGenerationDirectoryOperationResidueWithoutCorruption()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        using MemoryStore store = CreateInstrumentedStore(
+            maxValueBytes: 1,
+            checkpoint: LockFreeCheckpointFactory.CreateInstrumented(static _ => { }));
+        Assert.Equal(
+            StoreStatus.Success,
+            store.TryReserve([0x51], 1, default, StoreWaitOptions.Infinite, out ValueReservation reservation));
+
+        ReservationHandle handle = reservation.HandleForEngine;
+        IndexBinding binding = IndexBinding.Decode(handle.SlotBinding);
+        LockFreeSlotTable slots = ReadSlotTable(store);
+        ref ValueSlotMetadataV2 slot = ref slots.Slot(binding.SlotIndex);
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+
+        AtomicControlWord.StoreRelease(ref slot.DirectoryLocation, 0);
+        AtomicControlWord.StoreRelease(
+            ref slot.DirectoryOperation,
+            unchecked((long)DirectoryOperation.Encode(
+                intent: 2,
+                phase: 1,
+                targetKind: 0,
+                targetIndex: 0,
+                binding.Generation)));
+
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.StoreBusy,
+            slots.TryCompleteRecoveryReclaim(
+                handle.SlotBinding,
+                LockFreeOperationBudget.UnboundedScan));
+        Assert.Null(LockFreeCorruptionTrace.Consume());
+        Assert.NotEqual(0, AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation));
+
+        AtomicControlWord.StoreRelease(ref slot.DirectoryOperation, 0);
+        Assert.Equal(
+            StoreStatus.Success,
+            slots.TryCompleteRecoveryReclaim(
+                handle.SlotBinding,
+                LockFreeOperationBudget.UnboundedScan));
+        Assert.Equal(0, AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation));
+        Assert.Equal(
+            LockFreeSlotTable.FreeState,
+            (int)(unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.Control)) & 0x7UL));
+    }
+
+    [Fact]
+    public void RecoveryReclaimRejectsFutureGenerationDirectoryOperationResidue()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        using MemoryStore store = CreateInstrumentedStore(
+            maxValueBytes: 1,
+            checkpoint: LockFreeCheckpointFactory.CreateInstrumented(static _ => { }));
+        Assert.Equal(
+            StoreStatus.Success,
+            store.TryReserve([0x52], 1, default, StoreWaitOptions.Infinite, out ValueReservation reservation));
+
+        ReservationHandle handle = reservation.HandleForEngine;
+        IndexBinding binding = IndexBinding.Decode(handle.SlotBinding);
+        LockFreeSlotTable slots = ReadSlotTable(store);
+        ref ValueSlotMetadataV2 slot = ref slots.Slot(binding.SlotIndex);
+        Assert.Equal(StoreStatus.Success, slots.TryBeginAbort(handle));
+
+        ulong futureOperation = DirectoryOperation.Encode(
+            intent: 2,
+            phase: 1,
+            targetKind: 0,
+            targetIndex: 0,
+            binding.Generation + 1);
+        AtomicControlWord.StoreRelease(ref slot.DirectoryLocation, 0);
+        AtomicControlWord.StoreRelease(
+            ref slot.DirectoryOperation,
+            unchecked((long)futureOperation));
+
+        _ = LockFreeCorruptionTrace.Consume();
+        Assert.Equal(
+            StoreStatus.CorruptStore,
+            slots.TryCompleteRecoveryReclaim(
+                handle.SlotBinding,
+                LockFreeOperationBudget.UnboundedScan));
+        Assert.NotNull(LockFreeCorruptionTrace.Consume());
+        Assert.Equal(
+            futureOperation,
+            unchecked((ulong)AtomicControlWord.LoadAcquire(ref slot.DirectoryOperation)));
     }
 
     private static ReadOnlySequence<byte> Sequence(byte[][] buffers)

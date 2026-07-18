@@ -171,7 +171,8 @@ private:
     [[nodiscard]] sms_status sanitize_older_directory_residue(
         ValueSlotMetadataV2& slot,
         std::int64_t claimed_generation,
-        const OperationBudget& budget) noexcept;
+        const OperationBudget& budget,
+        bool exact_generation_is_busy) noexcept;
     [[nodiscard]] bool has_advanced_or_retired(
         std::uint64_t control,
         std::int64_t generation) const noexcept;
