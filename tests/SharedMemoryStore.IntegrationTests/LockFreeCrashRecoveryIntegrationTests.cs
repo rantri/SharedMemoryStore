@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using SharedMemoryStore.Engines;
+using SharedMemoryStore.IntegrationTests.TestSupport;
 using SharedMemoryStore.Interop;
 using SharedMemoryStore.LayoutV2;
 using SharedMemoryStore.LockFree;
@@ -34,6 +35,56 @@ public sealed class LockFreeCrashRecoveryIntegrationTests
             }
 
             return data;
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    [Trait("Category", "CrashRecovery")]
+    public async Task CheckpointAgentRetriesTransientColdOpenContention()
+    {
+        if (!IsSupportedLockFreeHost())
+        {
+            return;
+        }
+
+        const LockFreeCheckpointId checkpoint = LockFreeCheckpointId.ParticipantBeforeRegisteringCas;
+        int checkpointValue = (int)checkpoint;
+        string name = $"sms-v2-crash-open-retry-{Guid.NewGuid():N}";
+        Assert.Equal(
+            StoreOpenStatus.Success,
+            MemoryStore.TryCreateOrOpen(Options(name, OpenMode.CreateNew), out MemoryStore? opened));
+        using var store = Assert.IsType<MemoryStore>(opened);
+
+        IDisposable? heldSynchronization = PlatformCapabilityProbe.HoldStoreSynchronization(name);
+        using Process agent = StartAgent(
+            name,
+            checkpoint,
+            Key(0xA0, checkpointValue),
+            Key(0xB0, checkpointValue),
+            Key(0xC0, checkpointValue),
+            Key(0xD0, checkpointValue),
+            [0x31, unchecked((byte)checkpointValue), 0xC7],
+            [0xD5, unchecked((byte)(checkpointValue ^ 0x5A))]);
+        try
+        {
+            Assert.False(
+                agent.WaitForExit(milliseconds: 5_000),
+                "The checkpoint agent exited instead of retrying transient cold-open contention.");
+            heldSynchronization.Dispose();
+            heldSynchronization = null;
+
+            CheckpointSignal signal = await ReadCheckpointAsync(agent, checkpoint);
+            Assert.Equal(checkpointValue, signal.Id);
+            Assert.False(agent.HasExited);
+
+            Kill(agent);
+            AssertFullParticipantCapacity(name);
+        }
+        finally
+        {
+            heldSynchronization?.Dispose();
+            Kill(agent);
         }
     }
 

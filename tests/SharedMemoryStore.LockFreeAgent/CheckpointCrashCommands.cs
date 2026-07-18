@@ -19,6 +19,7 @@ internal static class CheckpointCrashCommands
     private const int InvalidArgumentsExitCode = 64;
     private const int OperationFailureExitCode = 66;
     private const int CheckpointNotReachedExitCode = 68;
+    private static readonly TimeSpan OpenRetryTimeout = TimeSpan.FromSeconds(10);
 
     internal static int Run(string[] arguments)
     {
@@ -88,10 +89,7 @@ internal static class CheckpointCrashCommands
             return OperationFailureExitCode;
         }
 
-        StoreOpenStatus open = LockFreeInstrumentedStoreFactory.TryCreateOrOpen(
-            parsed.Options,
-            checkpoint,
-            out MemoryStore? store);
+        StoreOpenStatus open = TryOpenForCheckpoint(parsed.Options, checkpoint, out MemoryStore? store);
         if (open != StoreOpenStatus.Success || store is null)
         {
             Console.Error.WriteLine("Open failed: " + open);
@@ -148,6 +146,29 @@ internal static class CheckpointCrashCommands
             Console.WriteLine("OK " + (suspensionProbe ? "checkpoint-pause " : "checkpoint-crash ") + target.Id);
             return 0;
         }
+    }
+
+    private static StoreOpenStatus TryOpenForCheckpoint(
+        SharedMemoryStoreOptions options,
+        InstrumentedLockFreeCheckpoint checkpoint,
+        out MemoryStore? store)
+    {
+        long started = Stopwatch.GetTimestamp();
+        StoreOpenStatus open;
+        do
+        {
+            open = LockFreeInstrumentedStoreFactory.TryCreateOrOpen(options, checkpoint, out store);
+            if (open != StoreOpenStatus.StoreBusy)
+            {
+                return open;
+            }
+
+            Thread.Yield();
+        }
+        while (Stopwatch.GetElapsedTime(started) < OpenRetryTimeout);
+
+        store = null;
+        return open;
     }
 
     private static StoreStatus ExecuteTarget(
