@@ -262,7 +262,11 @@ internal sealed unsafe class LockFreeSlotTable
                 _participant.Token,
                 binding,
                 payloadLength);
-            StoreStatus residueStatus = SanitizeOlderDirectoryResidue(ref slot, generation, budget);
+            StoreStatus residueStatus = SanitizeOlderDirectoryResidue(
+                ref slot,
+                generation,
+                budget,
+                exactGenerationIsBusy: false);
             if (residueStatus != StoreStatus.Success)
             {
                 // Never roll Initializing(g) back to Free(g). Reusing the same
@@ -1571,10 +1575,18 @@ internal sealed unsafe class LockFreeSlotTable
         }
 
         // Directory code must clear the exact cell and generation-tagged
-        // descriptors before storage can be made reusable. Free/Retired metadata
-        // is deliberately ignored: a delayed helper must have no plain write it
-        // can resume after another helper advances and reuses the generation.
-        StoreStatus residue = SanitizeOlderDirectoryResidue(ref slot, generation, budget);
+        // descriptors before storage can be made reusable. An exact-generation
+        // descriptor can still belong to a concurrent directory helper, so it
+        // is ordinary incomplete cleanup rather than corruption. Only older
+        // residue is safe to CAS-clear here; a future generation remains a
+        // structural violation. Free/Retired metadata is deliberately ignored:
+        // a delayed helper must have no plain write it can resume after another
+        // helper advances and reuses the generation.
+        StoreStatus residue = SanitizeOlderDirectoryResidue(
+            ref slot,
+            generation,
+            budget,
+            exactGenerationIsBusy: true);
         if (residue != StoreStatus.Success)
         {
             return residue == StoreStatus.CorruptStore
@@ -1860,21 +1872,28 @@ internal sealed unsafe class LockFreeSlotTable
     private static StoreStatus SanitizeOlderDirectoryResidue(
         ref ValueSlotMetadataV2 slot,
         long claimedGeneration,
-        in LockFreeOperationBudget budget)
+        in LockFreeOperationBudget budget,
+        bool exactGenerationIsBusy)
     {
         StoreStatus location = SanitizeOlderLocation(
             ref slot.DirectoryLocation,
             claimedGeneration,
-            budget);
+            budget,
+            exactGenerationIsBusy);
         return location == StoreStatus.Success
-            ? SanitizeOlderOperation(ref slot.DirectoryOperation, claimedGeneration, budget)
+            ? SanitizeOlderOperation(
+                ref slot.DirectoryOperation,
+                claimedGeneration,
+                budget,
+                exactGenerationIsBusy)
             : location;
     }
 
     private static StoreStatus SanitizeOlderLocation(
         ref long word,
         long claimedGeneration,
-        in LockFreeOperationBudget budget)
+        in LockFreeOperationBudget budget,
+        bool exactGenerationIsBusy)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -1904,9 +1923,16 @@ internal sealed unsafe class LockFreeSlotTable
                 return LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
             }
 
-            if (location.Generation >= claimedGeneration)
+            if (location.Generation > claimedGeneration)
             {
                 return LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
+            }
+
+            if (location.Generation == claimedGeneration)
+            {
+                return exactGenerationIsBusy
+                    ? StoreStatus.StoreBusy
+                    : LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
             }
 
             AtomicControlWord.CompareExchange(ref word, 0, unchecked((long)raw));
@@ -1922,7 +1948,8 @@ internal sealed unsafe class LockFreeSlotTable
     private static StoreStatus SanitizeOlderOperation(
         ref long word,
         long claimedGeneration,
-        in LockFreeOperationBudget budget)
+        in LockFreeOperationBudget budget,
+        bool exactGenerationIsBusy)
     {
         for (var attempt = 0; ; attempt++)
         {
@@ -1952,9 +1979,16 @@ internal sealed unsafe class LockFreeSlotTable
                 return LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
             }
 
-            if (operation.Generation >= claimedGeneration)
+            if (operation.Generation > claimedGeneration)
             {
                 return LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
+            }
+
+            if (operation.Generation == claimedGeneration)
+            {
+                return exactGenerationIsBusy
+                    ? StoreStatus.StoreBusy
+                    : LockFreeCorruptionTrace.Corrupt(nameof(LockFreeSlotTable));
             }
 
             AtomicControlWord.CompareExchange(ref word, 0, unchecked((long)raw));

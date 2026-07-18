@@ -299,6 +299,72 @@ void stable_full_proof_and_reuse() {
         SMS_STATUS_INVALID_RESERVATION, "stale generation cannot advance replacement");
 }
 
+void recovery_reclaim_defers_exact_generation_directory_residue() {
+    Fixture fixture(1);
+    auto reservation = claim_and_mark(fixture);
+    IndexBinding binding{};
+    expect(IndexBinding::try_decode(reservation.slot_binding, binding),
+           "recovery reclaim binding decode");
+    auto* slot = fixture.table->slot(binding.slot_index);
+    expect(slot != nullptr, "recovery reclaim slot projection");
+    expect(fixture.table->try_begin_abort(reservation) == SMS_STATUS_SUCCESS,
+           "recovery reclaim begins ownerless abort");
+
+    std::uint64_t exact_operation{};
+    expect(DirectoryOperation::try_encode(
+               1, 5, 1, 0, binding.generation, exact_operation),
+           "exact-generation directory operation encoding");
+    MappedAtomic64::store_release(slot->DirectoryOperation, exact_operation);
+
+    expect(fixture.table->complete_reclaim(
+               reservation.slot_binding, OperationBudget::structural_attempt()) ==
+               SMS_STATUS_STORE_BUSY,
+           "exact-generation directory operation defers recovery reclaim");
+    expect(MappedAtomic64::load_acquire(slot->DirectoryOperation) == exact_operation,
+           "recovery reclaim preserves a concurrent exact-generation operation");
+    auto control = decode_slot(
+        MappedAtomic64::load_acquire(slot->Control),
+        "deferred recovery reclaim control decode");
+    expect(control.state == static_cast<std::int32_t>(SlotState::reclaiming) &&
+               control.generation == binding.generation,
+           "deferred recovery reclaim remains helpable");
+
+    MappedAtomic64::store_release(slot->DirectoryOperation, 0);
+    expect(fixture.table->complete_reclaim(
+               reservation.slot_binding, OperationBudget::structural_attempt()) ==
+               SMS_STATUS_SUCCESS,
+           "recovery reclaim completes after directory helper cleanup");
+    control = decode_slot(
+        MappedAtomic64::load_acquire(slot->Control),
+        "completed recovery reclaim control decode");
+    expect(control.state == static_cast<std::int32_t>(SlotState::free) &&
+               control.generation == binding.generation + 1,
+           "recovery reclaim retry advances the slot generation");
+
+    Fixture future_fixture(1);
+    auto future_reservation = claim_and_mark(future_fixture);
+    IndexBinding future_binding{};
+    expect(IndexBinding::try_decode(
+               future_reservation.slot_binding, future_binding),
+           "future-residue recovery reclaim binding decode");
+    auto* future_slot = future_fixture.table->slot(future_binding.slot_index);
+    expect(future_fixture.table->try_begin_abort(future_reservation) ==
+               SMS_STATUS_SUCCESS,
+           "future-residue recovery reclaim begins ownerless abort");
+    std::uint64_t future_operation{};
+    expect(DirectoryOperation::try_encode(
+               1, 5, 1, 0, future_binding.generation + 1, future_operation),
+           "future-generation directory operation encoding");
+    MappedAtomic64::store_release(future_slot->DirectoryOperation, future_operation);
+    expect(future_fixture.table->complete_reclaim(
+               future_reservation.slot_binding,
+               OperationBudget::structural_attempt()) == SMS_STATUS_CORRUPT_STORE,
+           "future-generation directory operation fails recovery reclaim closed");
+    expect(MappedAtomic64::load_acquire(future_slot->DirectoryOperation) ==
+               future_operation,
+           "recovery reclaim preserves future-generation residue for diagnosis");
+}
+
 void advancement_commit_and_stale_token_fencing() {
     Fixture fixture(1);
     auto reservation = claim_and_mark(fixture, SlotPublicationIntent::explicit_reservation, 8);
@@ -439,6 +505,7 @@ int main() {
     structural_classification_and_initialization();
     participant_owned_claim_and_metadata_publication();
     stable_full_proof_and_reuse();
+    recovery_reclaim_defers_exact_generation_directory_residue();
     advancement_commit_and_stale_token_fencing();
     abort_handoff_participant_retirement_and_terminal_generation();
     lifetime_validated_writable_projection();

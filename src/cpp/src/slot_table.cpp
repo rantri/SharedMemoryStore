@@ -278,7 +278,8 @@ sms_status SlotTable::reservation_status(
 sms_status SlotTable::sanitize_older_directory_residue(
     ValueSlotMetadataV2& current,
     std::int64_t claimed_generation,
-    const OperationBudget& budget) noexcept {
+    const OperationBudget& budget,
+    bool exact_generation_is_busy) noexcept {
     auto clear_location = [&]() noexcept -> sms_status {
         for (std::int32_t attempt = 0; ; ++attempt) {
             const auto bound = budget.check_periodic(attempt);
@@ -287,8 +288,13 @@ sms_status SlotTable::sanitize_older_directory_residue(
             if (raw == 0) return SMS_STATUS_SUCCESS;
             DirectoryLocation location{};
             if (!DirectoryLocation::try_decode(raw, location) ||
-                location.generation >= claimed_generation) {
+                location.generation > claimed_generation) {
                 return SMS_STATUS_CORRUPT_STORE;
+            }
+            if (location.generation == claimed_generation) {
+                return exact_generation_is_busy
+                    ? SMS_STATUS_STORE_BUSY
+                    : SMS_STATUS_CORRUPT_STORE;
             }
             auto expected = raw;
             (void)MappedAtomic64::compare_exchange(
@@ -309,8 +315,13 @@ sms_status SlotTable::sanitize_older_directory_residue(
             if (raw == 0) return SMS_STATUS_SUCCESS;
             DirectoryOperation operation{};
             if (!DirectoryOperation::try_decode(raw, operation) ||
-                operation.generation >= claimed_generation) {
+                operation.generation > claimed_generation) {
                 return SMS_STATUS_CORRUPT_STORE;
+            }
+            if (operation.generation == claimed_generation) {
+                return exact_generation_is_busy
+                    ? SMS_STATUS_STORE_BUSY
+                    : SMS_STATUS_CORRUPT_STORE;
             }
             auto expected = raw;
             (void)MappedAtomic64::compare_exchange(
@@ -396,7 +407,7 @@ sms_status SlotTable::try_claim_reservation(
             store_id_, participant_.token, binding, payload_length};
 
         const auto residue = sanitize_older_directory_residue(
-            *current, decoded.generation, budget);
+            *current, decoded.generation, budget, false);
         if (residue != SMS_STATUS_SUCCESS) {
             (void)try_begin_abort(reservation);
             (void)complete_reclaim(
@@ -851,21 +862,25 @@ sms_status SlotTable::complete_reclaim(
                 expected, layout_.participant_record_count, occupied)) {
             return SMS_STATUS_CORRUPT_STORE;
         }
-        if (expected == reclaiming ||
-            has_advanced_or_retired(expected, binding.generation)) {
+        if (has_advanced_or_retired(expected, binding.generation)) {
             return SMS_STATUS_SUCCESS;
         }
-        auto stable = expected;
-        if (MappedAtomic64::compare_exchange(current->Control, stable, expected)) {
-            return SMS_STATUS_CORRUPT_STORE;
+        if (expected != reclaiming) {
+            auto stable = expected;
+            if (MappedAtomic64::compare_exchange(current->Control, stable, expected)) {
+                return SMS_STATUS_CORRUPT_STORE;
+            }
+            return SMS_STATUS_STORE_BUSY;
         }
-        return SMS_STATUS_STORE_BUSY;
     }
 
-    if (MappedAtomic64::load_acquire(current->DirectoryLocation) != 0 ||
-        MappedAtomic64::load_acquire(current->DirectoryOperation) != 0) {
-        return SMS_STATUS_STORE_BUSY;
-    }
+    // A current-generation descriptor may still belong to a concurrent
+    // directory helper. Defer it without clearing; strictly older residue is
+    // safe to exact-clear, while future-generation residue is structural
+    // corruption. This mirrors the managed recovery completion contract.
+    const auto residue = sanitize_older_directory_residue(
+        *current, binding.generation, budget, true);
+    if (residue != SMS_STATUS_SUCCESS) return residue;
     sms::test_detail::reach_checkpoint(
         sms::test_detail::CheckpointId::ReclaimAfterMetadataValidation);
     const auto final_bound = budget.check();
