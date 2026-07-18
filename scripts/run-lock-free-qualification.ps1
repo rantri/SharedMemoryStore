@@ -40,6 +40,11 @@ $churnTestNamespace = 'SharedMemoryStore.IntegrationTests'
 $churnTestClass = 'LockFreeChurnIntegrationTests'
 $churnQualificationTestMethod = 'CollisionHeavyMultiProcessRemoveReuseRestoresCapacityAndKeepsLateLatencyBounded'
 $churnQualificationTestNameFragment = "$churnTestClass.$churnQualificationTestMethod"
+$recoveryCanonicalTestFqn = 'SharedMemoryStore.IntegrationTests.LockFreeCrashRecoveryIntegrationTests.' +
+    'EveryCanonicalCheckpointCanBeKilledRecoveredAndFilledToCapacity'
+$recoveryFixedTestFqns = @(
+    'SharedMemoryStore.IntegrationTests.LockFreeCrashRecoveryIntegrationTests.' +
+        'CheckpointAgentRetriesTransientColdOpenContention')
 
 $outputRoot = if ([IO.Path]::IsPathFullyQualified($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
@@ -1755,7 +1760,7 @@ function Assert-TrxStepEvidence {
     param(
         [Parameter(Mandatory)][string]$Step,
         [Parameter(Mandatory)][string]$Directory,
-        [int]$ExpectedPassedCount = -1,
+        [int64]$ExpectedPassedCount = -1,
         [string[]]$RequiredTestNameContains = @())
 
     $rows = @(Get-TrxResults $Directory)
@@ -1821,6 +1826,38 @@ function Assert-ExactPassedTrxRows {
     }
 
     return $passed
+}
+
+function Assert-RecoveryTrxComposition {
+    param(
+        [Parameter(Mandatory)][object[]]$Rows,
+        [Parameter(Mandatory)][int64]$ExpectedCanonicalCases,
+        [Parameter(Mandatory)][string]$CanonicalTestFqn,
+        [Parameter(Mandatory)][string[]]$ExpectedFixedTestFqns)
+
+    if ($ExpectedCanonicalCases -lt 1) {
+        throw 'Recovery TRX composition requires at least one canonical case.'
+    }
+    if ($ExpectedFixedTestFqns.Count -eq 0) {
+        throw 'Recovery TRX composition requires at least one fixed regression test.'
+    }
+    if (@($Rows | Where-Object { [string]$_.outcome -cne 'Passed' }).Count -ne 0) {
+        throw 'Recovery TRX composition contains a non-passing row.'
+    }
+
+    $canonicalPrefix = $CanonicalTestFqn + '('
+    $canonical = @($Rows | Where-Object {
+        ([string]$_.testName).StartsWith($canonicalPrefix, [StringComparison]::Ordinal)
+    })
+    if ([int64]$canonical.Count -ne $ExpectedCanonicalCases) {
+        throw "Recovery TRX composition has $($canonical.Count) canonical rows; expected exactly $ExpectedCanonicalCases."
+    }
+
+    $fixed = @($Rows | Where-Object {
+        -not ([string]$_.testName).StartsWith($canonicalPrefix, [StringComparison]::Ordinal)
+    })
+    [void](Assert-ExactPassedTrxRows $fixed $ExpectedFixedTestFqns)
+    return $canonical
 }
 
 function Assert-ExactTrxStepEvidence {
@@ -2423,30 +2460,33 @@ function Assert-OwnerLeakEvidence {
         $TrxDirectories.Values | ForEach-Object { [IO.Path]::GetRelativePath($root, [string]$_) })
 }
 
-function Assert-RecoveryCheckpointEvidence {
+function Assert-RecoveryCheckpointRows {
     param(
         [Parameter(Mandatory)][object[]]$PassedRows,
-        [Parameter(Mandatory)][int64]$ExpectedCases)
+        [Parameter(Mandatory)][int64]$ExpectedCases,
+        [Parameter(Mandatory)][object[]]$CheckpointCatalog,
+        [Parameter(Mandatory)][string]$CanonicalTestFqn)
 
-    $testPrefix = 'SharedMemoryStore.IntegrationTests.LockFreeCrashRecoveryIntegrationTests.' +
-        'EveryCanonicalCheckpointCanBeKilledRecoveredAndFilledToCapacity'
+    if ($ExpectedCases -lt 1 -or $CheckpointCatalog.Count -lt 1) {
+        throw 'Recovery checkpoint validation requires nonempty cases and catalog.'
+    }
     $parsed = [Collections.Generic.List[object]]::new()
     foreach ($row in $PassedRows) {
         $match = [regex]::Match(
             [string]$row.testName,
-            '^' + [regex]::Escape($testPrefix) +
+            '^' + [regex]::Escape($CanonicalTestFqn) +
                 '\(caseIndex:\s*(?<case>[0-9]+),\s*checkpointValue:\s*(?<checkpoint>[0-9]+)\)$')
         if (-not $match.Success) {
-            Fail-StepValidation 'recovery' "Recovery TRX row has an unparseable identity: '$($row.testName)'."
+            throw "Recovery TRX row has an unparseable identity: '$($row.testName)'."
         }
         $caseIndex = [int64]::Parse($match.Groups['case'].Value, [Globalization.CultureInfo]::InvariantCulture)
         $checkpointId = [int]::Parse($match.Groups['checkpoint'].Value, [Globalization.CultureInfo]::InvariantCulture)
         if ($caseIndex -lt 0 -or $caseIndex -ge $ExpectedCases) {
-            Fail-StepValidation 'recovery' "Recovery TRX case index $caseIndex is outside [0,$($ExpectedCases - 1)]."
+            throw "Recovery TRX case index $caseIndex is outside [0,$($ExpectedCases - 1)]."
         }
-        $expectedCheckpointId = [int]$checkpointCatalog[[int]($caseIndex % $checkpointCatalog.Count)].id
+        $expectedCheckpointId = [int]$CheckpointCatalog[[int]($caseIndex % $CheckpointCatalog.Count)].id
         if ($checkpointId -ne $expectedCheckpointId) {
-            Fail-StepValidation 'recovery' "Recovery case $caseIndex executed checkpoint $checkpointId; expected canonical checkpoint $expectedCheckpointId."
+            throw "Recovery case $caseIndex executed checkpoint $checkpointId; expected canonical checkpoint $expectedCheckpointId."
         }
         $parsed.Add([pscustomobject]@{ caseIndex = $caseIndex; checkpointId = $checkpointId })
     }
@@ -2454,26 +2494,120 @@ function Assert-RecoveryCheckpointEvidence {
     $caseIndexes = @($parsed | ForEach-Object caseIndex | Sort-Object)
     if ($parsed.Count -ne $ExpectedCases `
         -or @($caseIndexes | Sort-Object -Unique).Count -ne $ExpectedCases) {
-        Fail-StepValidation 'recovery' 'Recovery TRX evidence omitted or duplicated a configured case index.'
+        throw 'Recovery TRX evidence omitted or duplicated a configured case index.'
     }
     for ($index = 0; $index -lt $caseIndexes.Count; $index++) {
         if ([int64]$caseIndexes[$index] -ne [int64]$index) {
-            Fail-StepValidation 'recovery' "Recovery TRX case-index set is not contiguous at index $index."
+            throw "Recovery TRX case-index set is not contiguous at index $index."
         }
     }
     $actualCheckpointSet = @($parsed | ForEach-Object checkpointId | Sort-Object -Unique)
-    $expectedCheckpointSet = @($checkpointCatalog | ForEach-Object { [int]$_.id })
+    $expectedCheckpointSet = @($CheckpointCatalog | ForEach-Object { [int]$_.id })
     if (($actualCheckpointSet -join ',') -cne ($expectedCheckpointSet -join ',')) {
-        Fail-StepValidation 'recovery' 'Recovery TRX evidence does not cover the exact source-derived checkpoint catalog.'
+        throw 'Recovery TRX evidence does not cover the exact source-derived checkpoint catalog.'
     }
 
     $checkpointSetDigest = Get-StringSha256 (
         ($expectedCheckpointSet | ForEach-Object { '{0:D3}' -f $_ }) -join "`n")
+    return [pscustomobject]@{
+        configuredCases = $ExpectedCases
+        catalogCheckpointCount = $CheckpointCatalog.Count
+        checkpointSetDigest = $checkpointSetDigest
+    }
+}
+
+function Assert-RecoveryCheckpointEvidence {
+    param(
+        [Parameter(Mandatory)][object[]]$PassedRows,
+        [Parameter(Mandatory)][int64]$ExpectedCases)
+
+    try {
+        $validation = Assert-RecoveryCheckpointRows `
+            $PassedRows $ExpectedCases $checkpointCatalog $recoveryCanonicalTestFqn
+    }
+    catch {
+        Fail-StepValidation 'recovery' $_.Exception.Message
+    }
     $result = Get-StepResult 'recovery'
     $result.validation = @($result.validation) + @(
-        "configuredCases=$ExpectedCases",
-        "catalogCheckpointCount=$($checkpointCatalog.Count)",
-        "checkpointSetDigest=$checkpointSetDigest")
+        "configuredCases=$($validation.configuredCases)",
+        "catalogCheckpointCount=$($validation.catalogCheckpointCount)",
+        "checkpointSetDigest=$($validation.checkpointSetDigest)")
+}
+
+function Invoke-RecoveryQualificationVerifierSelfTest {
+    $catalog = @(
+        [pscustomobject]@{ id = 11 },
+        [pscustomobject]@{ id = 22 })
+    $newRow = {
+        param([Parameter(Mandatory)][string]$Name)
+        return [pscustomobject]@{ testName = $Name; outcome = 'Passed'; file = 'synthetic.trx' }
+    }
+    $canonical0 = & $newRow ($recoveryCanonicalTestFqn + '(caseIndex: 0, checkpointValue: 11)')
+    $canonical1 = & $newRow ($recoveryCanonicalTestFqn + '(caseIndex: 1, checkpointValue: 22)')
+    $fixed = & $newRow $recoveryFixedTestFqns[0]
+
+    $validCanonical = @(Assert-RecoveryTrxComposition `
+        @($canonical0, $canonical1, $fixed) 2 $recoveryCanonicalTestFqn $recoveryFixedTestFqns)
+    [void](Assert-RecoveryCheckpointRows $validCanonical 2 $catalog $recoveryCanonicalTestFqn)
+    $assertions = 1
+
+    $negativeCases = @(
+        [pscustomobject]@{
+            name = 'missing-fixed'
+            rows = @($canonical0, $canonical1)
+        },
+        [pscustomobject]@{
+            name = 'suffix-impostor'
+            rows = @($canonical0, $canonical1, (& $newRow ($recoveryFixedTestFqns[0] + 'Extra')))
+        },
+        [pscustomobject]@{
+            name = 'unknown-extra'
+            rows = @($canonical0, $canonical1, $fixed, (& $newRow 'SharedMemoryStore.IntegrationTests.UnknownRecoveryFact'))
+        },
+        [pscustomobject]@{
+            name = 'duplicate-fixed'
+            rows = @($canonical0, $canonical1, $fixed, $fixed)
+        },
+        [pscustomobject]@{
+            name = 'canonical-missing-impostor-replacement'
+            rows = @($canonical0, $fixed, (& $newRow ($recoveryFixedTestFqns[0] + 'Extra')))
+        },
+        [pscustomobject]@{
+            name = 'malformed-canonical'
+            rows = @(
+                $canonical0,
+                (& $newRow ($recoveryCanonicalTestFqn + '(caseIndex: nope, checkpointValue: 22)')),
+                $fixed)
+        },
+        [pscustomobject]@{
+            name = 'duplicate-canonical'
+            rows = @($canonical0, $canonical0, $fixed)
+        },
+        [pscustomobject]@{
+            name = 'wrong-checkpoint'
+            rows = @(
+                $canonical0,
+                (& $newRow ($recoveryCanonicalTestFqn + '(caseIndex: 1, checkpointValue: 11)')),
+                $fixed)
+        })
+    foreach ($case in $negativeCases) {
+        $rejected = $false
+        try {
+            $canonical = @(Assert-RecoveryTrxComposition `
+                @($case.rows) 2 $recoveryCanonicalTestFqn $recoveryFixedTestFqns)
+            [void](Assert-RecoveryCheckpointRows $canonical 2 $catalog $recoveryCanonicalTestFqn)
+        }
+        catch {
+            $rejected = $true
+        }
+        if (-not $rejected) {
+            throw "Recovery qualification verifier self-test accepted invalid case '$($case.name)'."
+        }
+        $assertions++
+    }
+
+    return $assertions
 }
 
 function Get-ExpectedReleaseOsRows {
@@ -5490,6 +5624,11 @@ try {
         "churnQualificationTest=$($churnQualificationContract.fullyQualifiedName)",
         "boundedOperationSlackMilliseconds=$($config.boundedOperationSlackMilliseconds)",
         "leakAssertions=$(@($config.requiredLeakAssertions).Count)") @([IO.Path]::GetRelativePath($root, $configPath))
+    $recoveryVerifierAssertions = Invoke-RecoveryQualificationVerifierSelfTest
+    $configurationResult = Get-StepResult 'configuration-contract'
+    $configurationResult.validation = @($configurationResult.validation) + @(
+        "recoveryVerifierAssertions=$recoveryVerifierAssertions",
+        'recoveryComposition=canonical-cases-plus-exact-fixed-regressions')
 
     if ($ValidateOnly) {
         $sc017ConfigurationAssertions = Invoke-Sc017ConfigurationVerifierSelfTest
@@ -5760,12 +5899,26 @@ try {
             '--logger', 'trx', '--results-directory', $recoveryTrx)) @{
                 SMS_LOCK_FREE_RECOVERY_CASES = [int]$selected.recoveryCases
             }
-        $recoveryPassed = @(Assert-TrxStepEvidence 'recovery' $recoveryTrx ([int]$selected.recoveryCases) @(
-            'LockFreeCrashRecoveryIntegrationTests.EveryCanonicalCheckpointCanBeKilledRecoveredAndFilledToCapacity'))
-        Assert-RecoveryCheckpointEvidence $recoveryPassed ([int64]$selected.recoveryCases)
+        $fixedRecoveryRegressionCount = [int64]$recoveryFixedTestFqns.Count
+        $recoveryPassed = @(Assert-TrxStepEvidence 'recovery' $recoveryTrx `
+            ([int64]$selected.recoveryCases + $fixedRecoveryRegressionCount))
+        try {
+            $canonicalRecoveryPassed = @(Assert-RecoveryTrxComposition `
+                $recoveryPassed `
+                ([int64]$selected.recoveryCases) `
+                $recoveryCanonicalTestFqn `
+                $recoveryFixedTestFqns)
+        }
+        catch {
+            Fail-StepValidation 'recovery' $_.Exception.Message
+        }
+        Assert-RecoveryCheckpointEvidence $canonicalRecoveryPassed ([int64]$selected.recoveryCases)
         $recoveryResult = Get-StepResult 'recovery'
         $recoveryResult.qualification = 'configured-recovery-case-count-and-capacity-proof-passed'
-        $recoveryResult.validation = @($recoveryResult.validation) + "recoveryCases=$([int]$selected.recoveryCases)"
+        $recoveryResult.validation = @($recoveryResult.validation) + @(
+            "recoveryCases=$([int]$selected.recoveryCases)",
+            "fixedRecoveryRegressionCount=$fixedRecoveryRegressionCount",
+            "fixedRecoveryRegressions=$($recoveryFixedTestFqns -join ',')")
         Assert-OwnerLeakEvidence @{
             churn = $churnTrx
             recovery = $recoveryTrx
