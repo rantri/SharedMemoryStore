@@ -112,6 +112,11 @@ must resolve inside that directory and reproduce its recorded digest. Missing,
 extra, duplicate, linked, out-of-root, truncated, or digest-mismatched evidence
 fails qualification.
 
+Before the aggregate suite runs, the controller exercises the validated native
+and Python distributions, copies their exact package/runtime inputs into the
+run evidence tree, and binds every copy to its source path, length, and digest.
+Completion revalidates both sides; source or evidence-copy drift fails the run.
+
 ## One-Protocol and No-Legacy Gate
 
 Static source, built-artifact, package, public-API, and runtime inspection must
@@ -424,6 +429,10 @@ release artifacts. `overallStatus` may be `passed` only when no High or Medium
 finding remains unresolved. The finalizer rejects revision drift, a missing
 independence assertion, a non-passing review, reused reserved outputs, any
 failed platform row, and any evidence-tree hash or file-set mismatch.
+The schema is closed at every object level: additional or missing properties
+and incorrectly typed values are rejected. Finding severity is exactly one of
+`high`, `medium`, or `low`; finding status is exactly `open` or `resolved`;
+finding IDs are non-empty and unique; and finding summaries are non-empty.
 
 ## Generated Summary Requirements
 
