@@ -106,12 +106,17 @@ int main() {
     SMS_CHECK(store.protocol() == protocol_info{});
     SMS_CHECK(store.try_publish(sms_test_bytes(key), sms_test_bytes(value)) == status::store_disposed);
 
-    for (int iteration = 0; iteration < 64; ++iteration) {
+    // Repeated concurrent close catches lost-wake regressions in the outer
+    // handle handoff while also proving the mapping can be reused each time.
+    for (int iteration = 0; iteration < 128; ++iteration) {
         memory_store reopened;
         SMS_CHECK(memory_store::try_create_or_open(options, reopened) ==
                   open_status::success);
-        reopened.close();
-        reopened.close();
+        std::thread first_reclose([&] { reopened.close(); });
+        std::thread second_reclose([&] { reopened.close(); });
+        first_reclose.join();
+        second_reclose.join();
+        SMS_CHECK(!reopened.valid());
     }
     return 0;
 }

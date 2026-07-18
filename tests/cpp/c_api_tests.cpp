@@ -389,15 +389,17 @@ int main() {
     sms_close_store(store);
     sms_destroy_store(store);
 
-    // Repeated logical close plus caller-synchronized destroy releases every
-    // outer handle and physical resource; the same create-new name can churn.
-    for (int iteration = 0; iteration < 64; ++iteration) {
+    // Repeated concurrent logical close plus caller-synchronized destroy
+    // catches lost-wake regressions and proves the same name can churn.
+    for (int iteration = 0; iteration < 128; ++iteration) {
         sms_store* reopened{};
         SMS_ABI_CHECK(sms_open_store(&options, &wait, &reopened) ==
                       SMS_OPEN_SUCCESS);
         SMS_ABI_CHECK(reopened != nullptr);
-        sms_close_store(reopened);
-        sms_close_store(reopened);
+        std::thread first_reclose([&] { sms_close_store(reopened); });
+        std::thread second_reclose([&] { sms_close_store(reopened); });
+        first_reclose.join();
+        second_reclose.join();
         sms_destroy_store(reopened);
     }
     return 0;
