@@ -257,6 +257,12 @@
 
 ---
 
+## Phase 8: Convergence
+
+- [ ] T132 Freeze the corrected concurrent-close implementation and rerun immutable Windows x64/Linux x64 PR, nightly, release, independent-review, and final rollup evidence for the exact revision per SC-010 and T129 (partial)
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

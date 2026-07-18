@@ -4,8 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <condition_variable>
-#include <mutex>
 #include <new>
 
 using sms::detail::Diagnostics;
@@ -27,8 +25,6 @@ struct sms_store {
     // enters a publish/read/remove path.
     std::atomic<std::shared_ptr<Store>> implementation;
     const LayoutV2 public_layout;
-    std::mutex close_mutex;
-    std::condition_variable close_completed;
     std::atomic<close_state> state{close_state::open};
 };
 struct sms_lease {
@@ -324,11 +320,14 @@ void SMS_CALL sms_close_store(sms_store* store) {
         for (;;) {
             if (observed == sms_store::close_state::closed) return;
             if (observed == sms_store::close_state::closing) {
-                std::unique_lock lock(store->close_mutex);
-                store->close_completed.wait(lock, [store] {
-                    return store->state.load(std::memory_order_acquire) ==
-                        sms_store::close_state::closed;
-                });
+                // Atomic wait rechecks the state before sleeping, so a closer
+                // cannot miss the owner's closed transition and notification.
+                store->state.wait(observed, std::memory_order_acquire);
+                observed = store->state.load(std::memory_order_acquire);
+                while (observed != sms_store::close_state::closed) {
+                    store->state.wait(observed, std::memory_order_acquire);
+                    observed = store->state.load(std::memory_order_acquire);
+                }
                 return;
             }
             if (store->state.compare_exchange_weak(
@@ -345,7 +344,7 @@ void SMS_CALL sms_close_store(sms_store* store) {
         if (implementation) implementation->close();
         store->state.store(
             sms_store::close_state::closed, std::memory_order_release);
-        store->close_completed.notify_all();
+        store->state.notify_all();
     } catch (...) {
         // No C++ exception may cross the C ABI. A synchronization-adapter
         // failure is not shared corruption and cannot justify termination.
@@ -354,11 +353,7 @@ void SMS_CALL sms_close_store(sms_store* store) {
         if (implementation) implementation->close();
         store->state.store(
             sms_store::close_state::closed, std::memory_order_release);
-        try {
-            store->close_completed.notify_all();
-        } catch (...) {
-            // notify_all is non-throwing in supported standard libraries.
-        }
+        store->state.notify_all();
     }
 }
 
