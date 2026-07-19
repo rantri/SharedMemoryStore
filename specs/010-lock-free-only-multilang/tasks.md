@@ -261,6 +261,7 @@
 
 - [ ] T132 Freeze the corrected concurrent-close implementation and rerun immutable Windows x64/Linux x64 PR, nightly, release, independent-review, and final rollup evidence for the exact revision per SC-010 and T129 (partial)
 - [X] T133 Harden all sync-probe worker cold opens against transient `StoreBusy` and prove the bounded policy across Windows and Linux with a real cross-process cold-gate regression
+- [X] T134 Start broker-directed and large-ingest workers before pinning the in-process producer so child processes inherit the unrestricted processor mask, and prove unique affinity assignments for every applied role on Windows and Linux
 
 ---
 
