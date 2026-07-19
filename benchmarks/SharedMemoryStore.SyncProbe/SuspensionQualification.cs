@@ -200,8 +200,10 @@ internal static class SuspensionQualification
         using (store)
         {
             var state = new WorkerState(workload, role, workerId);
-            if (!RunWarmup(store, state, warmupSeconds))
+            if (!RunWarmup(store, state, warmupSeconds, out SortedDictionary<string, long> warmupHistogram))
             {
+                Console.Error.WriteLine(
+                    "Suspension worker warmup failed: " + JsonSerializer.Serialize(warmupHistogram));
                 return 66;
             }
 
@@ -304,12 +306,12 @@ internal static class SuspensionQualification
                 }
 
                 SuspensionWorkerReady[] ready = await AwaitWorkersReady(workers);
-                DiagnosticsSnapshot beforeBaseline = GetDiagnostics(owner);
+                DiagnosticsSnapshot beforeBaseline = GetDiagnostics(owner, "before-baseline");
                 SuspensionWindowResult[] baseline = await MeasureWorkers(
                     workers,
                     baselineSeconds,
                     "baseline");
-                DiagnosticsSnapshot afterBaseline = GetDiagnostics(owner);
+                DiagnosticsSnapshot afterBaseline = GetDiagnostics(owner, "after-baseline");
 
                 pausedAgent = StartPausedAgent(
                     agentPath,
@@ -349,12 +351,12 @@ internal static class SuspensionQualification
                     RemoveStoreFullFillers(owner, checkpoint.Id);
                 }
 
-                DiagnosticsSnapshot beforeSuspended = GetDiagnostics(owner);
+                DiagnosticsSnapshot beforeSuspended = GetDiagnostics(owner, "before-suspended");
                 SuspensionWindowResult[] suspended = await MeasureWorkers(
                     workers,
                     pauseSeconds,
                     "suspended");
-                DiagnosticsSnapshot afterSuspended = GetDiagnostics(owner);
+                DiagnosticsSnapshot afterSuspended = GetDiagnostics(owner, "after-suspended");
 
                 await pausedAgent.StandardInput.WriteLineAsync("CONTINUE");
                 await pausedAgent.StandardInput.FlushAsync();
@@ -365,7 +367,7 @@ internal static class SuspensionQualification
                 string trailingOutput = await agentOutput;
                 string trailingError = await agentError;
                 int agentExitCode = pausedAgent.ExitCode;
-                DiagnosticsSnapshot afterResume = GetDiagnostics(owner);
+                DiagnosticsSnapshot afterResume = GetDiagnostics(owner, "after-resume");
 
                 long baselineFailures = baseline.Sum(static result => result.Failures);
                 long suspendedFailures = suspended.Sum(static result => result.Failures);
@@ -541,7 +543,11 @@ internal static class SuspensionQualification
         }
     }
 
-    private static bool RunWarmup(Store store, WorkerState state, int seconds)
+    private static bool RunWarmup(
+        Store store,
+        WorkerState state,
+        int seconds,
+        out SortedDictionary<string, long> histogram)
     {
         var counters = new WindowCounters();
         var stopwatch = Stopwatch.StartNew();
@@ -550,6 +556,7 @@ internal static class SuspensionQualification
             ExecuteCycle(store, state, counters);
         }
 
+        histogram = counters.ToHistogram();
         return counters.Failures == 0;
     }
 
@@ -613,18 +620,20 @@ internal static class SuspensionQualification
                 return;
             }
 
-            bool descriptorValid = lease.DescriptorSpan.Length == MaxDescriptorBytes;
+            ReadOnlySpan<byte> descriptor = lease.DescriptorSpan;
+            ReadOnlySpan<byte> value = lease.ValueSpan;
+            bool descriptorValid = descriptor.Length == MaxDescriptorBytes;
             long readerGeneration = descriptorValid
-                ? System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(lease.DescriptorSpan)
+                ? System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(descriptor)
                 : long.MinValue;
             descriptorValid = descriptorValid
                 && BenchmarkProtocol.ValidateDescriptor(
-                    lease.DescriptorSpan,
+                    descriptor,
                     keyIndex,
                     readerGeneration,
                     MaxValueBytes);
             bool payloadValid = descriptorValid
-                && BenchmarkProtocol.ValidateGenerationPayload(lease.ValueSpan, keyIndex, readerGeneration);
+                && BenchmarkProtocol.ValidateGenerationPayload(value, keyIndex, readerGeneration);
             if (!descriptorValid || !payloadValid)
             {
                 counters.Failures++;
@@ -1126,10 +1135,11 @@ internal static class SuspensionQualification
             mode,
             enableLeaseRecovery: true);
 
-    private static DiagnosticsSnapshot GetDiagnostics(Store store)
+    private static DiagnosticsSnapshot GetDiagnostics(Store store, string phase)
     {
         for (var attempt = 0; attempt < 64; attempt++)
         {
+            _ = LockFreeCorruptionTrace.Consume();
             StoreStatus status = store.TryGetDiagnostics(out DiagnosticsSnapshot snapshot);
             if (status == StoreStatus.Success)
             {
@@ -1138,7 +1148,9 @@ internal static class SuspensionQualification
 
             if (status != StoreStatus.StoreBusy)
             {
-                throw new InvalidOperationException("Suspension diagnostics failed: " + status);
+                string origin = LockFreeCorruptionTrace.Consume() ?? "untraced-or-already-latched";
+                throw new InvalidOperationException(
+                    $"Suspension diagnostics failed during {phase}: {status}; corruptionOrigin={origin}");
             }
 
             Thread.SpinWait(32 << Math.Min(attempt, 10));
@@ -1421,8 +1433,15 @@ internal static class SuspensionQualification
         internal long ApiCalls => _statusCounters.TotalOperations;
         internal long Failures { get; set; }
 
-        internal void Record(OperationKind operation, StoreStatus status) =>
+        internal void Record(OperationKind operation, StoreStatus status)
+        {
             _statusCounters.Record(operation, status);
+            if (status == StoreStatus.CorruptStore)
+            {
+                _statusCounters.RecordCorruptReason(
+                    LockFreeCorruptionTrace.Consume() ?? "untraced-or-already-latched");
+            }
+        }
 
         internal void RecordChecksumFailure() => _statusCounters.RecordChecksumFailure();
 

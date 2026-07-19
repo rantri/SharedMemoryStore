@@ -278,3 +278,30 @@ gates carry the lock-free progress claim.
 proven platform guarantee. Elevating benchmark processes to real-time priority
 would make qualification less representative and can starve host services.
 Ignoring maximum latency entirely would remove useful hang detection.
+
+## Decision: Preserve first-failure suspension diagnostics without speculative engine changes
+
+**Decision**: Cache each borrowed descriptor/value projection once per probe
+operation, retain warmup operation histograms, label owner diagnostics by
+qualification phase, and consume the first available lock-free corruption
+origin whenever a `CorruptStore` result is counted. Preserve the immutable
+Linux nightly run that passed 107 of 108 suspension scenarios and failed the
+mixed-churn `ProjectBeforeHandleValidation` checkpoint. Do not change the
+store engine unless the enhanced evidence identifies a reproducible engine
+transition defect.
+
+**Rationale**: Investigation reproduced a secondary probe exception when the
+worker evaluated `DescriptorSpan` more than once after the store had already
+latched corruption; the later projection could become empty and obscure the
+earlier result. Capturing the projections once follows the borrowed-view
+lifetime contract and ensures the original store result remains observable.
+The enhanced probe subsequently passed 200 focused short trials, 30 extended
+warmup trials, a current Windows mixed-churn stress run, and the complete 108
+Linux suspension scenarios. Those results justify the diagnostic hardening,
+but they do not establish a root cause for the one preserved rare latch or
+justify inventing a core transition fix.
+
+**Alternatives rejected**: Discarding the failed immutable run would erase
+valuable production-qualification evidence. Retrying without better evidence
+could repeat the same opaque failure. Changing recovery or publication logic
+based only on a non-reproduced symptom would add unproven protocol risk.
