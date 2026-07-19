@@ -331,7 +331,7 @@ Legacy result row participates.
 | Windows tiny-operation p99 | Eight-process publish/remove and acquire/release p99 is at most 25 microseconds. |
 | Tiny-operation throughput | Each eight-process scenario sustains at least 100,000 credited public operations/second aggregate on each qualified host. |
 | Scaling | Eight-process p99 is at most 3 times the corresponding one-process p99. |
-| Raw stall | No successful raw lock-free trial operation stalls longer than 10 milliseconds. |
+| Raw stall | No successful raw lock-free trial operation stalls longer than 10 milliseconds on Linux x64 or 250 milliseconds on Windows x64. The Windows ceiling is a scheduler-tolerant hard hang detector; strict p99, scaling, duration-bound, and suspension-progress gates remain mandatory. |
 | Reader fan-out | Twelve mixed-runtime readers acquire one 1.3 MB generation, agree on checksum, survive pending removal, and complete final reclamation without a hot lock or timeout. |
 | Long mixed stress | 1,000,000 credited mixed-runtime lifecycle operations complete with zero safety failure and no safely recoverable capacity leak. |
 

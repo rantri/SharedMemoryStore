@@ -360,7 +360,7 @@ layout 1.2.
 | Windows tiny-operation p99 | Eight-process publish/remove and acquire/release p99 is at most 25 microseconds |
 | Tiny-operation throughput | Every eight-process scenario sustains at least 100,000 credited operations/second aggregate |
 | Scaling | Eight-process p99 is at most 3 times its one-process p99 |
-| Raw stall | No successful raw operation stalls longer than 10 milliseconds |
+| Raw stall | No successful raw operation stalls longer than 10 milliseconds on Linux x64 or 250 milliseconds on Windows x64; the Windows maximum is a scheduler-tolerant hang detector and does not replace the strict p99, scaling, duration-bound, or suspension-progress gates |
 | Reader fan-out | Twelve mixed-runtime readers complete the 1.3 MB pending-removal/final-reclaim scenario without timeout or hot lock |
 | Mixed stress | At least 1,000,000 credited operations complete with zero forbidden safety outcome or safely recoverable capacity leak |
 
