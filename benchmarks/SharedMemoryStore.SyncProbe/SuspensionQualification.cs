@@ -188,7 +188,7 @@ internal static class SuspensionQualification
             affinityOrdinal,
             out int assignedProcessor,
             out string affinityStrategy);
-        StoreOpenStatus open = Store.TryCreateOrOpen(
+        StoreOpenStatus open = WorkerStoreOpenPolicy.TryOpen(
             CreateOptions(storeName, OpenMode.OpenExisting),
             out Store? store);
         if (open != StoreOpenStatus.Success || store is null)

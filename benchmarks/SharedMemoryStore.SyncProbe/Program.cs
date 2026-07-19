@@ -1531,7 +1531,7 @@ static int RunAutonomousWorker(string[] args)
         affinityOrdinal,
         out int assignedProcessor,
         out string affinityStrategy);
-    StoreOpenStatus openStatus = Store.TryCreateOrOpen(
+    StoreOpenStatus openStatus = WorkerStoreOpenPolicy.TryOpen(
         Options(name, OpenMode.OpenExisting, profile, scenario, payloadBytes),
         out Store? store);
     if (openStatus != StoreOpenStatus.Success || store is null)
@@ -1697,7 +1697,7 @@ static async Task<int> RunBrokerWorker(string[] args)
         affinityOrdinal,
         out int assignedProcessor,
         out string affinityStrategy);
-    StoreOpenStatus openStatus = Store.TryCreateOrOpen(
+    StoreOpenStatus openStatus = WorkerStoreOpenPolicy.TryOpen(
         Options(name, OpenMode.OpenExisting, profile, scenario, payloadBytes),
         out Store? store);
     if (openStatus != StoreOpenStatus.Success || store is null)
