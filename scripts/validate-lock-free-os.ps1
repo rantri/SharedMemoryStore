@@ -743,7 +743,7 @@ function Assert-LinuxTinyPerformanceConfiguration {
         'syncMaximumWorkerCount', 'syncCanonicalBucketCount', 'syncKeyCatalogSha256',
         'syncKeyCanonicalBucketAssignments', 'minimumEightProcessOperationsPerSecond',
         'maximumScaleP99Ratio', 'maximumEightProcessP99MicrosecondsByPlatform',
-        'maximumStallMicroseconds')
+        'maximumStallMicrosecondsByPlatform')
     $actualProperties = @($tiny.PSObject.Properties.Name)
     if (($actualProperties -join ',') -cne ($expectedProperties -join ',')) {
         throw "qualification config tinyPerformance properties must be exactly [$($expectedProperties -join ', ')]."
@@ -764,13 +764,17 @@ function Assert-LinuxTinyPerformanceConfiguration {
     [void](Assert-LinuxTinySyncTopology $tiny 'qualification config tinyPerformance')
     $p99ByPlatform = Get-RequiredPropertyValue $tiny `
         'maximumEightProcessP99MicrosecondsByPlatform' 'qualification config tinyPerformance'
+    $stallByPlatform = Get-RequiredPropertyValue $tiny `
+        'maximumStallMicrosecondsByPlatform' 'qualification config tinyPerformance'
     if ((@($p99ByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
         -or (Get-StrictDouble $p99ByPlatform 'windows-x64' 'qualification config tinyPerformance p99 limits' 25 25) -ne 25 `
         -or (Get-StrictDouble $p99ByPlatform 'linux-x64' 'qualification config tinyPerformance p99 limits' 10 10) -ne 10 `
+        -or (@($stallByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
+        -or (Get-StrictDouble $stallByPlatform 'windows-x64' 'qualification config tinyPerformance stall limits' 250000 250000) -ne 250000 `
+        -or (Get-StrictDouble $stallByPlatform 'linux-x64' 'qualification config tinyPerformance stall limits' 10000 10000) -ne 10000 `
         -or (Get-StrictDouble $tiny 'minimumEightProcessOperationsPerSecond' 'qualification config tinyPerformance' 100000 100000) -ne 100000 `
-        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3 `
-        -or (Get-StrictDouble $tiny 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000) -ne 10000) {
-        throw 'qualification config tinyPerformance gates must remain Sms2-only: 8-process throughput>=100000 ops/s, p99<=25us on Windows and <=10us on Linux, 8p/1p p99<=3, and every raw stall<=10000us.'
+        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3) {
+        throw 'qualification config tinyPerformance gates must remain Sms2-only: 8-process throughput>=100000 ops/s, p99<=25us on Windows and <=10us on Linux, 8p/1p p99<=3, and every raw stall<=250000us on Windows/<=10000us on Linux.'
     }
     $release = Get-RequiredPropertyValue (Get-RequiredPropertyValue $Config 'tiers' 'qualification config') 'release' 'qualification config tiers'
     if ((Get-StrictInt64 $release 'performanceWarmupSeconds' 'qualification config release' 10 10) -ne 10 `
@@ -952,7 +956,8 @@ function Assert-LinuxTinyPerformanceReport {
             throw "$context latency percentiles/maximum are not monotonic."
         }
         if ($maximum -gt
-            (Get-StrictDouble $TinyConfig 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000)) {
+            (Get-StrictDouble $TinyConfig.maximumStallMicrosecondsByPlatform `
+                'linux-x64' 'qualification config tinyPerformance Linux stall limit' 10000 10000)) {
             throw "$context exceeds the every-run 10000us maximum-stall gate: $maximum."
         }
         $assignedProcessors = @(Get-RequiredPropertyValue $run 'assignedProcessors' $context)
@@ -1117,7 +1122,7 @@ function Assert-LinuxTinyPerformanceReport {
         minimumEightProcessOperationsPerSecond = [double]$TinyConfig.minimumEightProcessOperationsPerSecond
         maximumScaleP99Ratio = [double]$TinyConfig.maximumScaleP99Ratio
         maximumEightProcessP99Microseconds = [double]$TinyConfig.maximumEightProcessP99MicrosecondsByPlatform.'linux-x64'
-        maximumStallMicroseconds = [double]$TinyConfig.maximumStallMicroseconds
+        maximumStallMicroseconds = [double]$TinyConfig.maximumStallMicrosecondsByPlatform.'linux-x64'
         metrics = @($metrics)
     }
 }

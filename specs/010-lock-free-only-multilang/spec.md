@@ -336,7 +336,10 @@ created by each of the other distributions.
   publish/remove p99 is at most 10 microseconds on Linux x64 and 25 microseconds
   on Windows x64, aggregate throughput is at least 100,000 credited operations
   per second, eight-process p99 is at most three times one-process p99, and no
-  successful raw operation stalls longer than 10 milliseconds.
+  successful raw operation stalls longer than 10 milliseconds on Linux x64 or
+  250 milliseconds on Windows x64. The Windows raw maximum is a hard hang
+  detector with scheduler grace; p99, scaling, duration-bound, and suspension
+  gates remain the strict progress predicates.
 
 ## Assumptions
 

@@ -254,3 +254,27 @@ safer than carrying permanent migration code in every runtime.
   legacy parser, ownership model, and recovery ambiguity in current packages.
 - Automatically create a parallel SMS2 resource. Rejected because the same
   public store name must never identify divergent stores.
+
+## Decision: Treat raw maximum latency as a platform scheduler-bound hang detector
+
+**Decision**: Preserve the 10 millisecond every-trial raw maximum on Linux x64
+and use a 250 millisecond every-trial raw maximum on Windows x64. Retain the
+existing Windows 25 microsecond / Linux 10 microsecond eight-process p99 limits,
+the three-times scale ceiling, the 100,000 operations/second floor, duration
+watchdogs, and participant-suspension progress gates.
+
+**Rationale**: Release measurements on the qualified Windows host reproduced
+isolated 12–190 millisecond `MaxMicroseconds` samples while p99 remained 0.8
+microseconds, affinity was complete and unique, fairness was approximately
+1.0, and each trial completed more than 1.3 billion operations. The same
+preemption outliers were present before the affinity correction. A maximum
+wall-clock sample includes Windows scheduler/DPC preemption and therefore
+cannot validly assert a 10 millisecond algorithmic bound. A 250 millisecond
+hard ceiling matches the existing finite-wait scheduler grace and still fails
+hangs, while the unchanged distributional, scale, watchdog, and real-pause
+gates carry the lock-free progress claim.
+
+**Alternatives rejected**: Raising the Linux ceiling would discard an already
+proven platform guarantee. Elevating benchmark processes to real-time priority
+would make qualification less representative and can starve host services.
+Ignoring maximum latency entirely would remove useful hang detection.

@@ -1618,7 +1618,7 @@ function Assert-QualificationConfiguration {
         'syncMaximumWorkerCount', 'syncCanonicalBucketCount', 'syncKeyCatalogSha256',
         'syncKeyCanonicalBucketAssignments', 'minimumEightProcessOperationsPerSecond',
         'maximumScaleP99Ratio', 'maximumEightProcessP99MicrosecondsByPlatform',
-        'maximumStallMicroseconds')
+        'maximumStallMicrosecondsByPlatform')
     if ((@($tiny.PSObject.Properties.Name) -join ',') -cne ($expectedLinuxTinyProperties -join ',')) {
         throw "tinyPerformance properties must be exactly [$($expectedLinuxTinyProperties -join ', ')]."
     }
@@ -1631,16 +1631,20 @@ function Assert-QualificationConfiguration {
     $linuxProcessCounts = @($tiny.processCounts)
     $p99ByPlatform = Get-RequiredPropertyValue $tiny `
         'maximumEightProcessP99MicrosecondsByPlatform' 'qualification config tinyPerformance'
+    $stallByPlatform = Get-RequiredPropertyValue $tiny `
+        'maximumStallMicrosecondsByPlatform' 'qualification config tinyPerformance'
     if ($linuxProcessCounts.Count -ne 2 `
         -or -not (Test-IsIntegerNumber $linuxProcessCounts[0]) -or [int64]$linuxProcessCounts[0] -ne 1 `
         -or -not (Test-IsIntegerNumber $linuxProcessCounts[1]) -or [int64]$linuxProcessCounts[1] -ne 8 `
         -or (@($p99ByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
         -or (Get-StrictDouble $p99ByPlatform 'windows-x64' 'qualification config tinyPerformance p99 limits' 25 25) -ne 25 `
         -or (Get-StrictDouble $p99ByPlatform 'linux-x64' 'qualification config tinyPerformance p99 limits' 10 10) -ne 10 `
+        -or (@($stallByPlatform.PSObject.Properties.Name) -join ',') -cne 'windows-x64,linux-x64' `
+        -or (Get-StrictDouble $stallByPlatform 'windows-x64' 'qualification config tinyPerformance stall limits' 250000 250000) -ne 250000 `
+        -or (Get-StrictDouble $stallByPlatform 'linux-x64' 'qualification config tinyPerformance stall limits' 10000 10000) -ne 10000 `
         -or (Get-StrictDouble $tiny 'minimumEightProcessOperationsPerSecond' 'qualification config tinyPerformance' 100000 100000) -ne 100000 `
-        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3 `
-        -or (Get-StrictDouble $tiny 'maximumStallMicroseconds' 'qualification config tinyPerformance' 10000 10000) -ne 10000) {
-        throw 'tinyPerformance must require the absolute Sms2 gates: [1,8] processes, >=100000 8-process ops/s, <=3 scale ratio, <=25us Windows/<=10us Linux 8-process p99, and <=10000us raw stall.'
+        -or (Get-StrictDouble $tiny 'maximumScaleP99Ratio' 'qualification config tinyPerformance' 3 3) -ne 3) {
+        throw 'tinyPerformance must require the absolute Sms2 gates: [1,8] processes, >=100000 8-process ops/s, <=3 scale ratio, <=25us Windows/<=10us Linux 8-process p99, and every raw stall <=250000us Windows/<=10000us Linux.'
     }
     if ((Get-StrictInt64 $config.tiers.release 'performanceWarmupSeconds' 'qualification config release tier' 10 10) -ne 10 `
         -or (Get-StrictInt64 $config.tiers.release 'performanceDurationSeconds' 'qualification config release tier' 60 60) -ne 60 `
@@ -2866,8 +2870,9 @@ function Assert-LinuxTinyOsPerformanceEvidence {
         [void](Get-StrictDouble $run 'earlyP99Microseconds' $context 0 [double]::MaxValue -Positive)
         [void](Get-StrictDouble $run 'lateP99Microseconds' $context 0 [double]::MaxValue -Positive)
         if ($p50 -gt $p95 -or $p95 -gt $p99 -or $p99 -gt $maximum `
-            -or $maximum -gt (Get-StrictDouble $config.tinyPerformance 'maximumStallMicroseconds' `
-                'qualification config tinyPerformance' 10000 10000)) {
+            -or $maximum -gt (Get-StrictDouble `
+                $config.tinyPerformance.maximumStallMicrosecondsByPlatform `
+                'linux-x64' 'qualification config tinyPerformance Linux stall limit' 10000 10000)) {
             throw "$context violates p99/maximum ordering or the every-run 10000us Sms2 stall gate."
         }
         $assigned = @($run.assignedProcessors)
@@ -5563,8 +5568,10 @@ function Assert-SyncProbeEvidence {
         })) {
             Assert-AtMost 'sync-probe' "${scenario}-${platformId}-max-stall-us-$($run.processCount)p-trial-$($run.trial)" `
                 (Get-StrictDouble $run 'maxMicroseconds' "$scenario Sms2/$($run.processCount)p trial-$($run.trial)" 0 [double]::MaxValue) `
-                (Get-StrictDouble $config.tinyPerformance 'maximumStallMicroseconds' `
-                    'qualification config tinyPerformance' 10000 10000)
+                (Get-StrictDouble $config.tinyPerformance.maximumStallMicrosecondsByPlatform `
+                    $platformId 'qualification config tinyPerformance stall limits' `
+                    $(if ($IsWindows) { 250000 } else { 10000 }) `
+                    $(if ($IsWindows) { 250000 } else { 10000 }))
         }
     }
 
