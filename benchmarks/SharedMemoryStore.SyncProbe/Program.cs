@@ -887,8 +887,6 @@ static async Task<RunResult> RunBrokerTrial(
             throw new InvalidOperationException($"Broker producer open failed for {profile}: {openStatus}");
         }
 
-        using TemporaryProcessAffinity producerAffinity = TemporaryProcessAffinity.Apply(
-            affinityRequested ? 0 : -1);
         using (producer)
         {
             try
@@ -921,6 +919,10 @@ static async Task<RunResult> RunBrokerTrial(
                     allProcesses.Add(process);
                 }
 
+                // Process affinity is inherited by child processes. Start every worker while
+                // the controller still has its original mask, then pin the in-process producer.
+                using TemporaryProcessAffinity producerAffinity = TemporaryProcessAffinity.Apply(
+                    affinityRequested ? 0 : -1);
                 await AwaitReady(allProcesses, CancellationToken.None);
                 BenchmarkKeyCatalog keys = BenchmarkProtocol.CreateKeyCatalog(BrokerRotatingKeyCount);
                 await Task.Run(

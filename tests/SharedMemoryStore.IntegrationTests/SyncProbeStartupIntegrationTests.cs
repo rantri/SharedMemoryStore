@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using SharedMemoryStore.IntegrationTests.TestSupport;
 using Store = SharedMemoryStore.MemoryStore;
 
@@ -60,6 +61,65 @@ public sealed class SyncProbeStartupIntegrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task BrokerWorkersInheritTheUnrestrictedControllerAffinity()
+    {
+        if (!PlatformCapabilityProbe.IsSupportedHost || Environment.ProcessorCount < 3)
+        {
+            return;
+        }
+
+        string outputPath = Path.Combine(
+            Path.GetTempPath(),
+            $"sms-sync-probe-affinity-{Guid.NewGuid():N}.json");
+        using Process controller = StartController(outputPath);
+        try
+        {
+            Task<string> standardOutput = controller.StandardOutput.ReadToEndAsync();
+            Task<string> standardError = controller.StandardError.ReadToEndAsync();
+            await controller.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
+
+            Assert.True(
+                controller.ExitCode == 0,
+                $"Sync-probe affinity regression exited {controller.ExitCode}."
+                + Environment.NewLine + "stdout=" + await standardOutput
+                + Environment.NewLine + "stderr=" + await standardError);
+
+            using JsonDocument report = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath));
+            JsonElement[] runs = report.RootElement.GetProperty("Runs").EnumerateArray().ToArray();
+            Assert.Equal(2, runs.Length);
+            foreach (JsonElement run in runs)
+            {
+                string scenario = run.GetProperty("Scenario").GetString() ?? "<unknown>";
+                Assert.False(run.GetProperty("Oversubscribed").GetBoolean());
+                int appliedCount = run.GetProperty("AffinityAppliedCount").GetInt32();
+                int[] assigned = run.GetProperty("AssignedProcessors")
+                    .EnumerateArray()
+                    .Select(static processor => processor.GetInt32())
+                    .ToArray();
+                Assert.Equal(assigned.Length, appliedCount);
+                Assert.Equal(
+                    assigned.Length,
+                    assigned.Distinct().Count());
+                Assert.DoesNotContain(-1, assigned);
+                Assert.True(
+                    scenario is "broker-directed" or "large-ingest",
+                    $"Unexpected affinity regression scenario '{scenario}'.");
+            }
+        }
+        finally
+        {
+            if (!controller.HasExited)
+            {
+                controller.Kill(entireProcessTree: true);
+                await controller.WaitForExitAsync().WaitAsync(ProcessTimeout);
+            }
+
+            File.Delete(outputPath);
+        }
+    }
+
     private static Process StartWorker(string name)
     {
         var start = new ProcessStartInfo("dotnet")
@@ -91,6 +151,38 @@ public sealed class SyncProbeStartupIntegrationTests
 
         return Process.Start(start)
             ?? throw new InvalidOperationException("Unable to start the sync-probe worker.");
+    }
+
+    private static Process StartController(string outputPath)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            CreateNoWindow = true,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add(LocateSyncProbeAssembly());
+        foreach (string argument in new[]
+        {
+            "--mode", "full",
+            "--scenario", "broker-directed,large-ingest",
+            "--process-counts", "1",
+            "--duration", "1",
+            "--duration-bound-grace", "30",
+            "--warmup", "0",
+            "--trials", "1",
+            "--large-frames", "1",
+            "--large-frame-bytes", "256",
+            "--output", outputPath
+        })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        return Process.Start(start)
+            ?? throw new InvalidOperationException("Unable to start the sync-probe controller.");
     }
 
     private static async Task<string> FailureMessage(Process worker, string message)
