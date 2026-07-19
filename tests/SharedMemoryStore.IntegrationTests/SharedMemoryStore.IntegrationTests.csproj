@@ -20,6 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\benchmarks\SharedMemoryStore.SyncProbe\SharedMemoryStore.SyncProbe.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\samples\DockerSharedMemory\DockerSharedMemory.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\samples\LockFreeBrokerKeys\LockFreeBrokerKeys.csproj"
