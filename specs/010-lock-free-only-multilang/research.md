@@ -119,6 +119,14 @@ fail-closed handling of malformed, linked, non-regular, locked, inaccessible,
 or otherwise ambiguous artifacts. Python inherits this behavior from the
 native library.
 
+Volatile owner anchors, release markers, and their temporary files are isolated
+below the exact store's `<fragment>.owners.artifacts/` directory. Cold open and
+cleanup enumerate only that directory; they never enumerate the shared resource
+root. The stable `.region`, `.lock`, `.owners`, and `.lifecycle` identities stay
+unchanged. This keeps finite cold-open cost independent of permanent rendezvous
+files accumulated by unrelated store names while preserving one discoverable
+resource identity across runtimes.
+
 **Rationale**: Reusing the physical names makes retired and current mappings
 discover one another and fail closed instead of creating parallel stores.
 Holding the complete cold transaction prevents double initialization, inode
@@ -137,6 +145,9 @@ OS lock on a key-value path.
   healthy participants.
 - Treat missing or malformed Linux owner metadata as stale. Rejected because
   uncertainty must never authorize deletion of a live mapping.
+- Keep volatile owner artifacts flat beside every store's permanent rendezvous
+  files. Rejected because each cold open would scan the entire shared namespace,
+  making an unrelated store's history consume the caller's finite wait budget.
 
 ## C ABI v2
 

@@ -495,9 +495,11 @@ public sealed class LockFreeLayoutContractTests
 
             string ownerToken = ReadFixedLowerHex(vector, "owner_token", 32);
             string owners = files.GetProperty("owners").GetString()!;
-            Assert.Equal(owners + ".anchor." + ownerToken, vector.GetProperty("owner_anchor").GetString());
             Assert.Equal(
-                owners + ".released." + ownerToken + ".ready",
+                owners + ".artifacts/anchor." + ownerToken,
+                vector.GetProperty("owner_anchor").GetString());
+            Assert.Equal(
+                owners + ".artifacts/released." + ownerToken + ".ready",
                 vector.GetProperty("release_marker").GetString());
         }
     }

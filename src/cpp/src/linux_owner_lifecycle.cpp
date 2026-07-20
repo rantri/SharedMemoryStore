@@ -28,8 +28,9 @@
 namespace sms::detail {
 namespace {
 
-constexpr std::string_view anchor_segment = ".anchor.";
-constexpr std::string_view release_segment = ".released.";
+constexpr std::string_view artifact_directory_suffix = ".artifacts";
+constexpr std::string_view anchor_prefix = "anchor.";
+constexpr std::string_view release_prefix = "released.";
 constexpr std::string_view release_ready_suffix = ".ready";
 constexpr std::size_t owner_line_limit = 1024;
 constexpr std::size_t owner_file_limit = 4U * 1024U * 1024U;
@@ -105,6 +106,19 @@ sms_status ensure_private_directory(std::string_view child_path) noexcept {
             return status_from_errno(errno);
         }
         return SMS_STATUS_SUCCESS;
+    } catch (...) {
+        return SMS_STATUS_UNKNOWN_FAILURE;
+    }
+}
+
+std::string artifact_directory_path(std::string_view owners_path) {
+    return std::string(owners_path) + std::string(artifact_directory_suffix);
+}
+
+sms_status ensure_artifact_directory(std::string_view owners_path) noexcept {
+    try {
+        return ensure_private_directory(
+            artifact_directory_path(owners_path) + "/artifact");
     } catch (...) {
         return SMS_STATUS_UNKNOWN_FAILURE;
     }
@@ -367,20 +381,14 @@ sms_status atomic_write_owners(
             bytes.push_back('\n');
         }
 
-        for (std::int32_t attempt = 0; attempt < 16; ++attempt) {
-            const auto token = random_token();
-            if (token.empty()) return SMS_STATUS_UNKNOWN_FAILURE;
-            temporary = target + ".tmp." + token;
-            descriptor = ::open(
-                temporary.c_str(),
-                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                0600);
-            if (descriptor >= 0) {
-                owns_temporary = true;
-                break;
-            }
-            if (errno != EEXIST) break;
-        }
+        temporary = target + ".tmp";
+        status = validate_replacement_target(temporary);
+        if (status != SMS_STATUS_SUCCESS) return status;
+        descriptor = ::open(
+            temporary.c_str(),
+            O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+            0600);
+        if (descriptor >= 0) owns_temporary = true;
         if (descriptor < 0) return status_from_errno(errno);
 
         bool success = ::fchmod(descriptor, 0600) == 0 &&
@@ -417,14 +425,15 @@ sms_status atomic_write_owners(
 
 sms_status enumerate_matching(
     std::string_view owners_path,
-    std::string_view segment,
+    std::string_view prefix,
     std::vector<std::string>& paths) noexcept {
     paths.clear();
     DIR* directory{};
     try {
-        const auto parts = split_path(owners_path);
-        const auto prefix = parts.name + std::string(segment);
-        directory = ::opendir(parts.directory.c_str());
+        const auto status = ensure_artifact_directory(owners_path);
+        if (status != SMS_STATUS_SUCCESS) return status;
+        const auto artifact_directory = artifact_directory_path(owners_path);
+        directory = ::opendir(artifact_directory.c_str());
         if (directory == nullptr) {
             return errno == ENOENT ? SMS_STATUS_SUCCESS : status_from_errno(errno);
         }
@@ -432,10 +441,7 @@ sms_status enumerate_matching(
         while (auto* entry = ::readdir(directory)) {
             const std::string_view name(entry->d_name);
             if (name.starts_with(prefix)) {
-                paths.push_back(
-                    parts.directory == "/"
-                        ? "/" + std::string(name)
-                        : parts.directory + "/" + std::string(name));
+                paths.push_back(artifact_directory + "/" + std::string(name));
             }
             errno = 0;
         }
@@ -456,7 +462,7 @@ sms_status finalized_markers(
     std::string_view owners_path,
     std::vector<std::string>& markers) noexcept {
     std::vector<std::string> candidates;
-    const auto status = enumerate_matching(owners_path, release_segment, candidates);
+    const auto status = enumerate_matching(owners_path, release_prefix, candidates);
     if (status != SMS_STATUS_SUCCESS) return status;
     try {
         for (auto& path : candidates) {
@@ -476,7 +482,6 @@ sms_status finalized_markers(
 }
 
 sms_status read_release_marker(
-    std::string_view owners_path,
     std::string_view marker_path,
     std::string& exact_owner) noexcept {
     exact_owner.clear();
@@ -494,9 +499,8 @@ sms_status read_release_marker(
         return SMS_STATUS_CORRUPT_STORE;
     }
     try {
-        const auto owner_parts = split_path(owners_path);
         const auto marker_name = split_path(marker_path).name;
-        const auto prefix = owner_parts.name + std::string(release_segment);
+        const auto prefix = std::string(release_prefix);
         if (!marker_name.starts_with(prefix) ||
             !marker_name.ends_with(release_ready_suffix)) {
             return SMS_STATUS_CORRUPT_STORE;
@@ -564,12 +568,10 @@ void remove_unlocked_anchor(std::string_view raw_path) noexcept {
 }
 
 bool exact_anchor_name(
-    std::string_view owners_path,
     std::string_view path,
     std::string& token) {
-    const auto owner_parts = split_path(owners_path);
     const auto name = split_path(path).name;
-    const auto prefix = owner_parts.name + std::string(anchor_segment);
+    const auto prefix = std::string(anchor_prefix);
     if (!name.starts_with(prefix)) return false;
     const auto candidate = std::string_view(name).substr(prefix.size());
     if (!is_lower_hex_token(candidate)) return false;
@@ -619,7 +621,7 @@ sms_status LinuxOwnerAnchor::create(
     std::unique_ptr<LinuxOwnerAnchor>& result) noexcept {
     result.reset();
     if (!is_lower_hex_token(owner_token)) return SMS_STATUS_CORRUPT_STORE;
-    const auto directory_status = ensure_private_directory(owners_path);
+    const auto directory_status = ensure_artifact_directory(owners_path);
     if (directory_status != SMS_STATUS_SUCCESS) return directory_status;
     std::string path;
     std::string token;
@@ -671,6 +673,9 @@ LinuxOwnerAnchorState LinuxOwnerAnchor::probe(
     if (!is_lower_hex_token(owner_token)) {
         return LinuxOwnerAnchorState::ambiguous;
     }
+    if (ensure_artifact_directory(owners_path) != SMS_STATUS_SUCCESS) {
+        return LinuxOwnerAnchorState::ambiguous;
+    }
     try {
         const auto path = artifact_path(owners_path, owner_token);
         const auto descriptor = ::open(
@@ -704,8 +709,8 @@ LinuxOwnerAnchorState LinuxOwnerAnchor::probe(
 std::string LinuxOwnerAnchor::artifact_path(
     std::string_view owners_path,
     std::string_view owner_token) {
-    return std::string(owners_path) + std::string(anchor_segment) +
-        std::string(owner_token);
+    return artifact_directory_path(owners_path) + "/" +
+        std::string(anchor_prefix) + std::string(owner_token);
 }
 
 sms_status LinuxOwnerLifecycle::create_current_owner(
@@ -831,7 +836,7 @@ sms_status LinuxOwnerLifecycle::reconcile_release_markers(
     try {
         for (const auto& marker : markers) {
             std::string exact_owner;
-            status = read_release_marker(owners_path, marker, exact_owner);
+            status = read_release_marker(marker, exact_owner);
             if (status != SMS_STATUS_SUCCESS) return status;
             owners.erase(
                 std::remove(owners.begin(), owners.end(), exact_owner),
@@ -845,7 +850,7 @@ sms_status LinuxOwnerLifecycle::reconcile_release_markers(
                 return status_from_errno(errno);
             }
         }
-        return sync_directory(owners_path)
+        return sync_directory(markers.front())
             ? SMS_STATUS_SUCCESS
             : status_from_errno(errno);
     } catch (...) {
@@ -858,7 +863,7 @@ bool LinuxOwnerLifecycle::publish_release_marker(
     std::string_view exact_owner_line) noexcept {
     LinuxOwnerRecord record{};
     if (!parse_exact_owner_line(exact_owner_line, record) ||
-        ensure_private_directory(owners_path) != SMS_STATUS_SUCCESS) {
+        ensure_artifact_directory(owners_path) != SMS_STATUS_SUCCESS) {
         return false;
     }
     std::string final_path;
@@ -871,11 +876,11 @@ bool LinuxOwnerLifecycle::publish_release_marker(
         if (::lstat(final_path.c_str(), &existing) == 0) {
             if (S_ISLNK(existing.st_mode) || !S_ISREG(existing.st_mode)) return false;
             std::string observed;
-            if (read_release_marker(owners_path, final_path, observed) !=
+            if (read_release_marker(final_path, observed) !=
                     SMS_STATUS_SUCCESS || observed != exact_owner_line) {
                 return false;
             }
-            return sync_directory(owners_path);
+            return sync_directory(final_path);
         }
         if (errno != ENOENT) return false;
 
@@ -914,7 +919,7 @@ bool LinuxOwnerLifecycle::publish_release_marker(
             }
         }
         if (success && ::chmod(final_path.c_str(), 0600) != 0) success = false;
-        if (success && !sync_directory(owners_path)) success = false;
+        if (success && !sync_directory(final_path)) success = false;
         if (!success && owns_temporary) ::unlink(temporary.c_str());
         return success;
     } catch (...) {
@@ -927,8 +932,9 @@ bool LinuxOwnerLifecycle::publish_release_marker(
 std::string LinuxOwnerLifecycle::release_marker_path(
     std::string_view owners_path,
     std::string_view owner_token) {
-    return std::string(owners_path) + std::string(release_segment) +
-        std::string(owner_token) + std::string(release_ready_suffix);
+    return artifact_directory_path(owners_path) + "/" +
+        std::string(release_prefix) + std::string(owner_token) +
+        std::string(release_ready_suffix);
 }
 
 void LinuxOwnerLifecycle::sweep_unreferenced_anchors(
@@ -936,7 +942,7 @@ void LinuxOwnerLifecycle::sweep_unreferenced_anchors(
     const std::vector<std::string>& committed_owners) noexcept {
     try {
         std::vector<std::string> artifacts;
-        if (enumerate_matching(owners_path, anchor_segment, artifacts) !=
+        if (enumerate_matching(owners_path, anchor_prefix, artifacts) !=
             SMS_STATUS_SUCCESS) {
             return;
         }
@@ -950,7 +956,7 @@ void LinuxOwnerLifecycle::sweep_unreferenced_anchors(
         }
         for (const auto& artifact : artifacts) {
             std::string token;
-            if (!exact_anchor_name(owners_path, artifact, token) ||
+            if (!exact_anchor_name(artifact, token) ||
                 std::find(referenced.begin(), referenced.end(), token) !=
                     referenced.end()) {
                 continue;
@@ -971,22 +977,9 @@ void LinuxOwnerLifecycle::delete_stale_owner_artifacts(
         (void)unlink_regular_exact(std::string(owners_path) + ".tmp");
 
         std::vector<std::string> candidates;
-        if (enumerate_matching(owners_path, ".tmp.", candidates) ==
+        if (enumerate_matching(owners_path, release_prefix, candidates) ==
             SMS_STATUS_SUCCESS) {
-            const auto owner_parts = split_path(owners_path);
-            const auto prefix = owner_parts.name + ".tmp.";
-            for (const auto& candidate : candidates) {
-                const auto name = split_path(candidate).name;
-                const auto token = std::string_view(name).substr(prefix.size());
-                if (is_lower_hex_token(token)) (void)unlink_regular_exact(candidate);
-            }
-        }
-
-        candidates.clear();
-        if (enumerate_matching(owners_path, release_segment, candidates) ==
-            SMS_STATUS_SUCCESS) {
-            const auto owner_parts = split_path(owners_path);
-            const auto prefix = owner_parts.name + std::string(release_segment);
+            const auto prefix = std::string(release_prefix);
             for (const auto& candidate : candidates) {
                 const auto name = split_path(candidate).name;
                 const auto remainder = std::string_view(name).substr(prefix.size());

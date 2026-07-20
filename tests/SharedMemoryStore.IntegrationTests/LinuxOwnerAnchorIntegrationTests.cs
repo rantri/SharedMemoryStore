@@ -66,7 +66,9 @@ public sealed class LinuxOwnerAnchorIntegrationTests
             ambiguousTarget = resource.LinuxOwnersPath + ".anchor-test-target";
             File.WriteAllBytes(ambiguousTarget, []);
             File.CreateSymbolicLink(ambiguousPath, ambiguousTarget);
-            malformedPath = resource.LinuxOwnersPath + ".anchor.not-a-valid-owner-token";
+            malformedPath = Path.Combine(
+                LinuxOwnerArtifactStore.GetDirectory(resource.LinuxOwnersPath),
+                "anchor.not-a-valid-owner-token");
             File.WriteAllBytes(malformedPath, []);
             fifoPath = CreateFifoAnchor(resource.LinuxOwnersPath, Guid.NewGuid());
 
@@ -316,6 +318,7 @@ public sealed class LinuxOwnerAnchorIntegrationTests
 
     private static string CreateUnlockedAnchor(string ownersPath, Guid token)
     {
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         string path = LinuxOwnerAnchor.GetPath(ownersPath, token);
         File.WriteAllBytes(path, []);
         File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
@@ -324,6 +327,7 @@ public sealed class LinuxOwnerAnchorIntegrationTests
 
     private static string CreateFifoAnchor(string ownersPath, Guid token)
     {
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         string path = LinuxOwnerAnchor.GetPath(ownersPath, token);
         int result = MkFifo(path, 0x180); // 0600
         Assert.True(result == 0, $"mkfifo failed with errno {Marshal.GetLastPInvokeError()}.");

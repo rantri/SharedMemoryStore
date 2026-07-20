@@ -149,6 +149,8 @@ created by each of the other distributions.
   authorize deletion or recovery of a live owner.
 - Process identifier reuse and Linux PID-namespace differences cannot make a
   later process appear to be an abandoned earlier participant.
+- Growth in persistent Linux rendezvous resources for unrelated store names
+  cannot consume another store's finite cold-open budget.
 - Cancellation immediately before or after an ordering point produces only the
   documented outcome set and leaves helpable or completed shared state.
 - Closing one language wrapper invalidates only its local borrowed objects and
@@ -262,6 +264,10 @@ created by each of the other distributions.
 - **FR-033**: The security boundary MUST remain trusted same-host participants;
   cross-host sharing, persistence guarantees, application-schema interpretation,
   and protection from malicious authorized writers MUST remain out of scope.
+- **FR-034**: Linux owner anchors, release markers, and their temporary files
+  MUST be isolated below one exact per-store owner-artifact directory. Cold open
+  and cleanup MUST enumerate only that directory and MUST NOT enumerate the
+  shared resource root.
 
 ### Key Entities
 
@@ -340,6 +346,9 @@ created by each of the other distributions.
   250 milliseconds on Windows x64. The Windows raw maximum is a hard hang
   detector with scheduler grace; p99, scaling, duration-bound, and suspension
   gates remain the strict progress predicates.
+- **SC-014**: With at least 12,000 unrelated persistent Linux rendezvous files
+  in the shared resource root, 64 concurrent finite-budget cold opens of distinct
+  stores complete successfully within their 500 millisecond per-open budgets.
 
 ## Assumptions
 

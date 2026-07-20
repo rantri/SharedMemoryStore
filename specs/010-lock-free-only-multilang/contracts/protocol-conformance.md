@@ -92,6 +92,9 @@ acquires `.lifecycle`, reconciles resource-protocol-2 ownership state, then
 acquires the stable `.lock` inode before mapping and publishing an owner. The
 cold gates remain held through header publication or validation, namespace
 admission, and participant registration, and are released in reverse order.
+Linux owner anchors and release markers reside below the exact store's
+`.owners.artifacts/` directory. Implementations enumerate only that per-store
+directory and never the shared resource root during cold open or cleanup.
 
 No store handle may escape until it owns one exact Active participant
 incarnation. Participant capacity exhaustion returns

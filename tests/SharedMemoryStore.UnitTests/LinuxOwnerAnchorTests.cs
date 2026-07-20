@@ -94,6 +94,7 @@ public sealed class LinuxOwnerAnchorTests
         Guid token = Guid.NewGuid();
         string targetPath = Path.Combine(directory.Path, "target");
         string anchorPath = LinuxOwnerAnchor.GetPath(ownersPath, token);
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         File.WriteAllBytes(targetPath, []);
         File.CreateSymbolicLink(anchorPath, targetPath);
 
@@ -112,6 +113,7 @@ public sealed class LinuxOwnerAnchorTests
         string ownersPath = Path.Combine(directory.Path, "store.owners");
         Guid directoryToken = Guid.NewGuid();
         string directoryAnchor = LinuxOwnerAnchor.GetPath(ownersPath, directoryToken);
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         Directory.CreateDirectory(directoryAnchor);
         Assert.Equal(
             LinuxOwnerAnchorState.Ambiguous,
@@ -188,7 +190,9 @@ public sealed class LinuxOwnerAnchorTests
         string ambiguousTarget = Path.Combine(directory.Path, "ambiguous-target");
         File.WriteAllBytes(ambiguousTarget, []);
         File.CreateSymbolicLink(ambiguousPath, ambiguousTarget);
-        string malformedPath = ownersPath + ".anchor.not-a-valid-owner-token";
+        string malformedPath = Path.Combine(
+            LinuxOwnerArtifactStore.GetDirectory(ownersPath),
+            "anchor.not-a-valid-owner-token");
         File.WriteAllBytes(malformedPath, []);
         using LinuxOwnerAnchor locked = LinuxOwnerAnchor.Create(ownersPath, lockedToken);
         string lockedPath = locked.AnchorPath;
@@ -213,6 +217,7 @@ public sealed class LinuxOwnerAnchorTests
 
     private static string CreateUnlockedAnchor(string ownersPath, Guid token)
     {
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         string path = LinuxOwnerAnchor.GetPath(ownersPath, token);
         File.WriteAllBytes(path, []);
         File.SetUnixFileMode(path, LinuxSharedMemoryDirectory.PrivateFileMode);
@@ -221,6 +226,7 @@ public sealed class LinuxOwnerAnchorTests
 
     private static string CreateFifoAnchor(string ownersPath, Guid token)
     {
+        LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
         string path = LinuxOwnerAnchor.GetPath(ownersPath, token);
         int result = MkFifo(path, 0x180); // 0600
         Assert.True(result == 0, $"mkfifo failed with errno {Marshal.GetLastPInvokeError()}.");

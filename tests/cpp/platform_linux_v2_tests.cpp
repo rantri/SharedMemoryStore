@@ -183,6 +183,36 @@ void cleanup_resource(const ResourceName& resource) noexcept {
     (void)::unlink(resource.linux_owners_path.c_str());
     (void)::unlink(resource.linux_lock_path.c_str());
     (void)::unlink(resource.linux_lifecycle_path.c_str());
+    std::error_code error;
+    std::filesystem::remove_all(resource.linux_owners_path + ".artifacts", error);
+}
+
+void owner_artifacts_are_isolated_per_store() {
+    TemporaryDirectory temporary("artifact-isolation");
+    const auto owners_path = temporary.child("store.owners");
+    const std::string token = "00112233445566778899aabbccddeeff";
+    const auto artifact_directory = owners_path + ".artifacts";
+    const auto anchor = LinuxOwnerAnchor::artifact_path(owners_path, token);
+    const auto marker = LinuxOwnerLifecycle::release_marker_path(
+        owners_path, token);
+
+    expect(std::filesystem::path(anchor).parent_path() == artifact_directory,
+           "owner anchor is isolated below the exact store artifact directory");
+    expect(std::filesystem::path(anchor).filename() == "anchor." + token,
+           "owner anchor uses the canonical isolated basename");
+    expect(std::filesystem::path(marker).parent_path() == artifact_directory,
+           "release marker is isolated below the exact store artifact directory");
+    expect(std::filesystem::path(marker).filename() ==
+               "released." + token + ".ready",
+           "release marker uses the canonical isolated basename");
+
+    const auto unrelated_flat_marker = owners_path + ".released." + token + ".ready";
+    write_text(unrelated_flat_marker, "malformed legacy-shaped noise");
+    LinuxOwnerSnapshot snapshot{};
+    expect(LinuxOwnerLifecycle::prepare(owners_path, snapshot) == SMS_STATUS_SUCCESS,
+           "cold preparation never enumerates unrelated flat-root artifacts");
+    expect(std::filesystem::exists(unrelated_flat_marker),
+           "flat-root noise remains outside exact per-store cleanup");
 }
 
 void lifecycle_order_anchor_and_stable_inode() {
@@ -547,6 +577,7 @@ void failed_post_mapping_open_is_recoverable() {
 } // namespace
 
 int main() {
+    owner_artifacts_are_isolated_per_store();
     lifecycle_order_anchor_and_stable_inode();
     bounded_close_marker_and_exact_reconciliation();
     namespace_anchor_and_orphan_sweep();
