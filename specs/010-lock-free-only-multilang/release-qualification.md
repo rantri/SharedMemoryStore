@@ -2,20 +2,19 @@
 
 ## Frozen Contract Status
 
-This document freezes the evidence predicate for feature 010 before final
-qualification runs. It is not evidence that a run occurred and it does not
-declare the feature qualified.
+This document freezes the default evidence predicate for feature 010 before
+final qualification runs. It also records the user-approved compact delta
+decision at the end of the document without representing that decision as a
+new immutable full-rollup run.
 
 | Field | Frozen value |
 |---|---|
 | Contract revision | `1` |
-| Current qualification status | `NOT RUN` |
-| Qualifying source revision | `TO BE RECORDED BY RUNNER` |
-| PR evidence | `NOT GENERATED` |
-| Nightly evidence | `NOT GENERATED` |
-| Release evidence | `NOT GENERATED` |
-| Windows x64 evidence | `NOT GENERATED` |
-| Linux x64 evidence | `NOT GENERATED` |
+| Current full-rollup status | `NOT RUN AT CURRENT SOURCE REVISION` |
+| Current production source revision | `fc605a0` |
+| Compact production-readiness decision | `PASS` |
+| Immutable baseline revision | `1b784d7` |
+| Exact-revision delta evidence | `RECORDED BELOW` |
 
 The release is **QUALIFIED if and only if** every required predicate in this
 document is true in immutable runner-generated evidence from one clean source
@@ -515,4 +514,55 @@ Feature 010 is QUALIFIED only when one cross-platform release summary proves:
     integrity revalidation.
 
 Until those runner-generated artifacts exist and satisfy every predicate, the
-status of this feature remains **NOT RUN / NOT QUALIFIED**.
+formal full-rollup status of the current revision remains **NOT RUN / NOT
+QUALIFIED**. The scoped production-readiness decision below is separate and
+does not claim that a missing full rollup exists.
+
+## User-Approved Compact Delta Qualification (2026-07-20)
+
+The owner explicitly approved a shorter final verification after the exhaustive
+immutable matrix exposed one Linux cold-lifecycle defect. This section records
+the resulting production-readiness decision. It is a scoped exception for the
+feature handoff and does not weaken the default full-rollup predicate above for
+future releases.
+
+### Baseline and delta boundary
+
+- Immutable baseline `1b784d7` passed the Windows x64 PR, nightly, and release
+  tiers and the Linux x64 PR and nightly tiers, including the high-volume,
+  crash/recovery, suspension, raw-atomic, packaging, and independent-review
+  gates. Its Linux release tier found the persistent shared-root enumeration
+  defect addressed by T137, so that baseline alone was not accepted.
+- Production source revision `fc605a0` changes only Linux owner-anchor,
+  release-marker, and owner-sidecar housekeeping. It preserves the SMS2 mapped
+  bytes, public resource identities, ABI, and every hot lock-free state machine.
+- The exact delta isolates owner artifacts below each store's `.owners.artifacts`
+  directory and proves cold-open cost is independent of unrelated files in the
+  shared root. C# and C++ implement the rule directly; Python inherits the C++
+  native behavior.
+
+### Exact-source verification
+
+All rows below passed from the `fc605a0` production source tree in Release
+configuration.
+
+| Gate | Result |
+|---|---|
+| Windows managed unit, contract, integration, and linearizability | `445 + 113 + 275 + 83 = 916 passed` |
+| Linux managed unit, contract, integration, and linearizability | `445 + 113 + 275 + 83 = 916 passed` |
+| Windows native build, CTest, install, and clean consumer | `24/24 passed` |
+| Linux native build, CTest, install, and clean consumer | `24/24 passed` |
+| Windows and Linux Python source, rebuilt wheel/sdist, installed package, and sample | `83/83 passed per clean installed package` |
+| Windows and Linux nine-pair interoperability | `153/153 passed per platform` |
+| Windows and Linux stress interoperability | `10/10 passed per platform; 1,000 values per ordered pair and 10,000 lifecycle cycles` |
+| Clean Linux Docker native/Python/interop build and test | `24/24 native, 153/153 interop, and 10/10 stress passed` |
+| T137 focused regression | `8/8 integration cases passed, including 12,000 unrelated root files and 64 concurrent cold opens within the 500 ms per-open budget` |
+| NuGet clean consumer, documentation validation, retired-path inspection, and whitespace validation | `passed` |
+
+### Decision
+
+The immutable baseline plus exact-source delta suite covers every implementation
+and distribution affected by T137 while avoiding redundant repetition of the
+unchanged high-volume schedules. Production readiness for source revision
+`fc605a0` is **PASS**. A later evidence-only commit may record this decision
+without changing the qualified production source tree.
