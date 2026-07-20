@@ -63,6 +63,11 @@ interpret their application-level format.
 A canonical store is one named SMS2 mapping and its resource-protocol-2 cold
 lifecycle resources.
 
+On Linux, stable mapping, lock, owner-sidecar, and lifecycle identities remain
+in the shared resource root. Volatile owner anchors and release markers belong
+to one exact per-store owner-artifact directory, which is the only directory
+enumerated by that store's cold lifecycle.
+
 ### Identity
 
 - Public store name: caller-facing identity from which all platform resources
@@ -441,4 +446,5 @@ units for shared facts and identify local counters as local.
     steady-state data operation requires a process-owned store-wide lock.
 11. C#, C++, and Python differ only in local ownership adapters; they observe
     the same mapped entities, ordering points, statuses, and corruption latch.
-
+12. Linux cold lifecycle enumeration is confined to one store's owner-artifact
+    directory and is independent of unrelated resource-root growth.

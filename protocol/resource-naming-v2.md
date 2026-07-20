@@ -52,12 +52,18 @@ of SHA-256 over the strict UTF-8 public name.
 | `.lock` | Stable cold-open rendezvous |
 | `.owners` | Exact live-owner sidecar |
 | `.lifecycle` | Owner reconciliation, physical create/open, and final cleanup |
-| `.owners.anchor.<guid>` | Private live-owner anchor |
-| `.owners.released.<guid>.ready` | Finalized bounded-close release marker |
+| `.owners.artifacts/` | Per-store volatile owner-evidence directory |
+| `.owners.artifacts/anchor.<guid>` | Private live-owner anchor |
+| `.owners.artifacts/released.<guid>.ready` | Finalized bounded-close release marker |
 
 Directories and files are created with mode `0700` and `0600` respectively.
 Existing objects are verified to be the expected non-symbolic-link type before
 use.
+
+Only the per-store `.owners.artifacts/` directory is enumerated for anchors,
+release markers, and their temporary files. Implementations never enumerate the
+shared root during a cold open. Persistent rendezvous files from unrelated store
+names therefore cannot consume another store's finite open budget.
 
 Both `.lifecycle` and `.lock` use a nonblocking record lock on byte range
 `[0, 1)`, retried within the caller's one wait/cancellation budget. Implementations
@@ -113,7 +119,7 @@ owner line under `.lifecycle`. If that cannot complete, it writes the exact line
 to a unique flushed temporary file and atomically renames it to:
 
 ```text
-<fragment>.owners.released.<owner-guid>.ready
+<fragment>.owners.artifacts/released.<owner-guid>.ready
 ```
 
 Under `.lifecycle`, an opener or releaser reconciles finalized markers before

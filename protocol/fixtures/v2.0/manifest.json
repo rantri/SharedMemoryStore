@@ -1097,8 +1097,8 @@
           "lifecycle": "sms-sms.compatibility-251220bcba0b63e6.lifecycle"
         },
         "owner_token": "00112233445566778899aabbccddeeff",
-        "owner_anchor": "sms-sms.compatibility-251220bcba0b63e6.owners.anchor.00112233445566778899aabbccddeeff",
-        "release_marker": "sms-sms.compatibility-251220bcba0b63e6.owners.released.00112233445566778899aabbccddeeff.ready"
+        "owner_anchor": "sms-sms.compatibility-251220bcba0b63e6.owners.artifacts/anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-sms.compatibility-251220bcba0b63e6.owners.artifacts/released.00112233445566778899aabbccddeeff.ready"
       },
       {
         "name": "separator",
@@ -1112,8 +1112,8 @@
           "lifecycle": "sms-store_name-549a0c43d4d76e02.lifecycle"
         },
         "owner_token": "00112233445566778899aabbccddeeff",
-        "owner_anchor": "sms-store_name-549a0c43d4d76e02.owners.anchor.00112233445566778899aabbccddeeff",
-        "release_marker": "sms-store_name-549a0c43d4d76e02.owners.released.00112233445566778899aabbccddeeff.ready"
+        "owner_anchor": "sms-store_name-549a0c43d4d76e02.owners.artifacts/anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-store_name-549a0c43d4d76e02.owners.artifacts/released.00112233445566778899aabbccddeeff.ready"
       },
       {
         "name": "sanitized-collision-kept-distinct",
@@ -1127,8 +1127,8 @@
           "lifecycle": "sms-store_name-0f08216b745495cd.lifecycle"
         },
         "owner_token": "00112233445566778899aabbccddeeff",
-        "owner_anchor": "sms-store_name-0f08216b745495cd.owners.anchor.00112233445566778899aabbccddeeff",
-        "release_marker": "sms-store_name-0f08216b745495cd.owners.released.00112233445566778899aabbccddeeff.ready"
+        "owner_anchor": "sms-store_name-0f08216b745495cd.owners.artifacts/anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-store_name-0f08216b745495cd.owners.artifacts/released.00112233445566778899aabbccddeeff.ready"
       },
       {
         "name": "global-scope",
@@ -1142,8 +1142,8 @@
           "lifecycle": "sms-Global_sms.compatibility-54e26013eb7f992d.lifecycle"
         },
         "owner_token": "00112233445566778899aabbccddeeff",
-        "owner_anchor": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.anchor.00112233445566778899aabbccddeeff",
-        "release_marker": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.released.00112233445566778899aabbccddeeff.ready"
+        "owner_anchor": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.artifacts/anchor.00112233445566778899aabbccddeeff",
+        "release_marker": "sms-Global_sms.compatibility-54e26013eb7f992d.owners.artifacts/released.00112233445566778899aabbccddeeff.ready"
       }
     ]
   },

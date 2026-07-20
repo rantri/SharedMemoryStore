@@ -264,6 +264,7 @@
 - [X] T134 Start broker-directed and large-ingest workers before pinning the in-process producer so child processes inherit the unrestricted processor mask, and prove unique affinity assignments for every applied role on Windows and Linux
 - [X] T135 Replace the invalid cross-platform 10 ms wall-clock maximum with exact platform stall ceilings (Windows x64 250 ms, Linux x64 10 ms), retain strict p99/scaling/watchdog/suspension gates, and pass validator self-tests plus focused Windows reproduction
 - [X] T136 Harden participant-suspension qualification so borrowed projections are captured once, warmup failures retain their operation histograms, and every corruption report records the qualification phase plus the first available engine origin; preserve the original 107/108 Linux failure and prove the enhanced probe with the complete 108-scenario sequence and focused mixed-churn trials
+- [X] T137 Isolate Linux owner anchors and release markers below exact per-store artifact directories in C# and C++, update the canonical resource vectors inherited by Python, and prove finite cold opens remain independent of at least 12,000 unrelated persistent root artifacts
 
 ---
 

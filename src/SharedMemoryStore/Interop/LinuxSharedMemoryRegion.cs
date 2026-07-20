@@ -8,8 +8,6 @@ namespace SharedMemoryStore.Interop;
 [SupportedOSPlatform("linux")]
 internal static class LinuxSharedMemoryRegion
 {
-    private const string ReleaseMarkerSegment = ".released.";
-    private const string FinalizedReleaseMarkerSuffix = ".ready";
     private const int MaximumReleaseMarkerBytes = 1024;
     private static readonly StoreWaitOptions OwnerReleaseWaitOptions = new(TimeSpan.FromMilliseconds(250));
 
@@ -657,15 +655,17 @@ internal static class LinuxSharedMemoryRegion
         }
 
         var markerName = Path.GetFileName(markerPath);
-        var prefix = Path.GetFileName(resourceName.LinuxOwnersPath) + ReleaseMarkerSegment;
+        const string prefix = LinuxOwnerArtifactStore.ReleasePrefix;
         if (!markerName.StartsWith(prefix, StringComparison.Ordinal)
-            || !markerName.EndsWith(FinalizedReleaseMarkerSuffix, StringComparison.Ordinal))
+            || !markerName.EndsWith(
+                LinuxOwnerArtifactStore.FinalizedReleaseSuffix,
+                StringComparison.Ordinal))
         {
             return false;
         }
 
         var uniqueToken = markerName[
-            prefix.Length..^FinalizedReleaseMarkerSuffix.Length];
+            prefix.Length..^LinuxOwnerArtifactStore.FinalizedReleaseSuffix.Length];
         if (!Guid.TryParseExact(uniqueToken, "N", out _))
         {
             return false;
@@ -705,12 +705,10 @@ internal static class LinuxSharedMemoryRegion
                 return false;
             }
 
-            var directory = Path.GetDirectoryName(resourceName.LinuxOwnersPath) ?? ".";
-            LinuxSharedMemoryDirectory.EnsureExists(directory);
-            var finalPath = resourceName.LinuxOwnersPath
-                + ReleaseMarkerSegment
-                + uniqueToken.ToString("N")
-                + FinalizedReleaseMarkerSuffix;
+            LinuxOwnerArtifactStore.EnsureDirectory(resourceName.LinuxOwnersPath);
+            var finalPath = LinuxOwnerArtifactStore.GetReleaseMarkerPath(
+                resourceName.LinuxOwnersPath,
+                uniqueToken);
             temporaryPath = finalPath + ".tmp." + Guid.NewGuid().ToString("N");
             using (var stream = new FileStream(temporaryPath, new FileStreamOptions
             {
@@ -966,16 +964,9 @@ internal static class LinuxSharedMemoryRegion
         PlatformResourceName resourceName,
         bool finalizedOnly)
     {
-        var directory = Path.GetDirectoryName(resourceName.LinuxOwnersPath) ?? ".";
-        if (!Directory.Exists(directory))
-        {
-            return [];
-        }
-
-        var pattern = Path.GetFileName(resourceName.LinuxOwnersPath)
-            + ReleaseMarkerSegment
-            + (finalizedOnly ? "*" + FinalizedReleaseMarkerSuffix : "*");
-        return Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
+        return LinuxOwnerArtifactStore.EnumerateReleaseMarkers(
+            resourceName.LinuxOwnersPath,
+            finalizedOnly);
     }
 
     private static void DeleteIfExists(string path)

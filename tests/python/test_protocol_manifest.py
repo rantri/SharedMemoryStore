@@ -744,11 +744,11 @@ class ProtocolManifestTests(unittest.TestCase):
             self.assertEqual(owner_token, f"{int(owner_token, 16):032x}")
             owners = expected["files"]["owners"]
             self.assertEqual(
-                f"{owners}.anchor.{owner_token}",
+                f"{owners}.artifacts/anchor.{owner_token}",
                 vector["owner_anchor"],
             )
             self.assertEqual(
-                f"{owners}.released.{owner_token}.ready",
+                f"{owners}.artifacts/released.{owner_token}.ready",
                 vector["release_marker"],
             )
 

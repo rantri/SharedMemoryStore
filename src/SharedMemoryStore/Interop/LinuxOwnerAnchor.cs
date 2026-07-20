@@ -25,7 +25,6 @@ internal readonly record struct LinuxOwnerAnchorArtifact(Guid OwnerToken, string
 [SupportedOSPlatform("linux")]
 internal sealed class LinuxOwnerAnchor : IDisposable
 {
-    private const string AnchorSegment = ".anchor.";
     private const int LockExclusive = 2;
     private const int LockNonBlocking = 4;
     private const int LockUnlock = 8;
@@ -118,6 +117,15 @@ internal sealed class LinuxOwnerAnchor : IDisposable
         Guid ownerToken,
         bool honorLocalRegistry)
     {
+        try
+        {
+            LinuxOwnerArtifactStore.EnsureDirectory(ownersPath);
+        }
+        catch
+        {
+            return LinuxOwnerAnchorState.Ambiguous;
+        }
+
         string path = GetPath(ownersPath, ownerToken);
         if (honorLocalRegistry
             && LocalAnchors.TryGetValue(path, out LinuxOwnerAnchor? local)
@@ -213,7 +221,7 @@ internal sealed class LinuxOwnerAnchor : IDisposable
     }
 
     internal static string GetPath(string ownersPath, Guid ownerToken) =>
-        ownersPath + AnchorSegment + ownerToken.ToString("N");
+        LinuxOwnerArtifactStore.GetAnchorPath(ownersPath, ownerToken);
 
     /// <summary>
     /// Removes only well-formed, unreferenced anchor artifacts whose lock can
@@ -265,20 +273,11 @@ internal sealed class LinuxOwnerAnchor : IDisposable
 
     internal static LinuxOwnerAnchorArtifact[] EnumerateWellFormedArtifacts(string ownersPath)
     {
-        string directory = Path.GetDirectoryName(ownersPath) ?? ".";
-        if (!Directory.Exists(directory))
-        {
-            return [];
-        }
-
-        string prefix = Path.GetFileName(ownersPath) + AnchorSegment;
+        string prefix = LinuxOwnerArtifactStore.AnchorPrefix;
         try
         {
             var artifacts = new List<LinuxOwnerAnchorArtifact>();
-            foreach (string path in Directory.GetFileSystemEntries(
-                         directory,
-                         prefix + "*",
-                         SearchOption.TopDirectoryOnly))
+            foreach (string path in LinuxOwnerArtifactStore.EnumerateAnchors(ownersPath))
             {
                 string name = Path.GetFileName(path);
                 if (!name.StartsWith(prefix, StringComparison.Ordinal)

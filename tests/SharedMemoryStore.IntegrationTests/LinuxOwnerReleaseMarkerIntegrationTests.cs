@@ -245,10 +245,9 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
         var resource = PlatformResourceName.Create(name);
         var createOptions = CreateOptions(name, OpenMode.CreateNew, participantRecordCount: 2);
         var openOptions = CreateOptions(name, OpenMode.OpenExisting, participantRecordCount: 2);
-        var markerPath = resource.LinuxOwnersPath
-            + ".released."
-            + Guid.NewGuid().ToString("N")
-            + ".ready";
+        var markerPath = LinuxOwnerArtifactStore.GetReleaseMarkerPath(
+            resource.LinuxOwnersPath,
+            Guid.NewGuid());
 
         using var store = IntegrationStoreFactory.Create(createOptions);
         File.WriteAllText(markerPath, "not-an-owner-record");
@@ -371,8 +370,8 @@ public sealed class LinuxOwnerReleaseMarkerIntegrationTests
 
     private static string[] GetFinalizedMarkerPaths(PlatformResourceName resource)
     {
-        var directory = Path.GetDirectoryName(resource.LinuxOwnersPath)!;
-        var pattern = Path.GetFileName(resource.LinuxOwnersPath) + ".released.*.ready";
+        var directory = LinuxOwnerArtifactStore.GetDirectory(resource.LinuxOwnersPath);
+        var pattern = "released.*.ready";
         return Directory.Exists(directory)
             ? Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly)
             : [];
