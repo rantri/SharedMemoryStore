@@ -27,6 +27,7 @@ public sealed class PackageProductionReadinessIntegrationTests
         Assert.Contains("Resolve-Path", packageScript);
         Assert.Contains("pwsh", crossPlatformScript, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("validate-package-consumption.ps1", crossPlatformScript);
+        Assert.Contains("--maxcpucount:1", crossPlatformScript);
         Assert.Contains("docker compose", dockerScript, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("C:\\", packageScript, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("C:\\", crossPlatformScript, StringComparison.OrdinalIgnoreCase);

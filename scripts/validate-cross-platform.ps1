@@ -39,7 +39,9 @@ function Invoke-RepositoryScript {
 
 Invoke-Checked "dotnet" @("restore", $solution) "restore"
 Invoke-Checked "dotnet" @("build", $solution, "-c", $Configuration, "--no-restore") "build"
-Invoke-Checked "dotnet" @("test", $solution, "-c", $Configuration, "--no-build") "test"
+# Keep test projects sequential so their intentional multi-process scenarios do not
+# compete with unrelated assemblies for the bounded cold-open budget.
+Invoke-Checked "dotnet" @("test", $solution, "-c", $Configuration, "--no-build", "--maxcpucount:1") "test"
 
 foreach ($relativeProject in $sampleProjects) {
     $project = Join-Path $root $relativeProject
