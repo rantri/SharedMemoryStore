@@ -1,1 +1,4 @@
 protocol/fixtures/v1.2/*.snapshot.json text eol=lf
+protocol/fixtures/v2.0/*.json text eol=lf
+protocol/fixtures/v2.0/offline/*.json text eol=lf
+protocol/fixtures/v2.0/offline/*.bin binary
