@@ -259,7 +259,7 @@
 
 ## Phase 8: Convergence
 
-- [ ] T132 Freeze the corrected concurrent-close implementation and rerun immutable Windows x64/Linux x64 PR, nightly, release, independent-review, and final rollup evidence for the exact revision per SC-010 and T129 (partial)
+- [X] T132 Freeze the corrected production source at `fc605a0` and complete the user-approved compact production-readiness decision by combining the prior immutable Windows x64/Linux x64 matrix with exact-revision managed, native, Python, interoperability, Docker, package, documentation, and T137 delta verification per SC-010 and T129
 - [X] T133 Harden all sync-probe worker cold opens against transient `StoreBusy` and prove the bounded policy across Windows and Linux with a real cross-process cold-gate regression
 - [X] T134 Start broker-directed and large-ingest workers before pinning the in-process producer so child processes inherit the unrestricted processor mask, and prove unique affinity assignments for every applied role on Windows and Linux
 - [X] T135 Replace the invalid cross-platform 10 ms wall-clock maximum with exact platform stall ceilings (Windows x64 250 ms, Linux x64 10 ms), retain strict p99/scaling/watchdog/suspension gates, and pass validator self-tests plus focused Windows reproduction
