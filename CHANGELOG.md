@@ -5,6 +5,22 @@ chronological order.
 
 ## Unreleased
 
+- Native operations rejected during close no longer access failure counters in
+  the state being destroyed; entered failures still contribute diagnostics.
+- Native C and C++ handle entry no longer uses lock-backed atomic shared-pointer
+  snapshots. Concurrent close drains entered calls before handle destruction;
+  C ABI 2 and the mapped protocol remain unchanged.
+- Fixed native reservation recovery falsely reporting corruption when a
+  delayed directory helper publishes an older descriptor after slot reuse.
+  Recovery removes only validated older descriptors and preserves current
+  ownership and corruption checks. This is a compatible bug fix; public APIs,
+  ABI 2.0, and the SMS2 layout are unchanged.
+- Fixed native lease and reservation projections remaining available after the
+  shared store leaves Ready. This is a patch-level correction with no API or
+  mapped protocol change.
+- Fixed native lease projections discarding confirmed malformed lease controls
+  or bindings without marking the shared store corrupt. This is a patch-level
+  correction with no API or mapped protocol change.
 - Fixed native Linux cold-open cleanup to prune crashed-owner records and
   unlocked anchors while other owners remain live. Ambiguous ownership
   evidence is retained. This is a compatible bug fix; public APIs and resource
