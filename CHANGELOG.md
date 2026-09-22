@@ -5,6 +5,11 @@ chronological order.
 
 ## Unreleased
 
+- Fixed native Linux cold-open cleanup to prune crashed-owner records and
+  unlocked anchors while other owners remain live. Ambiguous ownership
+  evidence is retained. This is a compatible bug fix; public APIs and resource
+  protocol 2 are unchanged.
+
 ## 3.0.0 - 2026-07-16
 
 ### Breaking changes
