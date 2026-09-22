@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <thread>
 
 static_assert(sizeof(void*) == 8);
@@ -84,6 +85,27 @@ int main() {
     terminal = SMS_STATUS_UNKNOWN_FAILURE;
     SMS_CHECK(finite.try_continue_after_contention(0, terminal));
     SMS_CHECK(terminal == SMS_STATUS_SUCCESS);
+
+    // These finite millisecond values exceed the signed nanosecond range.
+    // Checking a fresh budget must not multiply the timeout into overflow.
+    for (const auto timeout : {
+             std::chrono::milliseconds{9'223'372'036'854LL},
+             std::chrono::milliseconds{9'223'372'036'855LL},
+             std::chrono::milliseconds{std::numeric_limits<std::int64_t>::max()}}) {
+        auto large = OperationBudget::start_at(timeout, now);
+        SMS_CHECK(large.valid());
+        SMS_CHECK(!large.is_infinite());
+        SMS_CHECK(large.check() == SMS_STATUS_SUCCESS);
+        SMS_CHECK(large.check_periodic(64) == SMS_STATUS_SUCCESS);
+        terminal = SMS_STATUS_UNKNOWN_FAILURE;
+        SMS_CHECK(large.try_continue_after_contention(0, terminal));
+        SMS_CHECK(terminal == SMS_STATUS_SUCCESS);
+
+        CancellationFlag large_cancellation;
+        auto cancelable_large = OperationBudget::start_at(timeout, now, &large_cancellation);
+        large_cancellation.cancel();
+        SMS_CHECK(cancelable_large.check() == SMS_STATUS_OPERATION_CANCELED);
+    }
 
     auto expired = OperationBudget::start_at(1ms, now - 10ms);
     SMS_CHECK(expired.check() == SMS_STATUS_STORE_BUSY);

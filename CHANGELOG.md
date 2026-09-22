@@ -25,6 +25,9 @@ chronological order.
   unlocked anchors while other owners remain live. Ambiguous ownership
   evidence is retained. This is a compatible bug fix; public APIs and resource
   protocol 2 are unchanged.
+- Fixed native finite operation timeouts above the clock's nanosecond range
+  expiring immediately. This is a patch-level correction with no API or mapped
+  protocol change.
 
 ## 3.0.0 - 2026-07-16
 

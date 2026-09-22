@@ -73,7 +73,11 @@ public:
         }
         if (!valid()) return SMS_STATUS_UNKNOWN_FAILURE;
         if (is_infinite() || is_no_wait()) return SMS_STATUS_SUCCESS;
-        return clock::now() - started_ >= timeout_
+        // Compare in the public timeout unit. Converting an accepted int64
+        // millisecond timeout to the clock's finer ticks can overflow.
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            clock::now() - started_);
+        return elapsed >= timeout_
             ? SMS_STATUS_STORE_BUSY
             : SMS_STATUS_SUCCESS;
     }
