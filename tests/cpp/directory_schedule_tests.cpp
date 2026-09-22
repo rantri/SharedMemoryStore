@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace {
 
@@ -166,6 +167,53 @@ std::int32_t slot_state(Fixture& fixture, std::int32_t index) {
         return -1;
     }
     return control.state;
+}
+
+struct SpillReplacementContext {
+    Fixture* fixture{};
+    DirectoryCheckpoint pause_point{};
+    std::uint64_t removed_binding{};
+    std::uint64_t replacement_binding{};
+    bool armed{};
+    sms_status unlink_status{SMS_STATUS_STORE_BUSY};
+    sms_status insert_status{SMS_STATUS_STORE_BUSY};
+    sms_status lookup_status{SMS_STATUS_NOT_FOUND};
+    DirectoryLocation replacement_location{};
+};
+
+void replace_after_empty_scan(
+    void* raw_context,
+    DirectoryCheckpoint checkpoint,
+    std::uint64_t binding,
+    std::uint64_t witness) noexcept {
+    auto& context = *static_cast<SpillReplacementContext*>(raw_context);
+    if (!context.armed ||
+        checkpoint != context.pause_point ||
+        binding != context.removed_binding || witness != 0) {
+        return;
+    }
+    context.armed = false;
+    auto& fixture = *context.fixture;
+    // The first helper is paused with an empty scan. A second helper finishes
+    // the unlink and releases the canonical mutation, then an owner publishes
+    // another overflow entry in the same bucket before the first resumes.
+    context.unlink_status = fixture.directory().try_unlink(
+        binding, OperationBudget::unbounded_scan());
+    context.replacement_binding = fixture.seed_slot(
+        17, "replacement-overflow", 101, 1, 1);
+    context.insert_status = fixture.directory().try_insert(
+        bytes("replacement-overflow"),
+        101,
+        context.replacement_binding,
+        OperationBudget::unbounded_scan(),
+        context.replacement_location);
+    fixture.set_slot_state(17, 1, 3);
+    DirectoryEntry entry{};
+    context.lookup_status = fixture.directory().try_lookup(
+        bytes("replacement-overflow"),
+        101,
+        OperationBudget::unbounded_scan(),
+        entry);
 }
 
 } // namespace
@@ -449,6 +497,57 @@ int main() {
         SMS_CHECK(!summary.is_initial());
         SMS_CHECK(!summary.is_present);
         SMS_CHECK(summary.binding() == binding);
+    }
+
+    for (const auto pause_point : {DirectoryCheckpoint::after_empty_overflow_scan,
+                                  DirectoryCheckpoint::before_spill_empty_cas}) {
+        SpillReplacementContext context{};
+        context.pause_point = pause_point;
+        Fixture fixture(
+            32,
+            128,
+            sms::detail::DirectoryHooks{&context, &replace_after_empty_scan});
+        context.fixture = &fixture;
+        for (std::int32_t index = 0; index < 17; ++index) {
+            const auto key = "spill-initial-" + std::to_string(index);
+            const auto binding = fixture.seed_slot(index, key, 101, 1, 1);
+            DirectoryLocation location{};
+            SMS_CHECK(fixture.directory().try_insert(
+                          bytes(key), 101, binding,
+                          OperationBudget::unbounded_scan(), location) ==
+                      SMS_STATUS_SUCCESS);
+            fixture.set_slot_state(index, 1, 3);
+            if (index == 16) {
+                SMS_CHECK(location.kind == sms::detail::directory_target_overflow);
+                context.removed_binding = binding;
+            }
+        }
+        fixture.set_slot_state(16, 1, 6);
+        context.armed = true;
+        SMS_CHECK(fixture.directory().try_unlink(
+                      context.removed_binding,
+                      OperationBudget::unbounded_scan()) == SMS_STATUS_SUCCESS);
+        SMS_CHECK(!context.armed);
+        SMS_CHECK(context.unlink_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.insert_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.lookup_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.replacement_location.kind ==
+                  sms::detail::directory_target_overflow);
+        DirectoryEntry found{};
+        SMS_CHECK(fixture.directory().try_lookup(
+                      bytes("replacement-overflow"), 101,
+                      OperationBudget::unbounded_scan(), found) ==
+                  SMS_STATUS_SUCCESS);
+        SMS_CHECK(found.binding == context.replacement_binding);
+        std::int32_t canonical{};
+        std::int32_t alternate{};
+        fixture.directory().buckets_for_hash(101, canonical, alternate);
+        sms::detail::SpillSummary summary{};
+        SMS_CHECK(sms::detail::SpillSummary::try_decode(
+            fixture.directory().read_spill_summary(canonical), summary));
+        SMS_CHECK(summary.is_present);
+        SMS_CHECK(summary.binding() == context.replacement_binding);
+        SMS_CHECK(fixture.directory().read_mutation(canonical) == 0);
     }
 
     return 0;
