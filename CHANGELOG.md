@@ -21,6 +21,10 @@ chronological order.
 - Fixed native lease projections discarding confirmed malformed lease controls
   or bindings without marking the shared store corrupt. This is a patch-level
   correction with no API or mapped protocol change.
+- Fixed native Linux cold-open cleanup to prune crashed-owner records and
+  unlocked anchors while other owners remain live. Ambiguous ownership
+  evidence is retained. This is a compatible bug fix; public APIs and resource
+  protocol 2 are unchanged.
 
 ## 3.0.0 - 2026-07-16
 
