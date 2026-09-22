@@ -4,6 +4,7 @@ set(
     store_tests.cpp
     c_api_tests.cpp
     lifecycle_tests.cpp
+    local_handle_tests.cpp
     diagnostics_tests.cpp)
 
 # Register the planned SMS2 test topology without making an incomplete test
@@ -101,6 +102,11 @@ function(_sms_add_native_test source_name)
             PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/key_directory.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/layout_v2.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
+        if(_test_stem STREQUAL "directory_schedule_tests")
+            target_sources(
+                ${_target}
+                PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/slot_table.cpp")
+        endif()
     elseif(_test_stem STREQUAL "platform_linux_v2_tests")
         # Resource-protocol-2 ownership helpers are hidden platform internals.
         # Compile them and canonical resource-name derivation directly into the
@@ -242,3 +248,7 @@ if(TARGET sms_interop_agent_protocol_tests AND TARGET sms_cpp_interop_agent)
         sms_cpp_interop_agent)
 endif()
 _sms_add_native_agent(sms_mapped_atomic_agent mapped_atomic_agent.cpp)
+
+_sms_add_native_agent(
+    sms_close_record_tests close_record_tests.cpp SharedMemoryStoreCheckpointRuntime)
+add_test(NAME SharedMemoryStore.close_record_tests COMMAND sms_close_record_tests)

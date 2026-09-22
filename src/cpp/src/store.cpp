@@ -492,8 +492,16 @@ sms_status Store::validate_value(
 }
 
 sms_status Store::record(sms_status status) noexcept {
+    // A rejected lifetime-gate entry has no operation guard. Close may be
+    // destroying State concurrently, so do not even read state_ for that
+    // outcome. Every other failure reaches here with an entered operation.
+    if (status == SMS_STATUS_STORE_DISPOSED || status == SMS_STATUS_SUCCESS) {
+        return status;
+    }
+    sms::test_detail::reach_checkpoint(
+        sms::test_detail::CheckpointId::StoreBeforeFailureStateAccess);
     auto* state = state_.get();
-    if (state == nullptr || status == SMS_STATUS_SUCCESS) return status;
+    if (state == nullptr) return status;
     const auto index = static_cast<std::int32_t>(status);
     if (index >= 0 && index < SMS_STATUS_COUNT) {
         state->failures[static_cast<std::size_t>(index)].fetch_add(

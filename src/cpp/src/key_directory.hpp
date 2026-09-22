@@ -46,6 +46,7 @@ enum class DirectoryCheckpoint : std::int32_t {
     before_mutation_release = 17,
     before_reserved_publication = 18,
     after_reserved_publication = 19,
+    before_spill_empty_cas = 20,
 };
 
 struct DirectoryHooks {

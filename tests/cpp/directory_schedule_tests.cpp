@@ -1,7 +1,9 @@
 #include "directory_test_support.hpp"
+#include "slot_table.hpp"
 #include "test_support.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace {
 
@@ -159,6 +161,120 @@ void scheduled_reach(
     }
 }
 
+enum class ReservedRace { publish, cancel, reuse, malformed_control };
+
+struct ReservedRaceContext {
+    Fixture* fixture{};
+    ReservedRace race{};
+    bool armed{true};
+    sms_status peer_status{SMS_STATUS_STORE_BUSY};
+    DirectoryLocation peer_location{};
+    std::uint64_t replacement_binding{};
+    std::uint64_t replacement_operation{};
+};
+
+void advance_before_reserved(
+    void* raw_context,
+    DirectoryCheckpoint checkpoint,
+    std::uint64_t binding,
+    std::uint64_t) noexcept {
+    auto& context = *static_cast<ReservedRaceContext*>(raw_context);
+    if (!context.armed ||
+        checkpoint != DirectoryCheckpoint::before_reserved_publication) {
+        return;
+    }
+    context.armed = false;
+    auto& fixture = *context.fixture;
+    if (context.race == ReservedRace::cancel) {
+        fixture.set_slot_state(0, 1, 5);
+        return;
+    }
+    if (context.race == ReservedRace::malformed_control) {
+        // An occupied terminal generation with an owner is structurally invalid.
+        MappedAtomic64::store_release(fixture.slot(0).Control, UINT64_MAX);
+        return;
+    }
+    context.peer_status = fixture.directory().try_insert(
+        bytes("reserved-race"), 101, binding,
+        OperationBudget::unbounded_scan(), context.peer_location);
+    fixture.set_slot_state(0, 1, 3);
+    if (context.race == ReservedRace::reuse) {
+        fixture.set_slot_state(0, 1, 6);
+        context.peer_status = fixture.directory().try_unlink(
+            binding, OperationBudget::unbounded_scan());
+        context.replacement_binding = fixture.seed_slot(
+            0, "replacement", 101, 2, 1);
+        context.peer_status = fixture.directory().try_insert(
+            bytes("replacement"), 101, context.replacement_binding,
+            OperationBudget::unbounded_scan(), context.peer_location);
+        fixture.set_slot_state(0, 2, 3);
+        context.replacement_operation = MappedAtomic64::load_acquire(
+            fixture.slot(0).DirectoryOperation);
+    }
+}
+
+struct ReservationFallbackContext {
+    Fixture* fixture{};
+    sms::detail::SlotTable* owner{};
+    sms::detail::ReservationToken reservation{};
+    bool remove_requested{};
+    bool armed{true};
+    bool pending{};
+    bool ordered{};
+    sms_status canceled_insert{SMS_STATUS_SUCCESS};
+    sms_status contains_status{SMS_STATUS_NOT_FOUND};
+    sms_status commit_status{SMS_STATUS_INVALID_RESERVATION};
+    sms_status helper_status{SMS_STATUS_STORE_BUSY};
+    std::int32_t helper_phase{};
+};
+
+void commit_before_insert_completion(
+    void* raw_context,
+    DirectoryCheckpoint checkpoint,
+    std::uint64_t binding,
+    std::uint64_t) noexcept {
+    auto& context = *static_cast<ReservationFallbackContext*>(raw_context);
+    if (!context.armed ||
+        checkpoint != DirectoryCheckpoint::after_reserved_publication) {
+        return;
+    }
+    context.armed = false;
+    auto& fixture = *context.fixture;
+    // Keep the publishing helper paused after Initializing -> Reserved, with
+    // its descriptor still BindingChanged. The owner encounters cancellation
+    // and applies reserve_core's pending-plus-exact-reference fallback before
+    // committing through the real SlotTable operation.
+    sms::detail::CancellationFlag canceled;
+    canceled.cancel();
+    DirectoryLocation location{};
+    context.canceled_insert = fixture.directory().try_insert(
+        bytes("reservation-fallback"), 101, binding,
+        OperationBudget::unbounded_scan(&canceled), location);
+    context.pending = context.owner->reservation_pending(context.reservation);
+    context.contains_status = fixture.directory().contains_exact_reference(
+        binding, OperationBudget::structural_attempt(), context.ordered);
+    if (context.canceled_insert != SMS_STATUS_SUCCESS && context.pending &&
+        context.contains_status == SMS_STATUS_SUCCESS && context.ordered) {
+        context.commit_status = context.owner->commit_reservation(
+            context.reservation, 1);
+    }
+    if (context.commit_status != SMS_STATUS_SUCCESS) return;
+    if (context.remove_requested) fixture.set_slot_state(0, 1, 4);
+    std::int32_t canonical{};
+    std::int32_t alternate{};
+    fixture.directory().buckets_for_hash(101, canonical, alternate);
+    // A different helper must finish this still-current descriptor even though
+    // the exact slot has legally moved beyond Reserved.
+    context.helper_status = fixture.directory().help_mutation(
+        canonical, OperationBudget::unbounded_scan(), 2);
+    DirectoryOperation operation{};
+    if (DirectoryOperation::try_decode(
+            MappedAtomic64::load_acquire(fixture.slot(0).DirectoryOperation),
+            operation)) {
+        context.helper_phase = operation.phase;
+    }
+}
+
 std::int32_t slot_state(Fixture& fixture, std::int32_t index) {
     SlotControl control{};
     if (!SlotControl::try_decode(
@@ -166,6 +282,53 @@ std::int32_t slot_state(Fixture& fixture, std::int32_t index) {
         return -1;
     }
     return control.state;
+}
+
+struct SpillReplacementContext {
+    Fixture* fixture{};
+    DirectoryCheckpoint pause_point{};
+    std::uint64_t removed_binding{};
+    std::uint64_t replacement_binding{};
+    bool armed{};
+    sms_status unlink_status{SMS_STATUS_STORE_BUSY};
+    sms_status insert_status{SMS_STATUS_STORE_BUSY};
+    sms_status lookup_status{SMS_STATUS_NOT_FOUND};
+    DirectoryLocation replacement_location{};
+};
+
+void replace_after_empty_scan(
+    void* raw_context,
+    DirectoryCheckpoint checkpoint,
+    std::uint64_t binding,
+    std::uint64_t witness) noexcept {
+    auto& context = *static_cast<SpillReplacementContext*>(raw_context);
+    if (!context.armed ||
+        checkpoint != context.pause_point ||
+        binding != context.removed_binding || witness != 0) {
+        return;
+    }
+    context.armed = false;
+    auto& fixture = *context.fixture;
+    // The first helper is paused with an empty scan. A second helper finishes
+    // the unlink and releases the canonical mutation, then an owner publishes
+    // another overflow entry in the same bucket before the first resumes.
+    context.unlink_status = fixture.directory().try_unlink(
+        binding, OperationBudget::unbounded_scan());
+    context.replacement_binding = fixture.seed_slot(
+        17, "replacement-overflow", 101, 1, 1);
+    context.insert_status = fixture.directory().try_insert(
+        bytes("replacement-overflow"),
+        101,
+        context.replacement_binding,
+        OperationBudget::unbounded_scan(),
+        context.replacement_location);
+    fixture.set_slot_state(17, 1, 3);
+    DirectoryEntry entry{};
+    context.lookup_status = fixture.directory().try_lookup(
+        bytes("replacement-overflow"),
+        101,
+        OperationBudget::unbounded_scan(),
+        entry);
 }
 
 } // namespace
@@ -413,6 +576,93 @@ int main() {
                   SMS_STATUS_CORRUPT_STORE);
     }
 
+    for (const auto race : {ReservedRace::publish, ReservedRace::cancel,
+                           ReservedRace::reuse, ReservedRace::malformed_control}) {
+        ReservedRaceContext context{};
+        context.race = race;
+        Fixture fixture(
+            32, 128,
+            sms::detail::DirectoryHooks{&context, &advance_before_reserved});
+        context.fixture = &fixture;
+        const auto binding = fixture.seed_slot(0, "reserved-race", 101, 1, 1);
+        DirectoryLocation location{};
+        const auto status = fixture.directory().try_insert(
+            bytes("reserved-race"), 101, binding,
+            OperationBudget::unbounded_scan(), location);
+        SMS_CHECK(!context.armed);
+        if (race == ReservedRace::malformed_control) {
+            SMS_CHECK(status == SMS_STATUS_CORRUPT_STORE);
+        } else if (race == ReservedRace::cancel) {
+            SMS_CHECK(status == SMS_STATUS_INVALID_RESERVATION);
+            bool remains{};
+            SMS_CHECK(fixture.directory().contains_exact_reference(
+                          binding, OperationBudget::unbounded_scan(), remains) ==
+                      SMS_STATUS_SUCCESS);
+            SMS_CHECK(!remains);
+            SMS_CHECK(slot_state(fixture, 0) == 5);
+        } else {
+            SMS_CHECK(context.peer_status == SMS_STATUS_SUCCESS);
+            SMS_CHECK(status == (race == ReservedRace::publish
+                                     ? SMS_STATUS_SUCCESS
+                                     : SMS_STATUS_INVALID_RESERVATION));
+            DirectoryEntry found{};
+            SMS_CHECK(fixture.directory().try_lookup(
+                          bytes(race == ReservedRace::publish
+                                    ? "reserved-race" : "replacement"),
+                          101, OperationBudget::unbounded_scan(), found) ==
+                      SMS_STATUS_SUCCESS);
+            SMS_CHECK(found.binding == (race == ReservedRace::publish
+                                            ? binding
+                                            : context.replacement_binding));
+            SMS_CHECK(slot_state(fixture, 0) == 3);
+            if (race == ReservedRace::reuse) {
+                SMS_CHECK(MappedAtomic64::load_acquire(
+                              fixture.slot(0).DirectoryOperation) ==
+                          context.replacement_operation);
+            }
+        }
+    }
+
+    for (const auto remove_requested : {false, true}) {
+        ReservationFallbackContext context{};
+        context.remove_requested = remove_requested;
+        Fixture fixture(
+            32, 128,
+            sms::detail::DirectoryHooks{&context, &commit_before_insert_completion});
+        context.fixture = &fixture;
+        const auto binding = fixture.seed_slot(0, "reservation-fallback", 101, 1, 1);
+        fixture.slot(0).PublicationIntent = 1;
+        std::uint64_t token{};
+        std::uint64_t active{};
+        SMS_CHECK(sms::detail::ParticipantToken::try_encode(
+            0, 1, fixture.layout().participant_record_count, token));
+        SMS_CHECK(sms::detail::ParticipantControl::try_encode(2, 1, 1001, active));
+        auto* participant = reinterpret_cast<sms::detail::ParticipantRecordV2*>(
+            fixture.base() + fixture.layout().participant_offset);
+        MappedAtomic64::store_release(participant->Control, active);
+        constexpr std::uint64_t store_id = 7;
+        sms::detail::SlotTable owner(
+            fixture.base(), static_cast<std::size_t>(fixture.layout().required_bytes),
+            fixture.layout(), store_id,
+            {static_cast<std::uint32_t>(token), active});
+        SMS_CHECK(owner.valid());
+        context.owner = &owner;
+        context.reservation = {store_id, static_cast<std::uint32_t>(token), binding, 0};
+        DirectoryLocation location{};
+        SMS_CHECK(fixture.directory().try_insert(
+                      bytes("reservation-fallback"), 101, binding,
+                      OperationBudget::unbounded_scan(), location) ==
+                  SMS_STATUS_SUCCESS);
+        SMS_CHECK(!context.armed);
+        SMS_CHECK(context.canceled_insert == SMS_STATUS_OPERATION_CANCELED);
+        SMS_CHECK(context.pending && context.ordered);
+        SMS_CHECK(context.contains_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.commit_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.helper_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.helper_phase == sms::detail::directory_phase_complete);
+        SMS_CHECK(slot_state(fixture, 0) == (remove_requested ? 4 : 3));
+    }
+
     {
         Fixture fixture;
         constexpr std::uint64_t hash = 808;
@@ -449,6 +699,57 @@ int main() {
         SMS_CHECK(!summary.is_initial());
         SMS_CHECK(!summary.is_present);
         SMS_CHECK(summary.binding() == binding);
+    }
+
+    for (const auto pause_point : {DirectoryCheckpoint::after_empty_overflow_scan,
+                                  DirectoryCheckpoint::before_spill_empty_cas}) {
+        SpillReplacementContext context{};
+        context.pause_point = pause_point;
+        Fixture fixture(
+            32,
+            128,
+            sms::detail::DirectoryHooks{&context, &replace_after_empty_scan});
+        context.fixture = &fixture;
+        for (std::int32_t index = 0; index < 17; ++index) {
+            const auto key = "spill-initial-" + std::to_string(index);
+            const auto binding = fixture.seed_slot(index, key, 101, 1, 1);
+            DirectoryLocation location{};
+            SMS_CHECK(fixture.directory().try_insert(
+                          bytes(key), 101, binding,
+                          OperationBudget::unbounded_scan(), location) ==
+                      SMS_STATUS_SUCCESS);
+            fixture.set_slot_state(index, 1, 3);
+            if (index == 16) {
+                SMS_CHECK(location.kind == sms::detail::directory_target_overflow);
+                context.removed_binding = binding;
+            }
+        }
+        fixture.set_slot_state(16, 1, 6);
+        context.armed = true;
+        SMS_CHECK(fixture.directory().try_unlink(
+                      context.removed_binding,
+                      OperationBudget::unbounded_scan()) == SMS_STATUS_SUCCESS);
+        SMS_CHECK(!context.armed);
+        SMS_CHECK(context.unlink_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.insert_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.lookup_status == SMS_STATUS_SUCCESS);
+        SMS_CHECK(context.replacement_location.kind ==
+                  sms::detail::directory_target_overflow);
+        DirectoryEntry found{};
+        SMS_CHECK(fixture.directory().try_lookup(
+                      bytes("replacement-overflow"), 101,
+                      OperationBudget::unbounded_scan(), found) ==
+                  SMS_STATUS_SUCCESS);
+        SMS_CHECK(found.binding == context.replacement_binding);
+        std::int32_t canonical{};
+        std::int32_t alternate{};
+        fixture.directory().buckets_for_hash(101, canonical, alternate);
+        sms::detail::SpillSummary summary{};
+        SMS_CHECK(sms::detail::SpillSummary::try_decode(
+            fixture.directory().read_spill_summary(canonical), summary));
+        SMS_CHECK(summary.is_present);
+        SMS_CHECK(summary.binding() == context.replacement_binding);
+        SMS_CHECK(fixture.directory().read_mutation(canonical) == 0);
     }
 
     return 0;

@@ -12,6 +12,8 @@ namespace {
 
 constexpr std::int32_t slot_initializing = 1;
 constexpr std::int32_t slot_reserved = 2;
+constexpr std::int32_t slot_published = 3;
+constexpr std::int32_t slot_remove_requested = 4;
 constexpr std::int32_t slot_aborting = 5;
 constexpr std::int32_t slot_reclaiming = 6;
 constexpr std::int32_t slot_retired = 7;
@@ -1334,7 +1336,64 @@ sms_status KeyDirectory::help_insert(
             binding,
             control);
         const auto reserved_status = publish_reserved(value_slot, binding);
-        if (reserved_status != SMS_STATUS_SUCCESS) return reserved_status;
+        if (reserved_status != SMS_STATUS_SUCCESS) {
+            // Reserved publication can lose to a helper that completes this
+            // insertion before its owner publishes, cancels, or reuses the
+            // slot. Classify the failure against the exact source descriptor
+            // before treating its now-inapplicable state as corruption.
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+            const auto revalidated_control =
+                MappedAtomic64::load_acquire(value_slot.Control);
+            const auto revalidated_binding =
+                MappedAtomic64::load_acquire(value_slot.DirectoryBinding);
+            const auto confirmed_control =
+                MappedAtomic64::load_acquire(value_slot.Control);
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+            if (revalidated_control != confirmed_control) {
+                return SMS_STATUS_STORE_BUSY;
+            }
+            const auto control_status =
+                classify_control(confirmed_control, decoded.generation);
+            if (control_status == ControlBindingStatus::stale) {
+                return SMS_STATUS_SUCCESS;
+            }
+            if (control_status == ControlBindingStatus::invalid ||
+                revalidated_binding != binding) {
+                return SMS_STATUS_CORRUPT_STORE;
+            }
+            SlotControl revalidated{};
+            (void)SlotControl::try_decode(confirmed_control, revalidated);
+            if (revalidated.state == slot_aborting ||
+                revalidated.state == slot_reclaiming) {
+                // Retry helping from this state so the existing cancellation
+                // path removes the binding and rejects the reservation.
+                return SMS_STATUS_SUCCESS;
+            }
+            if (revalidated.state != slot_published &&
+                revalidated.state != slot_remove_requested) {
+                return reserved_status;
+            }
+            // Explicit reservations may return through reserve_core's ordered
+            // fallback while this descriptor is still BindingChanged. Their
+            // owner can therefore commit (and a reader can request removal)
+            // before any helper publishes Complete. Preserve that publication
+            // and finish the exact descriptor once its reference is confirmed.
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryLocation) !=
+                    location_raw ||
+                MappedAtomic64::load_acquire(*target.word) != binding ||
+                MappedAtomic64::load_acquire(value_slot.Control) !=
+                    confirmed_control ||
+                MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+        }
         checkpoint(
             DirectoryCheckpoint::after_reserved_publication,
             binding,
@@ -1895,83 +1954,85 @@ sms_status KeyDirectory::refresh_spill_after_unlink(
     std::int32_t canonical_bucket,
     std::uint64_t removed_binding,
     const OperationBudget& budget) noexcept {
-    std::uint64_t witness{};
-    std::int64_t witness_index{-1};
-    auto status = find_overflow_witness(
-        canonical_bucket, budget, witness, witness_index);
-    if (status != SMS_STATUS_SUCCESS) return status;
-    if (witness == 0) {
-        sms::test_detail::reach_checkpoint(
-            sms::test_detail::CheckpointId::DirectoryAfterEmptySpillSummaryScan);
-    }
-    checkpoint(
-        DirectoryCheckpoint::after_empty_overflow_scan,
-        removed_binding,
-        witness);
-
-    std::uint64_t desired{};
-    const auto encoded = witness == 0
-        ? SpillSummary::try_encode_empty(removed_binding, desired)
-        : SpillSummary::try_encode_present(witness, desired);
-    if (!encoded) return SMS_STATUS_CORRUPT_STORE;
     auto* const word = spill_word(canonical_bucket);
+    auto* const mutation = mutation_word(canonical_bucket);
+    if (word == nullptr || mutation == nullptr) return SMS_STATUS_CORRUPT_STORE;
     for (std::int32_t attempt = 0;; ++attempt) {
         const auto bound = budget.check_periodic(attempt);
         if (bound != SMS_STATUS_SUCCESS) return bound;
-        if (witness != 0 &&
-            (witness_index < 0 ||
-             MappedAtomic64::load_acquire(*overflow_word(witness_index)) !=
-                 witness)) {
-            status = find_overflow_witness(
-                canonical_bucket, budget, witness, witness_index);
-            if (status != SMS_STATUS_SUCCESS) return status;
-            if (!(witness == 0
-                      ? SpillSummary::try_encode_empty(removed_binding, desired)
-                      : SpillSummary::try_encode_present(witness, desired))) {
-                return SMS_STATUS_CORRUPT_STORE;
-            }
-            continue;
-        }
-        auto observed = MappedAtomic64::load_acquire(*word);
-        SpillSummary summary{};
-        if (!decode_summary_semantic(observed, summary)) {
-            if (MappedAtomic64::load_acquire(*word) == observed) {
-                return SMS_STATUS_CORRUPT_STORE;
-            }
-            continue;
-        }
-        auto expected = observed;
-        if (MappedAtomic64::compare_exchange(*word, expected, desired)) {
-            if (witness != 0 &&
-                MappedAtomic64::load_acquire(*overflow_word(witness_index)) !=
-                    witness) {
-                status = find_overflow_witness(
-                    canonical_bucket, budget, witness, witness_index);
-                if (status != SMS_STATUS_SUCCESS) return status;
-                if (!(witness == 0
-                          ? SpillSummary::try_encode_empty(
-                                removed_binding, desired)
-                          : SpillSummary::try_encode_present(
-                                witness, desired))) {
-                    return SMS_STATUS_CORRUPT_STORE;
-                }
-                continue;
-            }
-            if (witness == 0) {
-                sms::test_detail::reach_checkpoint(
-                    sms::test_detail::CheckpointId::DirectoryAfterSpillSummaryClear);
-            } else {
-                sms::test_detail::reach_checkpoint(
-                    sms::test_detail::CheckpointId::DirectoryAfterSpillSummaryPublication);
-            }
-            checkpoint(
-                witness == 0
-                    ? DirectoryCheckpoint::after_spill_empty_cas
-                    : DirectoryCheckpoint::after_spill_present,
-                removed_binding,
-                desired);
+        if (MappedAtomic64::load_acquire(*mutation) != removed_binding) {
             return SMS_STATUS_SUCCESS;
         }
+
+        // Pair each scan with the exact summary version it observed. A helper
+        // can finish this unlink and publish another overflow value while this
+        // helper is paused; its newer summary must never be cleared using our
+        // earlier empty scan.
+        const auto captured = MappedAtomic64::load_acquire(*word);
+        SpillSummary summary{};
+        if (!decode_summary_semantic(captured, summary)) {
+            if (MappedAtomic64::load_acquire(*word) == captured) {
+                return SMS_STATUS_CORRUPT_STORE;
+            }
+            continue;
+        }
+        std::uint64_t witness{};
+        std::int64_t witness_index{-1};
+        const auto status = find_overflow_witness(
+            canonical_bucket, budget, witness, witness_index);
+        if (status != SMS_STATUS_SUCCESS) return status;
+        if (witness == 0) {
+            sms::test_detail::reach_checkpoint(
+                sms::test_detail::CheckpointId::DirectoryAfterEmptySpillSummaryScan);
+        }
+        checkpoint(
+            DirectoryCheckpoint::after_empty_overflow_scan,
+            removed_binding,
+            witness);
+        if (MappedAtomic64::load_acquire(*mutation) != removed_binding) {
+            return SMS_STATUS_SUCCESS;
+        }
+        if (witness != 0 &&
+            (witness_index < 0 ||
+             MappedAtomic64::load_acquire(*overflow_word(witness_index)) != witness)) {
+            continue;
+        }
+
+        std::uint64_t desired{};
+        if (!(witness == 0
+                  ? SpillSummary::try_encode_empty(removed_binding, desired)
+                  : SpillSummary::try_encode_present(witness, desired))) {
+            return SMS_STATUS_CORRUPT_STORE;
+        }
+        if (witness == 0) {
+            checkpoint(
+                DirectoryCheckpoint::before_spill_empty_cas,
+                removed_binding,
+                witness);
+        }
+        auto expected = captured;
+        if (!MappedAtomic64::compare_exchange(*word, expected, desired)) {
+            // A failed CAS invalidates the scan as well as its summary version.
+            continue;
+        }
+        if (witness != 0 &&
+            MappedAtomic64::load_acquire(*overflow_word(witness_index)) != witness) {
+            continue;
+        }
+        if (witness == 0) {
+            sms::test_detail::reach_checkpoint(
+                sms::test_detail::CheckpointId::DirectoryAfterSpillSummaryClear);
+        } else {
+            sms::test_detail::reach_checkpoint(
+                sms::test_detail::CheckpointId::DirectoryAfterSpillSummaryPublication);
+        }
+        checkpoint(
+            witness == 0
+                ? DirectoryCheckpoint::after_spill_empty_cas
+                : DirectoryCheckpoint::after_spill_present,
+            removed_binding,
+            desired);
+        return SMS_STATUS_SUCCESS;
     }
 }
 
