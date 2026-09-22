@@ -12,7 +12,9 @@
           "speckit.agent-context.update"
         ]
       },
-      "registered_skills": [],
+      "registered_skills": [
+        "speckit-agent-context-update"
+      ],
       "installed_at": "2026-06-26T19:59:47.631100+00:00"
     }
   }
