@@ -118,6 +118,12 @@ logical close. After every thread has stopped using the opaque pointer,
 wrappers perform this second, caller-synchronized step automatically after
 their local operation drain.
 
+C++ store operations pin the local handle with lock-free integer atomics.
+Concurrent `close()` calls reject new entries, logically close the native
+store, and wait for existing pins before destroying the opaque handle.
+Moving a store drains source pins before transferring the still-open handle.
+Synchronize concurrent attempts to reopen or replace the same wrapper.
+
 ## Generations and Incarnations
 
 Native lease and reservation accessors check the shared store's Ready state

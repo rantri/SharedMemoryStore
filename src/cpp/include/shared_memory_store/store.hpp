@@ -1,6 +1,7 @@
 #pragma once
 
 #include "c_api.h"
+#include "detail/local_handle.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -492,17 +493,8 @@ public:
     ~memory_store() { close(); }
     memory_store(const memory_store&) = delete;
     memory_store& operator=(const memory_store&) = delete;
-    memory_store(memory_store&& other) noexcept
-        : control_(other.control_.exchange({}, std::memory_order_acq_rel)) {}
-    memory_store& operator=(memory_store&& other) noexcept {
-        if (this != &other) {
-            close();
-            control_.store(
-                other.control_.exchange({}, std::memory_order_acq_rel),
-                std::memory_order_release);
-        }
-        return *this;
-    }
+    memory_store(memory_store&& other) noexcept = default;
+    memory_store& operator=(memory_store&& other) noexcept = default;
 
     static open_status try_create_or_open(
         const store_options& options,
@@ -538,8 +530,8 @@ public:
             return open_status::mapping_failed;
         }
         try {
-            result.control_.store(
-                std::make_shared<store_control>(
+            result.control_.reset(
+                std::make_unique<store_control>(
                     opened_handle,
                     protocol_info{
                         identity.layout_major,
@@ -547,8 +539,7 @@ public:
                         identity.resource_protocol,
                         identity.required_features,
                         identity.optional_features,
-                    }),
-                std::memory_order_release);
+                    }));
         } catch (...) {
             sms_close_store(opened_handle);
             sms_destroy_store(opened_handle);
@@ -557,31 +548,19 @@ public:
         return open_status::success;
     }
 
-    bool valid() const noexcept {
-        return control_.load(std::memory_order_acquire) != nullptr;
-    }
+    bool valid() const noexcept { return control_.is_open(); }
     protocol_info protocol() const noexcept {
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         return control ? control->protocol : protocol_info{};
     }
-    void close() noexcept {
-        auto control = control_.load(std::memory_order_acquire);
-        if (!control) return;
-        control->close();
-        std::shared_ptr<store_control> expected = control;
-        (void)control_.compare_exchange_strong(
-            expected,
-            {},
-            std::memory_order_acq_rel,
-            std::memory_order_acquire);
-    }
+    void close() noexcept { control_.close(); }
 
     status try_publish(
         std::span<const std::byte> key,
         std::span<const std::byte> value,
         std::span<const std::byte> descriptor = {},
         wait_options wait = wait_options::defaults()) noexcept {
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         const auto native = detail::native_wait(wait);
         return static_cast<status>(sms_publish(
@@ -603,7 +582,7 @@ public:
                     reinterpret_cast<const std::uint8_t*>(value.data()),
                     static_cast<std::uint64_t>(value.size())});
             }
-            const auto control = control_.load(std::memory_order_acquire);
+            const auto control = control_.pin();
             if (!control) {
                 copied = 0;
                 return status::store_disposed;
@@ -624,7 +603,7 @@ public:
         value_lease& lease,
         wait_options wait = wait_options::defaults()) noexcept {
         lease.reset();
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         sms_lease* handle{};
         const auto native = detail::native_wait(wait);
@@ -637,7 +616,7 @@ public:
     status try_remove(
         std::span<const std::byte> key,
         wait_options wait = wait_options::defaults()) noexcept {
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         const auto native = detail::native_wait(wait);
         return static_cast<status>(sms_remove(
@@ -651,7 +630,7 @@ public:
         value_reservation& reservation,
         wait_options wait = wait_options::defaults()) noexcept {
         reservation.reset();
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         sms_reservation* handle{};
         const auto native = detail::native_wait(wait);
@@ -666,7 +645,7 @@ public:
         bool recover_current_process,
         recovery_report& report,
         wait_options wait = wait_options::defaults()) noexcept {
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         sms_recovery_report native{};
         native.struct_size = sizeof(native);
@@ -684,7 +663,7 @@ public:
         bool recover_current_process,
         recovery_report& report,
         wait_options wait = wait_options::defaults()) noexcept {
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         sms_recovery_report native{};
         native.struct_size = sizeof(native);
@@ -704,7 +683,7 @@ public:
         snapshot.value_ = {};
         snapshot.value_.struct_size = sizeof(snapshot.value_);
         snapshot.value_.abi_version = SMS_C_ABI_VERSION;
-        const auto control = control_.load(std::memory_order_acquire);
+        const auto control = control_.pin();
         if (!control) return status::store_disposed;
         const auto native = detail::native_wait(wait);
         return static_cast<status>(sms_get_diagnostics(
@@ -712,7 +691,7 @@ public:
     }
 
 private:
-    std::atomic<std::shared_ptr<store_control>> control_;
+    detail::local_handle<store_control> control_;
 };
 
 } // namespace shared_memory_store

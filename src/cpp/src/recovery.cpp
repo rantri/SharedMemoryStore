@@ -945,6 +945,22 @@ sms_status RecoveryCoordinator::validate_reservation_metadata(
             publication_intent2 != publication_intent) {
             continue;
         }
+        DirectoryOperation older_operation{};
+        if (DirectoryOperation::try_decode(operation_raw, older_operation) &&
+            older_operation.generation < decoded_control.generation &&
+            try_decode_recovery_operation(
+                operation_raw, older_operation.generation,
+                SlotState::aborting, older_operation)) {
+            // A helper can pause before publishing its prepared descriptor,
+            // then win the zero-to-prepared CAS after this slot is reused.
+            // Remove only that exact, valid older descriptor. Retry the full
+            // metadata/reference validation so current Reserved metadata,
+            // future generations, and malformed words still fail closed.
+            auto expected_operation = operation_raw;
+            (void)MappedAtomic64::compare_exchange(
+                slot.DirectoryOperation, expected_operation, 0);
+            continue;
+        }
         result.lifecycle_still_current = true;
         if (!operation_valid || !location_valid ||
             directory_binding != exact_binding ||
