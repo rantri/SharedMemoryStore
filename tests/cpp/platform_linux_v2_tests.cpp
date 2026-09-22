@@ -20,6 +20,7 @@
 #include <string_view>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -418,6 +419,93 @@ void namespace_anchor_and_orphan_sweep() {
     locked_unreferenced.reset();
 }
 
+void crashed_peers_are_pruned_while_an_owner_survives() {
+    TemporaryDirectory temporary("crashed-peers");
+    const auto owners_path = temporary.child("case.owners");
+    LinuxOwnerRecord survivor{};
+    std::unique_ptr<LinuxOwnerAnchor> survivor_anchor;
+    expect(LinuxOwnerLifecycle::create_current_owner(
+               owners_path, survivor, survivor_anchor) == SMS_STATUS_SUCCESS,
+           "surviving owner creates its locked anchor");
+    expect(LinuxOwnerLifecycle::commit_registration(
+               owners_path, {}, survivor.line) == SMS_STATUS_SUCCESS,
+           "surviving owner commits");
+
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        const auto child = ::fork();
+        if (child == 0) {
+            LinuxOwnerSnapshot before{};
+            LinuxOwnerRecord peer{};
+            std::unique_ptr<LinuxOwnerAnchor> peer_anchor;
+            const auto success =
+                LinuxOwnerLifecycle::prepare(owners_path, before) ==
+                    SMS_STATUS_SUCCESS &&
+                LinuxOwnerLifecycle::create_current_owner(
+                    owners_path, peer, peer_anchor) == SMS_STATUS_SUCCESS &&
+                LinuxOwnerLifecycle::commit_registration(
+                    owners_path, before.committed_owners, peer.line) ==
+                    SMS_STATUS_SUCCESS;
+            // Exit without destructors: model a crash that releases the OS
+            // lock but leaves the committed record and anchor behind.
+            ::_exit(success ? 0 : 1);
+        }
+        expect(child > 0, "crashed peer process starts");
+        if (child < 0) return;
+        int child_status{};
+        pid_t waited{};
+        do {
+            waited = ::waitpid(child, &child_status, 0);
+        } while (waited < 0 && errno == EINTR);
+        expect(waited == child && WIFEXITED(child_status) &&
+                   WEXITSTATUS(child_status) == 0,
+               "peer commits ownership before its abrupt exit");
+
+        const auto committed = read_lines(owners_path);
+        expect(committed.size() == 2,
+               "each crash adds one owner to the surviving record");
+        LinuxOwnerRecord peer{};
+        expect(!committed.empty() && LinuxOwnerLifecycle::parse_exact_owner_line(
+                   committed.back(), peer), "crashed owner record decodes");
+        const auto peer_path = LinuxOwnerAnchor::artifact_path(
+            owners_path, peer.owner_token);
+        expect(LinuxOwnerAnchor::probe(owners_path, peer.owner_token) ==
+                   LinuxOwnerAnchorState::unlocked,
+               "abrupt peer exit leaves a provably unlocked anchor");
+
+        LinuxOwnerSnapshot after{};
+        expect(LinuxOwnerLifecycle::prepare(owners_path, after) ==
+                   SMS_STATUS_SUCCESS && after.has_live_owner &&
+                   after.committed_owners ==
+                       std::vector<std::string>{survivor.line},
+               "preparation prunes a crashed peer while preserving the survivor");
+        expect(read_lines(owners_path) == std::vector<std::string>{survivor.line},
+               "pruned owner list is committed to the sidecar");
+        expect(!std::filesystem::exists(peer_path),
+               "pruned crashed-owner anchor is swept");
+        expect(LinuxOwnerAnchor::probe(owners_path, survivor.owner_token) ==
+                   LinuxOwnerAnchorState::locked,
+               "crash cleanup preserves the surviving owner's anchor");
+    }
+
+    // An unrecognized line is evidence, even when another record is proven
+    // stale. A missing anchor also retains an exact live PID/start identity.
+    const auto stale_token = std::string("00112233445566778899aabbccddeeff");
+    const auto stale_line = std::string("2147483647:proc-1:") + stale_token;
+    const auto live_fallback = std::to_string(survivor.process_id) + ":" +
+        survivor.process_start_token + ":11112222333344445555666677778888";
+    const auto ambiguous_line = std::string("malformed-owner-evidence");
+    write_text(owners_path, survivor.line + "\n" + stale_line + "\n" +
+        ambiguous_line + "\n" + live_fallback + "\n");
+    LinuxOwnerSnapshot mixed{};
+    const std::vector<std::string> retained{
+        survivor.line, ambiguous_line, live_fallback};
+    expect(LinuxOwnerLifecycle::prepare(owners_path, mixed) ==
+               SMS_STATUS_SUCCESS && mixed.has_live_owner &&
+               mixed.committed_owners == retained &&
+               read_lines(owners_path) == retained,
+           "mixed cleanup retains ambiguous and live fallback evidence");
+}
+
 void marker_reconciliation_is_ordinal_exact_and_idempotent() {
     TemporaryDirectory temporary("marker-exact");
     const auto owners_path = temporary.child("case.owners");
@@ -581,6 +669,7 @@ int main() {
     lifecycle_order_anchor_and_stable_inode();
     bounded_close_marker_and_exact_reconciliation();
     namespace_anchor_and_orphan_sweep();
+    crashed_peers_are_pruned_while_an_owner_survives();
     marker_reconciliation_is_ordinal_exact_and_idempotent();
     malformed_artifacts_fail_closed();
     platform_rejects_linked_rendezvous_and_nonregular_region();

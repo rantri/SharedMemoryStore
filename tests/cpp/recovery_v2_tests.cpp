@@ -1,3 +1,4 @@
+#include "checkpoint.hpp"
 #include "mapped_atomic.hpp"
 #include "recovery.hpp"
 #include "test_support_v2.hpp"
@@ -67,7 +68,8 @@ struct Fixture {
         RecoveryPlatform platform = RecoveryPlatform::linux,
         std::int32_t slot_count = 3,
         std::int32_t lease_count = 3,
-        std::int32_t participant_count = 3) {
+        std::int32_t participant_count = 3,
+        DirectoryHooks directory_hooks = {}) {
         expect(LayoutV2::calculate(
             1'000'000,
             slot_count,
@@ -126,7 +128,7 @@ struct Fixture {
             store_id,
             LeaseParticipant{participant_token, active_control});
         directory = std::make_unique<KeyDirectory>(
-            base(), byte_count(), layout);
+            base(), byte_count(), layout, directory_hooks);
         reclaimer = std::make_unique<Reclaimer>(
             base(),
             byte_count(),
@@ -669,6 +671,147 @@ void exact_reservation_and_directory_recovery() {
     }
 }
 
+struct DelayedDescriptorSchedule final : sms::test_detail::CheckpointObserver {
+    Fixture* fixture{};
+    ReservationToken original{};
+    ReservationToken replacement{};
+    bool reused{};
+    bool scanned{};
+    bool stale_owner{};
+    bool abort_replacement{};
+    sms_status recovery_status{SMS_STATUS_UNKNOWN_FAILURE};
+    RecoveryScanReport report{};
+
+    void reach(sms::test_detail::CheckpointId checkpoint) noexcept override {
+        if (checkpoint != sms::test_detail::CheckpointId::
+                DirectoryBeforeDescriptorPublication || reused) return;
+        reused = true;
+        // The original helper has read a zero descriptor and is about to CAS
+        // Insert/Prepared. Its owner aborts, reclamation advances generation,
+        // and another reservation claims the same physical slot first.
+        expect(fixture->slots->try_begin_abort(original) == SMS_STATUS_SUCCESS,
+               "original reservation aborts before descriptor publication");
+        expect(fixture->slots->complete_reclaim(
+                   original.slot_binding, OperationBudget::structural_attempt()) ==
+                   SMS_STATUS_SUCCESS, "original generation is reclaimed");
+        replacement = fixture->claim_initializing(8002, "replacement");
+        expect(replacement.slot_binding == fixture->slot_binding(0, 2),
+               "replacement claims generation two in the same physical slot");
+        if (abort_replacement) {
+            expect(fixture->slots->try_begin_abort(replacement) == SMS_STATUS_SUCCESS,
+                   "replacement hands its pre-metadata lifecycle to helpers");
+        }
+    }
+
+    static void after_descriptor(
+        void* raw, DirectoryCheckpoint checkpoint,
+        std::uint64_t binding, std::uint64_t operation_raw) noexcept {
+        auto& context = *static_cast<DelayedDescriptorSchedule*>(raw);
+        if (checkpoint != DirectoryCheckpoint::after_insert_prepared ||
+            binding != context.original.slot_binding || context.scanned) return;
+        context.scanned = true;
+        DirectoryOperation operation{};
+        expect(context.reused &&
+                   DirectoryOperation::try_decode(operation_raw, operation) &&
+                   operation.generation == 1 &&
+                   MappedAtomic64::load_acquire(
+                       context.fixture->slots->slot(0)->DirectoryBinding) ==
+                       context.replacement.slot_binding,
+               "delayed helper publishes an older descriptor after slot reuse");
+        if (context.stale_owner) {
+            context.fixture->observation.kind = ProcessObservationKind::missing;
+        }
+        context.recovery_status = context.fixture->recovery->try_recover_reservations(
+            false, OperationBudget::structural_attempt(), context.report);
+    }
+};
+
+void delayed_descriptor_does_not_corrupt_recovery() {
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        DelayedDescriptorSchedule schedule{};
+        schedule.stale_owner = scenario == 1;
+        schedule.abort_replacement = scenario == 2;
+        Fixture fixture(1001, 77, RecoveryPlatform::linux, 1, 3, 3,
+            DirectoryHooks{&schedule, &DelayedDescriptorSchedule::after_descriptor});
+        schedule.fixture = &fixture;
+        schedule.original = fixture.claim_initializing(8001, "original");
+        DirectoryLocation original_location{};
+        {
+            sms::test_detail::ScopedCheckpointObserver observer(schedule);
+            expect(fixture.directory->try_insert(
+                       bytes("original"), 8001, schedule.original.slot_binding,
+                       OperationBudget::start(std::chrono::milliseconds{1000}),
+                       original_location) ==
+                       SMS_STATUS_INVALID_RESERVATION,
+                   "delayed original insert cannot claim the reused generation");
+        }
+        expect(schedule.reused && schedule.scanned &&
+                   schedule.recovery_status == SMS_STATUS_SUCCESS &&
+                   schedule.report.failed == 0,
+               "recovery tolerates a legal older descriptor publication");
+        if (scenario == 0) {
+            expect(schedule.report.active == 1 && schedule.report.recovered == 0,
+                   "live replacement remains owned during residue cleanup");
+            DirectoryLocation replacement_location{};
+            expect(fixture.directory->try_insert(
+                       bytes("replacement"), 8002, schedule.replacement.slot_binding,
+                       OperationBudget::structural_attempt(), replacement_location) ==
+                       SMS_STATUS_SUCCESS,
+                   "live replacement can complete directory insertion");
+            expect(fixture.slots->advance_reservation(
+                       schedule.replacement, 4, OperationBudget::structural_attempt()) ==
+                       SMS_STATUS_SUCCESS &&
+                       fixture.slots->commit_reservation(schedule.replacement, 1) ==
+                       SMS_STATUS_SUCCESS,
+                   "live replacement can publish after recovery");
+            DirectoryEntry entry{};
+            expect(fixture.directory->try_lookup(
+                       bytes("replacement"), 8002,
+                       OperationBudget::structural_attempt(), entry) ==
+                       SMS_STATUS_SUCCESS && entry.binding == schedule.replacement.slot_binding,
+                   "published replacement remains discoverable");
+        } else {
+            const auto control = decode_slot(
+                MappedAtomic64::load_acquire(fixture.slots->slot(0)->Control),
+                "recovered replacement control decodes");
+            expect(control.state == static_cast<std::int32_t>(SlotState::free) &&
+                       control.generation == 3,
+                   "stale or handed-off replacement is reclaimed exactly once");
+            expect(scenario != 1 || schedule.report.recovered == 1,
+                   "stale replacement recovery is reported");
+        }
+    }
+}
+
+void recovery_rejects_invalid_descriptor_residue() {
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        Fixture fixture(1001, 77, RecoveryPlatform::linux, 1);
+        const auto original = fixture.claim_initializing();
+        expect(fixture.slots->abort_reservation(
+                   original, OperationBudget::structural_attempt()) == SMS_STATUS_SUCCESS,
+               "negative residue fixture advances its original generation");
+        const auto replacement = fixture.claim_initializing();
+        auto* slot = fixture.slots->slot(0);
+        std::uint64_t operation{};
+        expect(DirectoryOperation::try_encode(
+                   directory_intent_insert,
+                   scenario == 0 ? 0 : directory_phase_prepared,
+                   0, 0, scenario == 1 ? 3 : 1, operation),
+               "negative descriptor fixture encoding");
+        if (scenario == 2) operation |= (1ULL << 63U);
+        MappedAtomic64::store_release(slot->DirectoryOperation, operation);
+        if (scenario == 3) {
+            expect(fixture.slots->mark_reserved(replacement) == SMS_STATUS_SUCCESS,
+                   "negative fixture publishes Reserved without current metadata");
+        }
+        RecoveryScanReport report{};
+        expect(fixture.recovery->try_recover_reservations(
+                   false, OperationBudget::structural_attempt(), report) ==
+                   SMS_STATUS_CORRUPT_STORE && report.failed == 1,
+               "malformed, future, and missing current Reserved metadata fail closed");
+    }
+}
+
 void participant_handoff_reference_fencing_and_retirement() {
     {
         Fixture fixture;
@@ -795,6 +938,8 @@ int main() {
     registering_uses_presence_only();
     exact_lease_recovery_and_reuse_fencing();
     exact_reservation_and_directory_recovery();
+    delayed_descriptor_does_not_corrupt_recovery();
+    recovery_rejects_invalid_descriptor_residue();
     participant_handoff_reference_fencing_and_retirement();
     if (failures.load(std::memory_order_relaxed) == 0) {
         std::cout << "recovery_v2_tests: PASS\n";

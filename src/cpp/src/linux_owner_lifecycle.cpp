@@ -755,21 +755,24 @@ sms_status LinuxOwnerLifecycle::prepare(
     std::vector<std::string> committed;
     status = read_owner_lines(owners_path, committed);
     if (status != SMS_STATUS_SUCCESS) return status;
-    bool has_live{};
-    for (const auto& owner : committed) {
-        if (owner_is_live_or_ambiguous(owners_path, owner)) {
-            has_live = true;
-            break;
-        }
-    }
-    if (!has_live) {
-        committed.clear();
+    const auto previous_count = committed.size();
+    // A surviving owner keeps the region alive, but must not keep crashed
+    // peers' records alive. Retain each record only while its own evidence is
+    // live or ambiguous, then commit before sweeping its orphaned anchor.
+    committed.erase(
+        std::remove_if(
+            committed.begin(), committed.end(),
+            [owners_path](const auto& owner) noexcept {
+                return !owner_is_live_or_ambiguous(owners_path, owner);
+            }),
+        committed.end());
+    if (committed.empty() || committed.size() != previous_count) {
         status = atomic_write_owners(owners_path, committed);
         if (status != SMS_STATUS_SUCCESS) return status;
     }
     sweep_unreferenced_anchors(owners_path, committed);
+    snapshot.has_live_owner = !committed.empty();
     snapshot.committed_owners = std::move(committed);
-    snapshot.has_live_owner = has_live;
     return SMS_STATUS_SUCCESS;
 }
 
