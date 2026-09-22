@@ -7,6 +7,9 @@ chronological order.
 
 - Native operations rejected during close no longer access failure counters in
   the state being destroyed; entered failures still contribute diagnostics.
+- Native C and C++ handle entry no longer uses lock-backed atomic shared-pointer
+  snapshots. Concurrent close drains entered calls before handle destruction;
+  C ABI 2 and the mapped protocol remain unchanged.
 
 ## 3.0.0 - 2026-07-16
 

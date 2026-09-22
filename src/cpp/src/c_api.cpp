@@ -17,13 +17,14 @@ using sms::detail::Wait;
 
 struct sms_store {
     enum class close_state { open, closing, closed };
+    static_assert(std::atomic<close_state>::is_always_lock_free);
 
     sms_store(std::shared_ptr<Store> value, LayoutV2 layout)
         : implementation(std::move(value)), public_layout(layout) {}
 
-    // Hot calls take only an atomic shared snapshot. Close coordination never
-    // enters a publish/read/remove path.
-    std::atomic<std::shared_ptr<Store>> implementation;
+    // The opaque allocation survives logical close. Keep its owner immutable;
+    // hot calls borrow it until caller-synchronized sms_destroy_store.
+    const std::shared_ptr<Store> implementation;
     const LayoutV2 public_layout;
     std::atomic<close_state> state{close_state::open};
 };
@@ -339,8 +340,7 @@ void SMS_CALL sms_close_store(sms_store* store) {
             }
         }
 
-        auto implementation = store->implementation.exchange(
-            {}, std::memory_order_acq_rel);
+        auto* implementation = store->implementation.get();
         if (implementation) implementation->close();
         store->state.store(
             sms_store::close_state::closed, std::memory_order_release);
@@ -348,8 +348,7 @@ void SMS_CALL sms_close_store(sms_store* store) {
     } catch (...) {
         // No C++ exception may cross the C ABI. A synchronization-adapter
         // failure is not shared corruption and cannot justify termination.
-        auto implementation = store->implementation.exchange(
-            {}, std::memory_order_acq_rel);
+        auto* implementation = store->implementation.get();
         if (implementation) implementation->close();
         store->state.store(
             sms_store::close_state::closed, std::memory_order_release);
@@ -368,9 +367,10 @@ void SMS_CALL sms_destroy_store(sms_store* store) {
 sms_status SMS_CALL sms_get_store_layout(sms_store* store, const sms_wait_options* wait_options,
                                          sms_store_layout* layout) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!layout || layout->struct_size < sizeof(*layout) || !abi_compatible(layout->abi_version) ||
         !read_wait(wait_options, wait)) return SMS_STATUS_UNKNOWN_FAILURE;
@@ -422,9 +422,10 @@ sms_status SMS_CALL sms_get_store_layout(sms_store* store, const sms_wait_option
 sms_status SMS_CALL sms_publish(sms_store* store, sms_bytes key, sms_bytes value,
                                 sms_bytes descriptor, const sms_wait_options* wait_options) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!read_wait(wait_options, wait) || !valid_bytes(key) || !valid_bytes(value) || !valid_bytes(descriptor))
         return SMS_STATUS_UNKNOWN_FAILURE;
@@ -439,9 +440,10 @@ sms_status SMS_CALL sms_publish_segments(sms_store* store, sms_bytes key,
                                          int64_t* copied_bytes) {
     if (copied_bytes) *copied_bytes = 0;
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!copied_bytes || !read_wait(wait_options, wait) || !valid_bytes(key) || !valid_bytes(descriptor) ||
         segment_count > std::numeric_limits<std::size_t>::max() ||
@@ -461,9 +463,10 @@ sms_status SMS_CALL sms_acquire(sms_store* store, sms_bytes key,
     if (!lease) return SMS_STATUS_INVALID_LEASE;
     *lease = nullptr;
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!read_wait(wait_options, wait) || !valid_bytes(key)) return SMS_STATUS_UNKNOWN_FAILURE;
     if (wait_canceled(wait_options)) return SMS_STATUS_OPERATION_CANCELED;
@@ -472,7 +475,7 @@ sms_status SMS_CALL sms_acquire(sms_store* store, sms_bytes key,
         as_span(key), wait, slot, lifecycle, lease_id);
     if (status != SMS_STATUS_SUCCESS) return status;
     auto* handle = new (std::nothrow) sms_lease{
-        implementation, slot, lifecycle, lease_id};
+        store->implementation, slot, lifecycle, lease_id};
     if (!handle) {
         implementation->release_lease(
             slot, lifecycle, lease_id, Wait{1000});
@@ -515,9 +518,10 @@ void SMS_CALL sms_destroy_lease(sms_lease* lease) {
 
 sms_status SMS_CALL sms_remove(sms_store* store, sms_bytes key, const sms_wait_options* wait_options) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!read_wait(wait_options, wait) || !valid_bytes(key)) return SMS_STATUS_UNKNOWN_FAILURE;
     if (wait_canceled(wait_options)) return SMS_STATUS_OPERATION_CANCELED;
@@ -530,9 +534,10 @@ sms_status SMS_CALL sms_reserve(sms_store* store, sms_bytes key, int32_t payload
     if (!reservation) return SMS_STATUS_INVALID_RESERVATION;
     *reservation = nullptr;
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!read_wait(wait_options, wait) || !valid_bytes(key) || !valid_bytes(descriptor))
         return SMS_STATUS_UNKNOWN_FAILURE;
@@ -543,7 +548,7 @@ sms_status SMS_CALL sms_reserve(sms_store* store, sms_bytes key, int32_t payload
         wait, slot, lifecycle);
     if (status != SMS_STATUS_SUCCESS) return status;
     auto* handle = new (std::nothrow) sms_reservation{
-        implementation, slot, lifecycle};
+        store->implementation, slot, lifecycle};
     if (!handle) {
         implementation->abort_reservation(
             slot, lifecycle, false, Wait{1000});
@@ -618,9 +623,10 @@ void SMS_CALL sms_destroy_reservation(sms_reservation* reservation) {
 sms_status SMS_CALL sms_recover_leases(sms_store* store, int32_t recover_current_process,
                                        const sms_wait_options* wait_options, sms_recovery_report* report) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!report || report->struct_size < sizeof(*report) || !abi_compatible(report->abi_version) ||
         !read_wait(wait_options, wait)) return SMS_STATUS_UNKNOWN_FAILURE;
@@ -636,9 +642,10 @@ sms_status SMS_CALL sms_recover_reservations(sms_store* store, int32_t recover_c
                                              const sms_wait_options* wait_options,
                                              sms_recovery_report* report) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!report || report->struct_size < sizeof(*report) || !abi_compatible(report->abi_version) ||
         !read_wait(wait_options, wait)) return SMS_STATUS_UNKNOWN_FAILURE;
@@ -653,9 +660,10 @@ sms_status SMS_CALL sms_recover_reservations(sms_store* store, int32_t recover_c
 sms_status SMS_CALL sms_get_diagnostics(sms_store* store, const sms_wait_options* wait_options,
                                         sms_diagnostics* diagnostics) {
     Wait wait{};
-    auto implementation = store
-        ? store->implementation.load(std::memory_order_acquire)
-        : std::shared_ptr<Store>{};
+    auto* implementation = store &&
+            store->state.load(std::memory_order_acquire) == sms_store::close_state::open
+        ? store->implementation.get()
+        : nullptr;
     if (!implementation) return SMS_STATUS_STORE_DISPOSED;
     if (!diagnostics || diagnostics->struct_size < sizeof(*diagnostics) ||
         !abi_compatible(diagnostics->abi_version) || !read_wait(wait_options, wait))
