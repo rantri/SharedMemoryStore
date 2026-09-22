@@ -492,8 +492,16 @@ sms_status Store::validate_value(
 }
 
 sms_status Store::record(sms_status status) noexcept {
+    // A rejected lifetime-gate entry has no operation guard. Close may be
+    // destroying State concurrently, so do not even read state_ for that
+    // outcome. Every other failure reaches here with an entered operation.
+    if (status == SMS_STATUS_STORE_DISPOSED || status == SMS_STATUS_SUCCESS) {
+        return status;
+    }
+    sms::test_detail::reach_checkpoint(
+        sms::test_detail::CheckpointId::StoreBeforeFailureStateAccess);
     auto* state = state_.get();
-    if (state == nullptr || status == SMS_STATUS_SUCCESS) return status;
+    if (state == nullptr) return status;
     const auto index = static_cast<std::int32_t>(status);
     if (index >= 0 && index < SMS_STATUS_COUNT) {
         state->failures[static_cast<std::size_t>(index)].fetch_add(
@@ -1038,7 +1046,10 @@ bool Store::project_lease(
     descriptor_length = 0;
     sms::test_detail::reach_checkpoint(
         sms::test_detail::CheckpointId::ProjectBeforeHandleValidation);
-    if (state_ == nullptr || !lease.valid()) return false;
+    if (state_ == nullptr || !lease.valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
+        return false;
+    }
     std::uint64_t registry_binding{};
     const auto lease_status = state_->leases.validate_active_slot_binding(
         lease, registry_binding);
@@ -1319,7 +1330,8 @@ bool Store::reservation_valid(
     LifecycleId lifecycle) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return false;
     }
     IndexBinding binding{};
@@ -1341,7 +1353,8 @@ std::int32_t Store::reservation_bytes_written(
     LifecycleId lifecycle) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return 0;
     }
     IndexBinding binding{};
@@ -1357,7 +1370,8 @@ std::span<std::uint8_t> Store::reservation_buffer(
     std::int32_t size_hint) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return {};
     }
     IndexBinding binding{};

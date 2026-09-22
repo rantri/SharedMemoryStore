@@ -3,9 +3,11 @@ set(
     protocol_tests.cpp
     store_tests.cpp
     c_api_tests.cpp
+    projection_control_tests.cpp
     lease_corruption_tests.cpp
     lease_projection_schedule_tests.cpp
     lifecycle_tests.cpp
+    local_handle_tests.cpp
     diagnostics_tests.cpp)
 
 # Register the planned SMS2 test topology without making an incomplete test
@@ -55,6 +57,7 @@ function(_sms_add_native_test source_name)
 
     add_executable(${_target} "${_source}")
     if(_test_stem STREQUAL "protocol_tests" OR
+       _test_stem STREQUAL "projection_control_tests" OR
        _test_stem STREQUAL "lease_corruption_tests")
         target_sources(
             ${_target}
@@ -104,6 +107,11 @@ function(_sms_add_native_test source_name)
             PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/key_directory.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/layout_v2.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
+        if(_test_stem STREQUAL "directory_schedule_tests")
+            target_sources(
+                ${_target}
+                PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/slot_table.cpp")
+        endif()
     elseif(_test_stem STREQUAL "platform_linux_v2_tests")
         # Resource-protocol-2 ownership helpers are hidden platform internals.
         # Compile them and canonical resource-name derivation directly into the
@@ -135,7 +143,8 @@ function(_sms_add_native_test source_name)
         # through the installed shared-library ABI.
         target_sources(
             ${_target}
-            PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/recovery.cpp"
+            PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/checkpoint.cpp"
+                    "${PROJECT_SOURCE_DIR}/src/cpp/src/recovery.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/reclaimer.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/key_directory.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/slot_table.cpp"
@@ -143,6 +152,7 @@ function(_sms_add_native_test source_name)
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/participant_registry.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/layout_v2.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
+        target_compile_definitions(${_target} PRIVATE SMS_ENABLE_TEST_CHECKPOINTS=1)
     endif()
     target_compile_features(${_target} PRIVATE cxx_std_20)
     set_target_properties(${_target} PROPERTIES CXX_EXTENSIONS OFF)
@@ -246,3 +256,7 @@ if(TARGET sms_interop_agent_protocol_tests AND TARGET sms_cpp_interop_agent)
         sms_cpp_interop_agent)
 endif()
 _sms_add_native_agent(sms_mapped_atomic_agent mapped_atomic_agent.cpp)
+
+_sms_add_native_agent(
+    sms_close_record_tests close_record_tests.cpp SharedMemoryStoreCheckpointRuntime)
+add_test(NAME SharedMemoryStore.close_record_tests COMMAND sms_close_record_tests)
