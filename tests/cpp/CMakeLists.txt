@@ -4,6 +4,8 @@ set(
     store_tests.cpp
     c_api_tests.cpp
     projection_control_tests.cpp
+    lease_corruption_tests.cpp
+    lease_projection_schedule_tests.cpp
     lifecycle_tests.cpp
     local_handle_tests.cpp
     diagnostics_tests.cpp)
@@ -55,7 +57,8 @@ function(_sms_add_native_test source_name)
 
     add_executable(${_target} "${_source}")
     if(_test_stem STREQUAL "protocol_tests" OR
-       _test_stem STREQUAL "projection_control_tests")
+       _test_stem STREQUAL "projection_control_tests" OR
+       _test_stem STREQUAL "lease_corruption_tests")
         target_sources(
             ${_target}
             PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
@@ -159,7 +162,10 @@ function(_sms_add_native_test source_name)
                 "${PROJECT_SOURCE_DIR}/src/cpp/include")
     target_compile_definitions(
         ${_target} PRIVATE SMS_REPOSITORY_ROOT="${PROJECT_SOURCE_DIR}")
-    if(_test_stem STREQUAL "slot_reservation_tests" OR
+    if(_test_stem STREQUAL "lease_projection_schedule_tests")
+        target_link_libraries(
+            ${_target} PRIVATE SharedMemoryStoreCheckpointRuntime Threads::Threads)
+    elseif(_test_stem STREQUAL "slot_reservation_tests" OR
        _test_stem STREQUAL "lease_v2_tests" OR
        _test_stem STREQUAL "recovery_v2_tests")
         target_link_libraries(${_target} PRIVATE Threads::Threads)

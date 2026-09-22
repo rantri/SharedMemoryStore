@@ -132,6 +132,11 @@ is observed, validity is false, lengths are zero, and new borrowed spans are
 empty. An already returned span cannot be revoked; its caller remains
 responsible for observing the store and token lifetime.
 
+Native lease projection rejects released or reused tokens without corrupting
+the store. If it instead confirms a malformed lease control or a stable Active
+lease with an invalid or mismatched slot binding, it marks the shared store
+corrupt before returning false validity or an empty span.
+
 Slots, leases, participants, directory operations, and their public tokens use
 generation/incarnation identity. A transition compares the complete encoded
 identity before exposing memory, helping, releasing, or reclaiming. Terminal
