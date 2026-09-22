@@ -138,7 +138,8 @@ function(_sms_add_native_test source_name)
         # through the installed shared-library ABI.
         target_sources(
             ${_target}
-            PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/recovery.cpp"
+            PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/checkpoint.cpp"
+                    "${PROJECT_SOURCE_DIR}/src/cpp/src/recovery.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/reclaimer.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/key_directory.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/slot_table.cpp"
@@ -146,6 +147,7 @@ function(_sms_add_native_test source_name)
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/participant_registry.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/layout_v2.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
+        target_compile_definitions(${_target} PRIVATE SMS_ENABLE_TEST_CHECKPOINTS=1)
     endif()
     target_compile_features(${_target} PRIVATE cxx_std_20)
     set_target_properties(${_target} PROPERTIES CXX_EXTENSIONS OFF)

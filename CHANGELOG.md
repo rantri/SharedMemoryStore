@@ -10,6 +10,11 @@ chronological order.
 - Native C and C++ handle entry no longer uses lock-backed atomic shared-pointer
   snapshots. Concurrent close drains entered calls before handle destruction;
   C ABI 2 and the mapped protocol remain unchanged.
+- Fixed native reservation recovery falsely reporting corruption when a
+  delayed directory helper publishes an older descriptor after slot reuse.
+  Recovery removes only validated older descriptors and preserves current
+  ownership and corruption checks. This is a compatible bug fix; public APIs,
+  ABI 2.0, and the SMS2 layout are unchanged.
 
 ## 3.0.0 - 2026-07-16
 
