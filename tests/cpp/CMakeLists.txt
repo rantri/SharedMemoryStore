@@ -4,6 +4,7 @@ set(
     store_tests.cpp
     c_api_tests.cpp
     lifecycle_tests.cpp
+    local_handle_tests.cpp
     diagnostics_tests.cpp)
 
 # Register the planned SMS2 test topology without making an incomplete test

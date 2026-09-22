@@ -11,6 +11,7 @@ namespace sms::detail {
 // close callers may park through C++20 atomic wait while entered calls drain.
 // No object from this class is placed in shared memory.
 class LifecycleGate {
+    static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 public:
     class Operation {
     public:
@@ -60,8 +61,8 @@ public:
         if (state_.load(std::memory_order_acquire) != open_state) {
             return SMS_STATUS_STORE_DISPOSED;
         }
-        active_.fetch_add(1, std::memory_order_acq_rel);
-        if (state_.load(std::memory_order_acquire) != open_state) {
+        active_.fetch_add(1, std::memory_order_seq_cst);
+        if (state_.load(std::memory_order_seq_cst) != open_state) {
             leave();
             return SMS_STATUS_STORE_DISPOSED;
         }
@@ -76,8 +77,8 @@ public:
         auto expected = open_state;
         const bool owner = state_.compare_exchange_strong(
             expected, closing_state,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire);
+            std::memory_order_seq_cst,
+            std::memory_order_seq_cst);
         if (!owner) {
             for (;;) {
                 const auto observed = state_.load(std::memory_order_acquire);
@@ -87,7 +88,7 @@ public:
         }
 
         for (;;) {
-            const auto observed = active_.load(std::memory_order_acquire);
+            const auto observed = active_.load(std::memory_order_seq_cst);
             if (observed == 0) return true;
             active_.wait(observed, std::memory_order_acquire);
         }
@@ -104,7 +105,11 @@ public:
 
 private:
     void leave() noexcept {
-        if (active_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        // Avoid the library's potentially mutex-backed wait adapter on open
+        // hot paths. SC ordering guarantees that close either observes zero
+        // or this last reader observes closing and notifies its waiter.
+        if (active_.fetch_sub(1, std::memory_order_seq_cst) == 1 &&
+            state_.load(std::memory_order_seq_cst) != open_state) {
             active_.notify_all();
         }
     }
