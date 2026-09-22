@@ -159,6 +159,58 @@ void scheduled_reach(
     }
 }
 
+enum class ReservedRace { publish, cancel, reuse, invalid_publish };
+
+struct ReservedRaceContext {
+    Fixture* fixture{};
+    ReservedRace race{};
+    bool armed{true};
+    sms_status peer_status{SMS_STATUS_STORE_BUSY};
+    DirectoryLocation peer_location{};
+    std::uint64_t replacement_binding{};
+    std::uint64_t replacement_operation{};
+};
+
+void advance_before_reserved(
+    void* raw_context,
+    DirectoryCheckpoint checkpoint,
+    std::uint64_t binding,
+    std::uint64_t) noexcept {
+    auto& context = *static_cast<ReservedRaceContext*>(raw_context);
+    if (!context.armed ||
+        checkpoint != DirectoryCheckpoint::before_reserved_publication) {
+        return;
+    }
+    context.armed = false;
+    auto& fixture = *context.fixture;
+    if (context.race == ReservedRace::cancel) {
+        fixture.set_slot_state(0, 1, 5);
+        return;
+    }
+    if (context.race == ReservedRace::invalid_publish) {
+        // Published without a completed insertion is still corruption.
+        fixture.set_slot_state(0, 1, 3);
+        return;
+    }
+    context.peer_status = fixture.directory().try_insert(
+        bytes("reserved-race"), 101, binding,
+        OperationBudget::unbounded_scan(), context.peer_location);
+    fixture.set_slot_state(0, 1, 3);
+    if (context.race == ReservedRace::reuse) {
+        fixture.set_slot_state(0, 1, 6);
+        context.peer_status = fixture.directory().try_unlink(
+            binding, OperationBudget::unbounded_scan());
+        context.replacement_binding = fixture.seed_slot(
+            0, "replacement", 101, 2, 1);
+        context.peer_status = fixture.directory().try_insert(
+            bytes("replacement"), 101, context.replacement_binding,
+            OperationBudget::unbounded_scan(), context.peer_location);
+        fixture.set_slot_state(0, 2, 3);
+        context.replacement_operation = MappedAtomic64::load_acquire(
+            fixture.slot(0).DirectoryOperation);
+    }
+}
+
 std::int32_t slot_state(Fixture& fixture, std::int32_t index) {
     SlotControl control{};
     if (!SlotControl::try_decode(
@@ -411,6 +463,53 @@ int main() {
         SMS_CHECK(fixture.directory().help_mutation(
                       canonical, OperationBudget::unbounded_scan()) ==
                   SMS_STATUS_CORRUPT_STORE);
+    }
+
+    for (const auto race : {ReservedRace::publish, ReservedRace::cancel,
+                           ReservedRace::reuse, ReservedRace::invalid_publish}) {
+        ReservedRaceContext context{};
+        context.race = race;
+        Fixture fixture(
+            32, 128,
+            sms::detail::DirectoryHooks{&context, &advance_before_reserved});
+        context.fixture = &fixture;
+        const auto binding = fixture.seed_slot(0, "reserved-race", 101, 1, 1);
+        DirectoryLocation location{};
+        const auto status = fixture.directory().try_insert(
+            bytes("reserved-race"), 101, binding,
+            OperationBudget::unbounded_scan(), location);
+        SMS_CHECK(!context.armed);
+        if (race == ReservedRace::invalid_publish) {
+            SMS_CHECK(status == SMS_STATUS_CORRUPT_STORE);
+        } else if (race == ReservedRace::cancel) {
+            SMS_CHECK(status == SMS_STATUS_INVALID_RESERVATION);
+            bool remains{};
+            SMS_CHECK(fixture.directory().contains_exact_reference(
+                          binding, OperationBudget::unbounded_scan(), remains) ==
+                      SMS_STATUS_SUCCESS);
+            SMS_CHECK(!remains);
+            SMS_CHECK(slot_state(fixture, 0) == 5);
+        } else {
+            SMS_CHECK(context.peer_status == SMS_STATUS_SUCCESS);
+            SMS_CHECK(status == (race == ReservedRace::publish
+                                     ? SMS_STATUS_SUCCESS
+                                     : SMS_STATUS_INVALID_RESERVATION));
+            DirectoryEntry found{};
+            SMS_CHECK(fixture.directory().try_lookup(
+                          bytes(race == ReservedRace::publish
+                                    ? "reserved-race" : "replacement"),
+                          101, OperationBudget::unbounded_scan(), found) ==
+                      SMS_STATUS_SUCCESS);
+            SMS_CHECK(found.binding == (race == ReservedRace::publish
+                                            ? binding
+                                            : context.replacement_binding));
+            SMS_CHECK(slot_state(fixture, 0) == 3);
+            if (race == ReservedRace::reuse) {
+                SMS_CHECK(MappedAtomic64::load_acquire(
+                              fixture.slot(0).DirectoryOperation) ==
+                          context.replacement_operation);
+            }
+        }
     }
 
     {
