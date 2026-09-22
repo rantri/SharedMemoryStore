@@ -241,3 +241,7 @@ if(TARGET sms_interop_agent_protocol_tests AND TARGET sms_cpp_interop_agent)
         sms_cpp_interop_agent)
 endif()
 _sms_add_native_agent(sms_mapped_atomic_agent mapped_atomic_agent.cpp)
+
+_sms_add_native_agent(
+    sms_close_record_tests close_record_tests.cpp SharedMemoryStoreCheckpointRuntime)
+add_test(NAME SharedMemoryStore.close_record_tests COMMAND sms_close_record_tests)

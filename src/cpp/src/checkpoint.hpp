@@ -91,6 +91,8 @@ enum class CheckpointId : std::int32_t {
 #define SMS_CHECKPOINT_ENUM(id, name) name = id,
     SMS_CANONICAL_CHECKPOINTS(SMS_CHECKPOINT_ENUM)
 #undef SMS_CHECKPOINT_ENUM
+    // Local lifetime regression seam; not part of the cross-runtime catalog.
+    StoreBeforeFailureStateAccess = 10001,
 };
 
 inline constexpr std::int32_t checkpoint_count = 67;
@@ -101,6 +103,7 @@ inline constexpr std::int32_t checkpoint_count = 67;
 #define SMS_CHECKPOINT_NAME(id, name) case CheckpointId::name: return #name;
     SMS_CANONICAL_CHECKPOINTS(SMS_CHECKPOINT_NAME)
 #undef SMS_CHECKPOINT_NAME
+    case CheckpointId::StoreBeforeFailureStateAccess: return {};
     }
     return {};
 }
