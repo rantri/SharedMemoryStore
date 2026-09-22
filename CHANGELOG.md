@@ -5,6 +5,9 @@ chronological order.
 
 ## Unreleased
 
+- Native operations rejected during close no longer access failure counters in
+  the state being destroyed; entered failures still contribute diagnostics.
+
 ## 3.0.0 - 2026-07-16
 
 ### Breaking changes
