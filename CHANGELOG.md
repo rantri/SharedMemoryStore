@@ -15,6 +15,9 @@ chronological order.
   Recovery removes only validated older descriptors and preserves current
   ownership and corruption checks. This is a compatible bug fix; public APIs,
   ABI 2.0, and the SMS2 layout are unchanged.
+- Fixed native lease and reservation projections remaining available after the
+  shared store leaves Ready. This is a patch-level correction with no API or
+  mapped protocol change.
 
 ## 3.0.0 - 2026-07-16
 

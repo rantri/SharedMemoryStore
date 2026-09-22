@@ -3,6 +3,7 @@ set(
     protocol_tests.cpp
     store_tests.cpp
     c_api_tests.cpp
+    projection_control_tests.cpp
     lifecycle_tests.cpp
     local_handle_tests.cpp
     diagnostics_tests.cpp)
@@ -53,7 +54,8 @@ function(_sms_add_native_test source_name)
     set(_target "sms_${_test_stem}")
 
     add_executable(${_target} "${_source}")
-    if(_test_stem STREQUAL "protocol_tests")
+    if(_test_stem STREQUAL "protocol_tests" OR
+       _test_stem STREQUAL "projection_control_tests")
         target_sources(
             ${_target}
             PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")

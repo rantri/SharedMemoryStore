@@ -126,6 +126,12 @@ Synchronize concurrent attempts to reopen or replace the same wrapper.
 
 ## Generations and Incarnations
 
+Native lease and reservation accessors check the shared store's Ready state
+before projecting memory. After shared corruption or another non-Ready state
+is observed, validity is false, lengths are zero, and new borrowed spans are
+empty. An already returned span cannot be revoked; its caller remains
+responsible for observing the store and token lifetime.
+
 Slots, leases, participants, directory operations, and their public tokens use
 generation/incarnation identity. A transition compares the complete encoded
 identity before exposing memory, helping, releasing, or reclaiming. Terminal

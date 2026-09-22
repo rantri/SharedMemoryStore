@@ -1046,7 +1046,10 @@ bool Store::project_lease(
     descriptor_length = 0;
     sms::test_detail::reach_checkpoint(
         sms::test_detail::CheckpointId::ProjectBeforeHandleValidation);
-    if (state_ == nullptr || !lease.valid()) return false;
+    if (state_ == nullptr || !lease.valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
+        return false;
+    }
     std::uint64_t registry_binding{};
     if (!state_->leases.try_get_active_slot_binding(
             lease, registry_binding) ||
@@ -1317,7 +1320,8 @@ bool Store::reservation_valid(
     LifecycleId lifecycle) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return false;
     }
     IndexBinding binding{};
@@ -1339,7 +1343,8 @@ std::int32_t Store::reservation_bytes_written(
     LifecycleId lifecycle) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return 0;
     }
     IndexBinding binding{};
@@ -1355,7 +1360,8 @@ std::span<std::uint8_t> Store::reservation_buffer(
     std::int32_t size_hint) noexcept {
     LifecycleGate::Operation operation;
     if (lifecycle_.try_enter(operation) != SMS_STATUS_SUCCESS ||
-        state_ == nullptr || !lifecycle.reservation_valid()) {
+        state_ == nullptr || !lifecycle.reservation_valid() ||
+        state_->control.ensure_ready() != SMS_STATUS_SUCCESS) {
         return {};
     }
     IndexBinding binding{};
