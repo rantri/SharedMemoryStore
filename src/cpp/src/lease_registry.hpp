@@ -94,6 +94,11 @@ public:
     // This is the registry half of immutable projection validation. The caller
     // surrounds slot metadata with its own Published/RemoveRequested and exact
     // directory-source revalidation before constructing a borrowed span.
+    // Preserve confirmed corruption for the owning Store to latch; stale or
+    // concurrently released/reused tokens return InvalidLease.
+    [[nodiscard]] sms_status validate_active_slot_binding(
+        const LeaseToken& lease,
+        std::uint64_t& slot_binding) const noexcept;
     [[nodiscard]] bool try_get_active_slot_binding(
         const LeaseToken& lease,
         std::uint64_t& slot_binding) const noexcept;

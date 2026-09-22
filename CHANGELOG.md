@@ -5,6 +5,10 @@ chronological order.
 
 ## Unreleased
 
+- Fixed native lease projections discarding confirmed malformed lease controls
+  or bindings without marking the shared store corrupt. This is a patch-level
+  correction with no API or mapped protocol change.
+
 ## 3.0.0 - 2026-07-16
 
 ### Breaking changes

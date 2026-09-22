@@ -1040,9 +1040,12 @@ bool Store::project_lease(
         sms::test_detail::CheckpointId::ProjectBeforeHandleValidation);
     if (state_ == nullptr || !lease.valid()) return false;
     std::uint64_t registry_binding{};
-    if (!state_->leases.try_get_active_slot_binding(
-            lease, registry_binding) ||
-        registry_binding != lease.slot_binding) {
+    const auto lease_status = state_->leases.validate_active_slot_binding(
+        lease, registry_binding);
+    if (lease_status != SMS_STATUS_SUCCESS || registry_binding != lease.slot_binding) {
+        if (lease_status == SMS_STATUS_CORRUPT_STORE) {
+            (void)state_->control.latch_corrupt();
+        }
         return false;
     }
     IndexBinding binding{};
@@ -1099,8 +1102,15 @@ bool Store::project_lease(
         !range_valid(
             payload_offset,
             observed_value,
-            static_cast<std::size_t>(state_->region->size())) ||
-        !state_->leases.is_active(lease)) {
+            static_cast<std::size_t>(state_->region->size()))) {
+        return false;
+    }
+    const auto confirmed_lease = state_->leases.validate_active_slot_binding(
+        lease, registry_binding);
+    if (confirmed_lease != SMS_STATUS_SUCCESS) {
+        if (confirmed_lease == SMS_STATUS_CORRUPT_STORE) {
+            (void)state_->control.latch_corrupt();
+        }
         return false;
     }
     value_slot = current;

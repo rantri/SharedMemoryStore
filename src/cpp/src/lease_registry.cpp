@@ -560,46 +560,67 @@ sms_status LeaseRegistry::try_cancel_claim(const LeaseToken& lease) noexcept {
     return lease_status(expected, incarnation);
 }
 
-bool LeaseRegistry::try_get_active_slot_binding(
+sms_status LeaseRegistry::validate_active_slot_binding(
     const LeaseToken& lease,
     std::uint64_t& slot_binding) const noexcept {
     slot_binding = 0;
-    if (owner_status() != SMS_STATUS_SUCCESS) return false;
+    auto participant_status = owner_status();
+    if (participant_status != SMS_STATUS_SUCCESS) return participant_status;
     std::int32_t index{};
     std::int64_t incarnation{};
-    if (!try_decode_lease(lease, index, incarnation)) return false;
+    if (!try_decode_lease(lease, index, incarnation)) return SMS_STATUS_INVALID_LEASE;
     auto* current = record(index);
-    if (current == nullptr) return false;
+    if (current == nullptr) return SMS_STATUS_CORRUPT_STORE;
     std::uint64_t active{};
     if (!encode_lease_control(
             LeaseState::active,
             incarnation,
             lease.participant_token,
             active)) {
-        return false;
+        return SMS_STATUS_INVALID_LEASE;
     }
+    const auto confirm_corruption = [&](std::uint64_t observed) noexcept {
+        // Revalidate the exact observation before poisoning the shared store.
+        // A released/reused record has a different complete control word.
+        auto expected = observed;
+        return MappedAtomic64::compare_exchange(current->Control, expected, observed)
+            ? SMS_STATUS_CORRUPT_STORE
+            : SMS_STATUS_INVALID_LEASE;
+    };
     const auto control1 = MappedAtomic64::load_acquire(current->Control);
     bool occupied{};
     if (!try_classify_structural_control(
-            control1, layout_.participant_record_count, occupied) ||
-        control1 != active) {
-        return false;
+            control1, layout_.participant_record_count, occupied)) {
+        return confirm_corruption(control1);
     }
+    if (control1 != active) return SMS_STATUS_INVALID_LEASE;
     const auto observed_binding =
         MappedAtomic64::load_acquire(current->SlotBinding);
     const auto control2 = MappedAtomic64::load_acquire(current->Control);
     if (!try_classify_structural_control(
-            control2, layout_.participant_record_count, occupied) ||
-        control2 != control1 || !valid_slot_binding(observed_binding) ||
-        observed_binding != lease.slot_binding) {
-        return false;
+            control2, layout_.participant_record_count, occupied)) {
+        return confirm_corruption(control2);
     }
-    if (owner_status() != SMS_STATUS_SUCCESS ||
-        MappedAtomic64::load_acquire(current->Control) != control1) {
-        return false;
+    if (control2 != control1) return SMS_STATUS_INVALID_LEASE;
+    if (!valid_slot_binding(observed_binding) || observed_binding != lease.slot_binding) {
+        return confirm_corruption(control1);
     }
+    participant_status = owner_status();
+    if (participant_status != SMS_STATUS_SUCCESS) return participant_status;
+    const auto control3 = MappedAtomic64::load_acquire(current->Control);
+    if (!try_classify_structural_control(
+            control3, layout_.participant_record_count, occupied)) {
+        return confirm_corruption(control3);
+    }
+    if (control3 != control1) return SMS_STATUS_INVALID_LEASE;
     slot_binding = observed_binding;
-    return true;
+    return SMS_STATUS_SUCCESS;
+}
+
+bool LeaseRegistry::try_get_active_slot_binding(
+    const LeaseToken& lease,
+    std::uint64_t& slot_binding) const noexcept {
+    return validate_active_slot_binding(lease, slot_binding) == SMS_STATUS_SUCCESS;
 }
 
 bool LeaseRegistry::is_active(const LeaseToken& lease) const noexcept {
