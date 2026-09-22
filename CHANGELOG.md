@@ -5,6 +5,10 @@ chronological order.
 
 ## Unreleased
 
+- Fixed native finite operation timeouts above the clock's nanosecond range
+  expiring immediately. This is a patch-level correction with no API or mapped
+  protocol change.
+
 ## 3.0.0 - 2026-07-16
 
 ### Breaking changes
