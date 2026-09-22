@@ -102,6 +102,11 @@ function(_sms_add_native_test source_name)
             PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/key_directory.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/layout_v2.cpp"
                     "${PROJECT_SOURCE_DIR}/src/cpp/src/protocol.cpp")
+        if(_test_stem STREQUAL "directory_schedule_tests")
+            target_sources(
+                ${_target}
+                PRIVATE "${PROJECT_SOURCE_DIR}/src/cpp/src/slot_table.cpp")
+        endif()
     elseif(_test_stem STREQUAL "platform_linux_v2_tests")
         # Resource-protocol-2 ownership helpers are hidden platform internals.
         # Compile them and canonical resource-name derivation directly into the

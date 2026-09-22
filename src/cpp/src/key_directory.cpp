@@ -12,6 +12,8 @@ namespace {
 
 constexpr std::int32_t slot_initializing = 1;
 constexpr std::int32_t slot_reserved = 2;
+constexpr std::int32_t slot_published = 3;
+constexpr std::int32_t slot_remove_requested = 4;
 constexpr std::int32_t slot_aborting = 5;
 constexpr std::int32_t slot_reclaiming = 6;
 constexpr std::int32_t slot_retired = 7;
@@ -1334,7 +1336,64 @@ sms_status KeyDirectory::help_insert(
             binding,
             control);
         const auto reserved_status = publish_reserved(value_slot, binding);
-        if (reserved_status != SMS_STATUS_SUCCESS) return reserved_status;
+        if (reserved_status != SMS_STATUS_SUCCESS) {
+            // Reserved publication can lose to a helper that completes this
+            // insertion before its owner publishes, cancels, or reuses the
+            // slot. Classify the failure against the exact source descriptor
+            // before treating its now-inapplicable state as corruption.
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+            const auto revalidated_control =
+                MappedAtomic64::load_acquire(value_slot.Control);
+            const auto revalidated_binding =
+                MappedAtomic64::load_acquire(value_slot.DirectoryBinding);
+            const auto confirmed_control =
+                MappedAtomic64::load_acquire(value_slot.Control);
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+            if (revalidated_control != confirmed_control) {
+                return SMS_STATUS_STORE_BUSY;
+            }
+            const auto control_status =
+                classify_control(confirmed_control, decoded.generation);
+            if (control_status == ControlBindingStatus::stale) {
+                return SMS_STATUS_SUCCESS;
+            }
+            if (control_status == ControlBindingStatus::invalid ||
+                revalidated_binding != binding) {
+                return SMS_STATUS_CORRUPT_STORE;
+            }
+            SlotControl revalidated{};
+            (void)SlotControl::try_decode(confirmed_control, revalidated);
+            if (revalidated.state == slot_aborting ||
+                revalidated.state == slot_reclaiming) {
+                // Retry helping from this state so the existing cancellation
+                // path removes the binding and rejects the reservation.
+                return SMS_STATUS_SUCCESS;
+            }
+            if (revalidated.state != slot_published &&
+                revalidated.state != slot_remove_requested) {
+                return reserved_status;
+            }
+            // Explicit reservations may return through reserve_core's ordered
+            // fallback while this descriptor is still BindingChanged. Their
+            // owner can therefore commit (and a reader can request removal)
+            // before any helper publishes Complete. Preserve that publication
+            // and finish the exact descriptor once its reference is confirmed.
+            if (MappedAtomic64::load_acquire(value_slot.DirectoryLocation) !=
+                    location_raw ||
+                MappedAtomic64::load_acquire(*target.word) != binding ||
+                MappedAtomic64::load_acquire(value_slot.Control) !=
+                    confirmed_control ||
+                MappedAtomic64::load_acquire(value_slot.DirectoryOperation) !=
+                    operation_raw) {
+                return SMS_STATUS_SUCCESS;
+            }
+        }
         checkpoint(
             DirectoryCheckpoint::after_reserved_publication,
             binding,
